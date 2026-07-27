@@ -10,9 +10,17 @@ const BEAM_WIDTH := 0.05
 const FLASH_RADIUS := 0.28
 const CRIT_FLASH_RADIUS := 0.44
 
-# Shots leave the shoulder and land centre-mass.
-const MUZZLE_HEIGHT := 1.4
+# Shots land centre-mass. Where they LEAVE from is passed in by the caller —
+# Unit reads the barrel tip off the rifle's bone attachment, so the origin
+# follows the weapon through the animation instead of being assumed.
 const CHEST_HEIGHT := 0.9
+
+# Burst cone. Rounds that land are still nudged off the aim point by up to
+# CONE_TIGHT so a burst doesn't stack every tracer on one pixel; rounds thrown
+# away spread to CONE_WIDE. Both are metres of lateral scatter at the target, so
+# the cone opens with range on its own without any angle maths.
+const CONE_TIGHT := 0.16
+const CONE_WIDE := 0.9
 
 # Muzzle flash light — a brief, room-filling flood rather than a hot pool,
 # so it reads as "the whole room strobed white" instead of a local glow.
@@ -27,22 +35,46 @@ func _ready() -> void:
 
 
 func tracer(from: Vector3, to: Vector3, hit: bool, crit: bool = false) -> void:
-	var start := from + Vector3(0, MUZZLE_HEIGHT, 0)
+	# `from` is the barrel tip in world space, already at the right height.
 	var end := to + Vector3(0, CHEST_HEIGHT, 0)
 	var color := (CRIT_COLOR if crit else HIT_COLOR) if hit else MISS_COLOR
+	# Even landed rounds are scattered a little: a burst is several tracers, and
+	# perfectly coincident ones read as one shot. Rounds that miss are thrown
+	# wide enough to visibly sail past — a dodged "lucky miss" is thrown wide the
+	# same as any other, since from the outside it should still read as a miss.
+	end += _cone_offset(end - from, CONE_TIGHT if hit else CONE_WIDE)
 	if not hit:
-		# Throw misses wide so they visibly sail past instead of reading as hits.
-		# A dodged "lucky miss" is thrown wide the same as any other miss —
-		# from the outside it should still read as the shot missing.
-		var along := end - start
-		var side := along.cross(Vector3.UP).normalized()
-		end += side * randf_range(-0.9, 0.9) + Vector3(0, randf_range(0.2, 0.8), 0)
-	_spawn_beam(start, end, color)
+		end += Vector3(0, randf_range(0.2, 0.8), 0)
+	_spawn_beam(from, end, color)
 	if hit:
 		_spawn_flash(end, color, CRIT_FLASH_RADIUS if crit else FLASH_RADIUS)
 
 
+func _cone_offset(along: Vector3, radius: float) -> Vector3:
+	# A random point on a disc perpendicular to the shot, so the scatter is a
+	# cone about the line of fire rather than a horizontal fan.
+	var side := along.cross(Vector3.UP)
+	if side.length_squared() < 0.0001:
+		side = along.cross(Vector3.FORWARD)  # near-vertical shot: UP is degenerate
+	side = side.normalized()
+	var up := side.cross(along.normalized())
+	var angle := randf_range(0.0, TAU)
+	# sqrt keeps the sample uniform over the disc instead of clustering at the
+	# centre, so the spread looks like a group rather than a bullseye.
+	var spread := radius * sqrt(randf())
+	return (side * cos(angle) + up * sin(angle)) * spread
+
+
+func impact(at: Vector3, crit: bool = false) -> void:
+	# A melee connection: the same flash a landed shot leaves behind, without a
+	# beam — nothing travelled to get there. Misses draw nothing at all, since
+	# there's no tracer to sell the near-miss with.
+	_spawn_flash(at + Vector3(0, CHEST_HEIGHT, 0), CRIT_COLOR if crit else HIT_COLOR,
+		CRIT_FLASH_RADIUS if crit else FLASH_RADIUS)
+
+
 func muzzle_flash(at: Vector3) -> void:
+	# `at` is the barrel tip in world space — no height offset of our own.
 	var light := OmniLight3D.new()
 	light.light_color = MUZZLE_FLASH_COLOR
 	light.light_energy = MUZZLE_FLASH_ENERGY
@@ -50,7 +82,7 @@ func muzzle_flash(at: Vector3) -> void:
 	light.omni_attenuation = 1.0  # even flood, not a hot falloff — fills the room
 	light.shadow_enabled = false  # transient; not worth the shadow-map cost
 	add_child(light)
-	light.global_position = at + Vector3(0, MUZZLE_HEIGHT, 0)
+	light.global_position = at
 	var tween := create_tween()
 	tween.tween_property(light, "light_energy", 0.0, MUZZLE_FLASH_DURATION)
 	tween.tween_callback(light.queue_free)

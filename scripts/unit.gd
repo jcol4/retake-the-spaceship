@@ -11,6 +11,16 @@ const MAX_AP := 2
 const MOVE_SPEED := 4.5  # metres/second while walking a path
 const TURN_TIME := 0.09  # seconds to swing toward the next tile
 
+# Rounds per burst. One trigger pull is still one Combat.resolve_shot — one hit
+# roll, one damage number, one round of ammo — so this is purely how many
+# tracers that shot draws, and changing it cannot unbalance anything.
+const BURST_MIN := 3
+const BURST_MAX := 5
+# On a hit, this many rounds are thrown wide anyway so the burst reads as a
+# burst; the rest converge. On a miss every round misses. Kept below BURST_MIN
+# so a hit always lands visibly more rounds on target than it throws away.
+const BURST_STRAY_MAX := 2
+
 @export var stats: UnitStats
 @export var is_player_controlled: bool = false
 
@@ -37,6 +47,10 @@ var _instant: bool = false
 # The shot the muzzle-flash frame is about to draw a tracer for.
 var _pending_shot: Combat.ShotResult = null
 var _pending_target: Unit = null
+# Which round of the burst is next, and which of them miss regardless of the
+# result. Decided up front so the pattern is fixed before the first tracer.
+var _burst_round: int = 0
+var _burst_strays: Array[int] = []
 var _name_label: Label3D = null
 
 
@@ -114,13 +128,40 @@ func _step_to(step: Vector3i) -> void:
 	var tween := create_tween()
 	tween.set_parallel(true)
 	tween.tween_property(self, "global_position", target, dist / MOVE_SPEED)
-	if absf(delta.x) > 0.001 or absf(delta.z) > 0.001:
-		# Face the direction of travel (Godot forward is -Z), taking the short
-		# way round rather than unwinding through a full turn.
-		var target_yaw := atan2(-delta.x, -delta.z)
-		var yaw := rotation.y + wrapf(target_yaw - rotation.y, -PI, PI)
+	var yaw := _yaw_toward(target)
+	if not is_nan(yaw):
 		tween.tween_property(self, "rotation:y", yaw, TURN_TIME)
 	await tween.finished
+
+
+func _yaw_toward(world_pos: Vector3) -> float:
+	# Godot forward is -Z. Returns the short way round rather than unwinding
+	# through a full turn, or NAN when the point is directly underfoot.
+	var delta := world_pos - global_position
+	if absf(delta.x) <= 0.001 and absf(delta.z) <= 0.001:
+		return NAN
+	return rotation.y + wrapf(atan2(-delta.x, -delta.z) - rotation.y, -PI, PI)
+
+
+func face_toward(world_pos: Vector3) -> void:
+	# Turn in place. Coroutine — callers MUST `await`. Matters beyond looking
+	# right: the flashlight cone rotates with facing (Sec 5.2), so which tiles
+	# this unit lights, and therefore which aliens notice it, follow from here.
+	var yaw := _yaw_toward(world_pos)
+	if is_nan(yaw):
+		return
+	if _instant:
+		rotation.y = yaw
+	else:
+		is_busy = true
+		var tween := create_tween()
+		tween.tween_property(self, "rotation:y", yaw, TURN_TIME * 2.0)
+		await tween.finished
+		is_busy = false
+	if has_flashlight and flashlight_on:
+		# Same guard move_along uses: the cone has swung, so what it lights (and
+		# what notices being lit) has to be recomputed before anything else acts.
+		LightingManager.recompute_dynamic()
 
 
 func take_damage(amount: int) -> void:
@@ -148,14 +189,20 @@ func can_shoot() -> bool:
 func fire_at(target: Unit, action: Combat.ShotAction) -> Combat.ShotResult:
 	# Coroutine — callers MUST `await`. Damage lands when the shot animation
 	# finishes, so the target drops in time with the effect, not before it.
+	# Swing onto the target before anything else. The weapon points where the
+	# body faces, so firing without this sprays the burst off toward whatever
+	# direction the last move left — and face_toward also swings the flashlight,
+	# which changes what is lit before the shot resolves.
+	await face_toward(target.global_position)
 	ammo -= 1
 	var result := Combat.resolve_shot(self, target, action)
 	is_busy = true
+	var rounds := randi_range(BURST_MIN, BURST_MAX)
 	_pending_shot = result
 	_pending_target = target
-	var clip := UnitVisual.SHOOT_AIMED if action == Combat.ShotAction.BARRAGE \
-		else UnitVisual.SHOOT_SNAP
-	await visual.play_action(clip)  # emits `muzzle` partway through
+	_burst_round = 0
+	_burst_strays = _pick_strays(rounds, result.hit)
+	await visual.play_burst(rounds)  # emits `muzzle` once per round
 	_pending_shot = null
 	_pending_target = null
 	if result.hit:
@@ -164,16 +211,54 @@ func fire_at(target: Unit, action: Combat.ShotAction) -> Combat.ShotResult:
 	return result
 
 
+func _pick_strays(rounds: int, hit: bool) -> Array[int]:
+	# A miss throws everything wide. A hit still throws one or two away, because
+	# a burst where every round lands in the same spot reads as a single shot.
+	var strays: Array[int] = []
+	if not hit:
+		for i in rounds:
+			strays.append(i)
+		return strays
+	var pool: Array[int] = []
+	for i in rounds:
+		pool.append(i)
+	pool.shuffle()
+	return pool.slice(0, randi_range(1, BURST_STRAY_MAX))
+
+
+func melee_at(target: Unit) -> Combat.ShotResult:
+	# Coroutine — callers MUST `await`. Mirrors fire_at: damage lands when the
+	# animation finishes, so the target reacts in time with the swing rather than
+	# before it. No ammo is spent and no tracer is drawn — nothing left the unit.
+	var result := Combat.resolve_melee(self, target)
+	is_busy = true
+	await visual.play_action(UnitVisual.MELEE)
+	if result.hit:
+		if not _instant:
+			var vfx := get_tree().get_first_node_in_group("vfx")
+			if vfx:
+				vfx.impact(target.global_position, result.crit)
+		target.take_damage(result.damage)
+	is_busy = false
+	return result
+
+
 func _on_muzzle() -> void:
-	# Driven by UnitVisual: a method track on the shoot clips once the model is
-	# rigged, immediately on the timer path until then.
+	# One of these per round of the burst, fired by UnitVisual.play_burst.
 	if _instant or _pending_shot == null or _pending_target == null:
 		return
+	var round_index := _burst_round
+	_burst_round += 1
 	var vfx := get_tree().get_first_node_in_group("vfx")
-	if vfx:
-		vfx.tracer(global_position, _pending_target.global_position,
-			_pending_shot.hit, _pending_shot.crit)
-		vfx.muzzle_flash(global_position)
+	if vfx == null:
+		return
+	# Origin is the barrel tip as the animation currently has it, not the middle
+	# of the unit — the rifle is held off to the right, so a centreline tracer
+	# visibly left the chest.
+	var from := visual.muzzle_origin()
+	var lands := _pending_shot.hit and round_index not in _burst_strays
+	vfx.tracer(from, _pending_target.global_position, lands, _pending_shot.crit)
+	vfx.muzzle_flash(from)
 
 
 func do_hunker() -> void:

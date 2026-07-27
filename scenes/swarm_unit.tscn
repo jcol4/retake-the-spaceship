@@ -1,0 +1,55 @@
+[gd_scene format=3 uid="uid://cswarmunit01"]
+
+[ext_resource type="Script" path="res://scripts/swarm_unit.gd" id="1_script"]
+[ext_resource type="Script" path="res://scripts/unit_visual.gd" id="2_visual"]
+
+; Placeholder body: squatter and wider than the shooter capsule so the two alien
+; types are told apart at XCOM camera distance by silhouette, not just colour.
+
+[sub_resource type="CapsuleMesh" id="capsule_mesh"]
+radius = 0.42
+height = 1.2
+
+[sub_resource type="StandardMaterial3D" id="capsule_mat"]
+albedo_color = Color(0.36, 0.5, 0.18, 1)
+
+[sub_resource type="CapsuleShape3D" id="capsule_shape"]
+radius = 0.42
+height = 1.2
+
+[sub_resource type="BoxMesh" id="facing_mesh"]
+size = Vector3(0.16, 0.12, 0.3)
+
+[sub_resource type="StandardMaterial3D" id="facing_mat"]
+albedo_color = Color(0.9, 0.85, 0.5, 1)
+
+[node name="SwarmUnit" type="Node3D" groups=["enemy_units", "units"]]
+script = ExtResource("1_script")
+
+[node name="Visual" type="Node3D" parent="."]
+script = ExtResource("2_visual")
+anim_path = NodePath("")
+fallback_mesh_path = NodePath("Mesh")
+
+[node name="Mesh" type="MeshInstance3D" parent="Visual"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.6, 0)
+mesh = SubResource("capsule_mesh")
+surface_material_override/0 = SubResource("capsule_mat")
+
+[node name="Facing" type="MeshInstance3D" parent="Visual"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.75, -0.4)
+mesh = SubResource("facing_mesh")
+surface_material_override/0 = SubResource("facing_mat")
+
+[node name="Body" type="StaticBody3D" parent="."]
+collision_layer = 2
+collision_mask = 0
+
+[node name="Collision" type="CollisionShape3D" parent="Body"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.6, 0)
+shape = SubResource("capsule_shape")
+
+[node name="NameLabel" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
+billboard = 1
+text = "Swarm"

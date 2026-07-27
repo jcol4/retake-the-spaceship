@@ -13,6 +13,11 @@ enum UnitClass { ASSAULT, SNIPER, SUPPORT, HEAVY }
 @export var weapon_base_accuracy: int = 30
 @export var weapon_damage: int = 12
 @export var mag_size: int = 6
+# Contact-range attack (Sec 11.4). Separate from the weapon numbers above so a
+# unit can be dangerous in melee and harmless at range, or the reverse — the
+# Fodder swarm has no gun at all (mag_size 0) and only these two matter to it.
+@export var melee_base_accuracy: int = 45
+@export var melee_damage: int = 5
 @export var class_base_initiative: int = 50
 @export var equipment_initiative: int = 50
 

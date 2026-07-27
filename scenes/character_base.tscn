@@ -11,16 +11,23 @@ anim_path = NodePath("soldier/AnimationPlayer")
 
 [node name="soldier" parent="." instance=ExtResource("2_soldier")]
 
-; Rifle and flashlight share one transform: Rx(82 deg) = a 90 deg axis swap plus
-; the -8 deg grip pitch. The swap is needed because the exported barrel points
-; -Z in Godot (it was Blender +Y) while the bone's own axis is +Y. Omitting it
-; leaves the weapon dangling diagonally off the wrist.
+; Rifle and flashlight share one transform, SOLVED rather than derived — see
+; tools/_debug_aim.gd, which regenerates the line below.
+;
+; The hand-derived version was Rx(82 deg), reasoned as a 90 deg Blender-to-Godot
+; axis swap plus the -8 deg grip pitch. It is wrong: measured in game it left
+; the barrel 8-16 deg off the pitch gen_soldier.py authored and ~14 deg off in
+; yaw, which at 5 m puts the muzzle over a metre away from where the unit is
+; facing. The bone's own axes do not survive the glTF conversion the way that
+; reasoning assumed. The solver sidesteps the whole question: the aim pose is
+; authored to point dead forward with the sights up, so the mount basis that
+; makes that true is just the inverse of the hand bone's basis in that pose.
 [node name="RifleMount" type="BoneAttachment3D" parent="soldier/Rig/Skeleton3D" index="1"]
 bone_name = "hand.R"
 bone_idx = 12
 
 [node name="rifle" parent="soldier/Rig/Skeleton3D/RifleMount" instance=ExtResource("3_rifle")]
-transform = Transform3D(1, 0, 0, 0, -0.139173, -0.990268, 0, 0.990268, -0.139173, 0, 0.055, 0)
+transform = Transform3D(0.5131822, 0.8582797, -0.00013112849, -0.12005699, 0.07163314, -0.9901793, -0.84984136, 0.50815815, 0.13980334, 0, 0.055, 0)
 
 ; The barrel tip, hung off the rifle rather than off the bone so it needs no
 ; transform of its own beyond the offset: MUZZLE from tools/gen_soldier.py,

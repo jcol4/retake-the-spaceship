@@ -4,15 +4,17 @@ extends Node3D
 ## (right) containing a raised platform reached by a stair tile.
 ##
 ## Legend: . floor   # wall   l light cover   h heavy cover
-##         P player spawn   E enemy spawn   R raised platform (floor 1)
-##         s stair tile (links to the platform tile directly north of it)
+##         P player spawn   E enemy (ranged) spawn   S swarm spawn
+##         R raised platform (floor 1)
+##         s stair tile, LOWERCASE — links to the platform tile directly north
+##           of it, and is a different thing entirely from an uppercase S
 ##         o overhead light   m monitor/terminal light   f flickering light
 
 const LAYOUT := [
 	"####################",
 	"#....#...o....#....#",
 	"#.P..#....m...#..E.#",
-	"#....#........#....#",
+	"#....#........#.SS.#",
 	"#.P..#..l.....#....#",
 	"#....#........#....#",
 	"#....#...h....#..E.#",
@@ -20,7 +22,7 @@ const LAYOUT := [
 	"#....#..l.....#....#",
 	"#....#........#RR..#",
 	"#.P..#........#RR..#",
-	"#....#........#s.Em#",
+	"#....#........#s.Sm#",
 	"#....#.............#",
 	"####################",
 ]
@@ -30,6 +32,7 @@ const PLATFORM_HEIGHT := 3.0
 
 var player_spawns: Array[Vector3i] = []
 var enemy_spawns: Array[Vector3i] = []
+var swarm_spawns: Array[Vector3i] = []
 
 var _wall_mat: StandardMaterial3D
 var _floor_mat: StandardMaterial3D
@@ -56,13 +59,15 @@ func _build_cell(x: int, z: int, ch: String) -> void:
 	match ch:
 		"#":
 			_add_wall(world)
-		".", "P", "E", "s":
+		".", "P", "E", "S", "s":
 			GridManager.add_tile(Vector3i(x, 0, z), world)
 			_add_floor_quad(world, _stair_mat if ch == "s" else _floor_mat)
 			if ch == "P":
 				player_spawns.append(Vector3i(x, 0, z))
 			elif ch == "E":
 				enemy_spawns.append(Vector3i(x, 0, z))
+			elif ch == "S":
+				swarm_spawns.append(Vector3i(x, 0, z))
 		"l", "h":
 			GridManager.add_tile(Vector3i(x, 0, z), world)
 			_add_floor_quad(world, _floor_mat)

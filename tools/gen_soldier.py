@@ -731,7 +731,7 @@ RUN_LEGS_UP = {
     "thigh.R": (44, 0, -4), "shin.R": (-66, 0, 0), "foot.R": (27, 0, 0),
 }
 
-# Seed angles for the arm solver. Both arms are solved per key (solve_run_grip),
+# Seed angles for the arm solver. Both arms are solved per key (solve_grips),
 # so these only need to be in the right neighbourhood for coordinate descent to
 # find its way; they are not the poses that ship.
 RUN_GRIP = {
@@ -765,7 +765,7 @@ def run_key(lift, legs, drive, twist):
 
     `lift` is the hip height offset (negative drops the hips), `legs` the lower
     body, and `twist` counter-rotates the shoulders against the pelvis. `drive`
-    is carried through to solve_run_grip, which is what actually moves the arms;
+    is carried through to solve_grips, which is what actually moves the arms;
     here it only rolls the chest, the sideways half of the pump.
     """
     body = {
@@ -800,10 +800,131 @@ RUN_KEYS = (
     ("up", RUN_LEGS_UP, -0.020, -7, 5),
 )
 
-# Where the support hand belongs: 0.22 m up the barrel from the grip, on the
-# handguard (RIFLE_PARTS' MAT_SUIT section spans 0.180-0.330). PALM is how far
-# down the hand bone the palm sits — the same 0.055 offset GRIP_LOCAL uses to
-# seat the trigger hand on the grip.
+# ---------------------------------------------------------------------------
+# Standing stances. Two of them, and the whole point is that they read as
+# different intentions at a glance:
+#
+#   idle — LOW READY. Weapon in both hands but carried across the body with the
+#          muzzle depressed. Not pointed at anything. The soldier is holding
+#          ground, not engaging.
+#   aim  — weapon brought up and levelled, torso bladed in behind it. Engaging.
+#
+# Both are the same braced two-handed silhouette borrowed from the Space Marine
+# reference — elbows out, support arm reaching across, weapon lying along a
+# diagonal — separated by how high the weapon rides and where it points.
+# ---------------------------------------------------------------------------
+
+# Bladed fighting stance, left foot forward, right dropped back and turned out.
+#
+# A leg tilted away from vertical does not reach as far down as an upright one,
+# so the stagger cannot just be opened out: the first attempt left the rear boot
+# hanging 26 mm in the air. The rear leg is therefore carried noticeably
+# straighter than the front one, which both makes up the reach and is what a
+# weight-forward fighting stance does anyway. Feet cancel their own shin's world
+# angle to keep both soles flat; the lift is whatever is left of the 0.77 m leg
+# once the knees are softened. Verified with --traj: both toes land within 5 mm
+# of the 0.060 m rest height.
+READY_LEGS = {
+    "_loc": (0.0, -0.027, 0.0),
+    "hips": (0, 6, 0),
+    # NEGATIVE Z abducts a .L bone. The calibration note's "+Z sideways;
+    # mirrored between .L and .R" is true but does not say which way: +Z on the
+    # left leg swings it ACROSS the body. Widening the stance with positive Z
+    # crossed the legs over each other instead, and still measured 0.228 m wide
+    # because the toes had simply swapped sides.
+    "thigh.L": (16, 0, -8), "shin.L": (-8, 0, 0), "foot.L": (-8, 0, -10),
+    "thigh.R": (-8, 0, 8), "shin.R": (0, 0, 0), "foot.R": (8, 0, 14),
+}
+# Aim deliberately reuses READY_LEGS rather than defining its own. Raising a
+# weapon does not move your feet, and the shoot clips blend out of the idle
+# stance in 80 ms — any difference in the legs shows up as the boots skating
+# across the floor every time the unit fires.
+AIM_LEGS = READY_LEGS
+
+# Weapon placement, as the right WRIST position in armature space plus a barrel
+# angle — the same parametrisation the run uses, for the same reason: the rifle
+# hangs off hand.R, so this fixes the whole weapon and both arms are then solved
+# to it. `support` is how far up the barrel the left hand grips; poses that hold
+# the weapon further out have to slide it back down to stay inside the left
+# arm's 0.535 m reach.
+READY_WRIST = Vector((-0.09, 0.14, 1.20))
+READY_PITCH = -26.0
+# The muzzle is also swung across to the soldier's left, off his own line of
+# travel. This is the single clearest "not engaging" cue at tactical camera
+# distance — a depressed barrel still reads as aiming if it points where the
+# character is facing, but one crossing the body plainly does not.
+READY_YAW = 12.0
+READY_SUPPORT = 0.20
+# Aim brings the weapon up to the shoulder and levels it onto the line of sight.
+AIM_WRIST = Vector((-0.15, 0.12, 1.36))
+AIM_PITCH = 0.0
+AIM_SUPPORT = 0.20
+
+# The magazine, in rifle space: RIFLE_PARTS' MAT_VEST section hanging below and
+# forward of the receiver. Reload solves the support hand onto this instead of
+# the handguard, so the hand genuinely leaves the weapon rather than drifting a
+# few degrees off it.
+MAG_LOCAL = Vector((0.0, 0.045, -0.13))
+MAG_SEATED = Vector((0.0, 0.045, -0.07))
+
+# Idle sway. Six seconds, sampled every half second.
+#
+# Every layer's period divides the loop a whole number of times, or the clip
+# would jump at the seam. Within that constraint they are given different rates
+# and different phases so they only ever line up at the loop point — a single
+# breath rate on everything reads as a pulsing machine.
+IDLE_SECONDS = 6.0
+IDLE_KEYS = 12
+
+
+def idle_key_name(i):
+    return f"idle_{i:02d}"
+
+
+def idle_sway(phase):
+    """Sway offsets at `phase` (0..1) through the idle loop.
+
+    Breathing runs three times per loop, the muzzle's figure-eight twice (its
+    vertical axis) against once (its horizontal), and the weight shift and head
+    scan once each, offset from everything else. The weapon is held in world
+    space rather than swayed with the chest — the arms re-solve onto it every
+    key — so the body breathes around a steady weapon, which is what a braced
+    two-handed hold actually looks like.
+    """
+    turn = 2.0 * math.pi * phase
+    return {
+        "breath": math.sin(3.0 * turn),
+        "weight": math.sin(turn + 0.6 * math.pi),
+        "scan": math.sin(turn + 1.3 * math.pi),
+        # Figure-eight: the muzzle's vertical drift cycles twice per horizontal.
+        "pitch": 1.4 * math.sin(2.0 * turn),
+        "yaw": 1.8 * math.sin(turn),
+        # A breath lifts the shoulders, and the weapon rides up with them.
+        "settle": 0.006 * math.sin(3.0 * turn),
+    }
+
+
+def ready_key(phase):
+    """One key of the idle loop: stance plus sway. Arms are solved later."""
+    s = idle_sway(phase)
+    legs = dict(READY_LEGS)
+    legs["hips"] = (0, 6, 2.0 * s["weight"])
+    return level_weapon(pose(GRIP_LOW, legs, {
+        # Negative X leans the torso forward — see run_key for why the
+        # calibration note's sign is wrong for the spine and chest.
+        "spine": (-8 + 0.6 * s["breath"], 0, -1.2 * s["weight"]),
+        "chest": (-2 + 1.2 * s["breath"], 8, 1.5 * s["weight"]),
+        # Head up and turned off the weapon's line: watching the room, not the
+        # sights. The slow scan rides on top of that.
+        "head": (10, -20 + 3.5 * s["scan"], 0),
+    }), READY_PITCH)
+
+
+# Where the support hand belongs: this far up the barrel from the grip, on the
+# handguard (RIFLE_PARTS' MAT_SUIT section spans 0.180-0.330). Poses that carry
+# the weapon further from the left shoulder slide the hand back down it. PALM is
+# how far down the hand bone the palm sits — the same 0.055 offset GRIP_LOCAL
+# uses to seat the trigger hand on the grip.
 SUPPORT_GRIP_Y = 0.22
 PALM = 0.055
 
@@ -863,9 +984,10 @@ def _solve_arm(rig_obj, out, side, target, tip):
     return best * 1000.0
 
 
-def _aim_barrel(rig_obj, out, pitch):
-    """Solve the right wrist so the barrel points forward at `pitch`. Mutates
-    `out`; returns the residual in degrees.
+def _aim_barrel(rig_obj, out, pitch, yaw=0.0):
+    """Solve the right wrist so the barrel points at `pitch`/`yaw`. Mutates
+    `out`; returns the residual in degrees. +yaw swings the muzzle to the
+    soldier's left.
 
     level_weapon does this arithmetically by summing the X rotations down the
     arm, which is exact only while that chain is pure flexion. The solved
@@ -873,7 +995,10 @@ def _aim_barrel(rig_obj, out, pitch):
     ignoring that left the muzzle up to 40 degrees off, pointing at the sky for
     most of the cycle. So measure the barrel and drive the wrist to the answer.
     """
-    want = Vector((0.0, math.cos(math.radians(pitch)), math.sin(math.radians(pitch))))
+    level = math.cos(math.radians(pitch))
+    want = Vector((level * math.sin(math.radians(yaw)),
+                   level * math.cos(math.radians(yaw)),
+                   math.sin(math.radians(pitch))))
 
     def error(v):
         out["hand.R"] = (v[0], 0.0, v[1])
@@ -900,37 +1025,95 @@ def _aim_barrel(rig_obj, out, pitch):
     return best
 
 
-def solve_run_grip(rig_obj):
-    """Put both hands on the weapon for every key of the run cycle.
+def solve_two_handed(rig_obj, p, wrist, pitch, yaw=0.0, support=SUPPORT_GRIP_Y):
+    """Put both hands on the weapon. Returns (pose, hand mm, barrel degrees).
 
     Strictly ordered, because each step depends on the one before: place the
-    trigger wrist on the authored weapon path (hand.R's own rotation does not
-    move its head, so this is independent of the barrel angle), then aim the
+    trigger wrist where the weapon is meant to be (hand.R's own rotation does
+    not move its head, so this is independent of the barrel angle), then aim the
     barrel, and only then is the handguard's position known and the support hand
     solvable.
     """
+    out = dict(p)
+    _solve_arm(rig_obj, out, "R", wrist, 0.0)
+    off = _aim_barrel(rig_obj, out, pitch, yaw)
+    handguard = (rig_obj.pose.bones["hand.R"].matrix
+                 @ GRIP_LOCAL) @ Vector((0.0, support, 0.0))
+    return out, _solve_arm(rig_obj, out, "L", handguard, PALM), off
+
+
+def _derive_engaged_poses(rig_obj):
+    """Rebuild everything that hangs off "aim" now that "aim" has been solved.
+
+    overwatch and the recoils used to be authored against GRIP_AIM
+    independently. Now that the aim pose puts both hands on the weapon for real,
+    deriving from it keeps the trigger arm and the weapon exactly where aim left
+    them — an independently authored version would pop the rifle sideways the
+    moment a clip crossed between them. All of these nudge the spine, chest and
+    head only, which is safe: both arms hang off the chest, so rotating the
+    torso carries the whole two-handed assembly with it and the grip survives.
+
+    reload is the exception, and the one pose that deliberately breaks the hold:
+    its support hand is solved down onto the magazine instead of the handguard.
+    """
+    aim = POSE_LIB["aim"]
+    POSE_LIB["overwatch"] = nudge(aim, spine=(0, 0, 12), chest=(0, 6, 0),
+                                  head=(0, -4, 0))
+    POSE_LIB["recoil_snap"] = nudge(aim, chest=(-7, 0, 0), head=(-4, 0, 0))
+    POSE_LIB["watch_l"] = nudge(POSE_LIB["overwatch"], spine=(0, 0, -22),
+                                head=(0, 0, 8))
+    POSE_LIB["watch_r"] = POSE_LIB["overwatch"]
+
+    for name, mag in (("reload", MAG_LOCAL), ("mag_in", MAG_SEATED)):
+        p = nudge(aim, head=(6, 10, 0), chest=(2, 0, -4))
+        apply_pose(rig_obj, p)
+        target = (rig_obj.pose.bones["hand.R"].matrix @ GRIP_LOCAL) @ mag
+        _solve_arm(rig_obj, p, "L", target, PALM)
+        POSE_LIB[name] = p
+
+
+def solve_grips(rig_obj):
+    """Solve every pose that holds the weapon in both hands.
+
+    Needs the built rig, so it cannot happen where POSE_LIB is declared. Every
+    downstream path (clips, sheets, trajectory, export) reads POSE_LIB, so doing
+    it here keeps them all consistent.
+    """
     worst_hand = (0.0, "")
     worst_aim = (0.0, "")
+
+    def solve(name, wrist, pitch, yaw=0.0, support=SUPPORT_GRIP_Y):
+        nonlocal worst_hand, worst_aim
+        POSE_LIB[name], mm, deg = solve_two_handed(
+            rig_obj, POSE_LIB[name], wrist, pitch, yaw, support)
+        worst_hand = max(worst_hand, (mm, name))
+        worst_aim = max(worst_aim, (deg, name))
+
     for key, _legs, _lift, drive, _twist in RUN_KEYS:
         for side in "LR":
-            name = f"run_{key}_{side}"
-            p = dict(POSE_LIB[name])
             # The right-lead half of the stride is the far end of the same pump.
             swing = drive / 12.0 * (1.0 if side == "L" else -1.0)
-            _solve_arm(rig_obj, p, "R", WEAPON_HOME + WEAPON_DRIVE * swing, 0.0)
-            worst_aim = max(worst_aim, (_aim_barrel(rig_obj, p, RUN_PITCH), name))
-            handguard = (rig_obj.pose.bones["hand.R"].matrix
-                         @ GRIP_LOCAL) @ Vector((0.0, SUPPORT_GRIP_Y, 0.0))
-            worst_hand = max(worst_hand, (_solve_arm(rig_obj, p, "L", handguard,
-                                                     PALM), name))
-            POSE_LIB[name] = p
+            solve(f"run_{key}_{side}", WEAPON_HOME + WEAPON_DRIVE * swing,
+                  RUN_PITCH)
+
+    for i in range(IDLE_KEYS):
+        sway = idle_sway(i / float(IDLE_KEYS))
+        solve(idle_key_name(i), READY_WRIST + Vector((0.0, 0.0, sway["settle"])),
+              READY_PITCH + sway["pitch"], READY_YAW + sway["yaw"], READY_SUPPORT)
+    # Other clips key off "idle" as their neutral, so it has to be the phase-0
+    # sway key rather than a separate pose that would pop against it.
+    POSE_LIB["idle"] = POSE_LIB[idle_key_name(0)]
+
+    solve("aim", AIM_WRIST, AIM_PITCH, support=AIM_SUPPORT)
+    _derive_engaged_poses(rig_obj)
+
     apply_pose(rig_obj, {})
-    print("[gen_soldier] run grip: support hand within "
-          f"{worst_hand[0]:.1f} mm of the handguard ({worst_hand[1]}), barrel "
-          f"within {worst_aim[0]:.1f} deg of {RUN_PITCH:.0f} ({worst_aim[1]})")
+    print(f"[gen_soldier] grips: support hand within {worst_hand[0]:.1f} mm of "
+          f"the handguard ({worst_hand[1]}), barrel within {worst_aim[0]:.1f} "
+          f"deg of target ({worst_aim[1]})")
 
 POSE_LIB = {
-    # Weapon carried low and angled down; aim poses are levelled flat.
+    # Both replaced below by solved two-handed versions; these are only seeds.
     "idle": level_weapon(pose(GRIP_LOW, spine=(3, 0, 0), head=(-2, 0, 0)), -20),
     "aim": level_weapon(pose(GRIP_AIM, spine=(4, 0, 0)), 0),
     # chest carries both the crouch lean and the grip's shoulder turn.
@@ -947,17 +1130,22 @@ POSE_LIB = {
     }), -12),
     # Interact and grenade both reach with the LEFT arm: the rifle is bolted to
     # hand.R, so reaching with the right would swing the barrel at the terminal.
-    "interact": level_weapon(pose(GRIP_LOW, **{
+    # These three are upper-body actions played out of the idle stance, so they
+    # carry READY_LEGS: without it their lower body is the rest pose and the
+    # boots visibly slide together every time one plays.
+    "interact": level_weapon(pose(GRIP_LOW, READY_LEGS, **{
         "upperarm.L": (76, 0, 12), "lowerarm.L": (16, 0, 0),
         "spine": (6, 0, 10), "head": (4, 0, 8),
     }), -24),
-    "grenade": level_weapon(pose(GRIP_LOW, **{
+    "grenade": level_weapon(pose(GRIP_LOW, READY_LEGS, **{
         "upperarm.L": (-50, 0, 30), "lowerarm.L": (94, 0, 0),
         "spine": (-8, 0, 14), "chest": (0, 0, 10),
     }), -20),
-    "hit": level_weapon(pose(GRIP_LOW, **{
+    # Thighs are READY_LEGS' own values with the flinch added, rather than
+    # replacing them, so the stance survives the hit.
+    "hit": level_weapon(pose(GRIP_LOW, READY_LEGS, **{
         "spine": (-16, 0, 0), "chest": (-8, 0, 4), "head": (-14, 0, 0),
-        "thigh.L": (-8, 0, 0), "thigh.R": (10, 0, 0),
+        "thigh.L": (8, 0, 5), "thigh.R": (2, 0, -7),
     }), -34),
     # Collapsed on its back. Rotating the hips lays the whole body down.
     "downed": pose({
@@ -976,19 +1164,28 @@ for _name, _legs, _lift, _drive, _twist in RUN_KEYS:
     POSE_LIB[f"run_{_name}_L"] = run_key(_lift, _legs, _drive, _twist)
     POSE_LIB[f"run_{_name}_R"] = run_key(_lift, mirror_legs(_legs), -_drive, -_twist)
 
-# Derived variants: recoil kicks the shoulder and torso back off the aim pose,
-# and the idle drifts a couple of degrees so the loop breathes.
-POSE_LIB["recoil_snap"] = nudge(POSE_LIB["aim"], chest=(-7, 0, 0), head=(-4, 0, 0))
-POSE_LIB["recoil_aimed"] = nudge(POSE_LIB["aim"], chest=(-10, 0, 0), spine=(-4, 0, 0),
-                                 head=(-5, 0, 0))
+# Idle sway keys, and the aim stance. Seeds only — solve_grips replaces the arms
+# on all of them once the rig exists.
+for _i in range(IDLE_KEYS):
+    POSE_LIB[idle_key_name(_i)] = ready_key(_i / float(IDLE_KEYS))
+POSE_LIB["aim"] = level_weapon(pose(GRIP_AIM, AIM_LEGS, {
+    "spine": (-8, 0, 0),
+    # Bladed in behind the weapon: the twist squares the left shoulder up to the
+    # target, which is both what the reference does and what buys the support
+    # arm the reach to get out onto the handguard.
+    "chest": (-4, 12, 0),
+    # Head goes DOWN behind the weapon and stops counter-twisting — the soldier
+    # is looking along the barrel, not scanning past it. Against the idle's
+    # raised, turned-away head this is most of what separates the two stances.
+    "head": (-4, -14, 0),
+}), AIM_PITCH)
+
+# Derived variants. Everything that hangs off "aim" — the recoils, overwatch,
+# reload — is rebuilt in _derive_engaged_poses instead, because "aim" itself is
+# not final until the rig exists and its grip has been solved. Only the poses
+# built on crouch, grenade and interact can be finished here.
 POSE_LIB["recoil_crouch"] = nudge(POSE_LIB["crouch"], chest=(-8, 0, 0), head=(-4, 0, 0))
-POSE_LIB["idle_b"] = nudge(POSE_LIB["idle"], spine=(2, 0, 0), head=(2, 0, 0),
-                           chest=(1, 0, 0))
 POSE_LIB["crouch_b"] = nudge(POSE_LIB["crouch"], spine=(2, 0, 0), head=(1, 0, 0))
-POSE_LIB["watch_l"] = nudge(POSE_LIB["overwatch"], spine=(0, 0, -22), head=(0, 0, 8))
-POSE_LIB["watch_r"] = POSE_LIB["overwatch"]
-POSE_LIB["mag_in"] = nudge(POSE_LIB["reload"], **{"upperarm.L": (16, 0, -6),
-                                                  "lowerarm.L": (-14, 0, 0)})
 POSE_LIB["throw"] = nudge(POSE_LIB["grenade"], **{"upperarm.L": (108, 0, -16),
                                                   "lowerarm.L": (-64, 0, 0),
                                                   "spine": (14, 0, -8)})
@@ -1003,14 +1200,19 @@ REVIEW_B = ["grenade", "hit", "downed", "run_contact_L", "run_up_L"]
 # Clips. Names must match the constants in scripts/unit_visual.gd exactly.
 # 30 fps. Loop flags can't ride along in glTF — set them in Godot's Advanced
 # Import Settings, where they persist in the .import file across re-exports.
-# MUZZLE_FRAME records where the shot actually leaves the barrel, for the method
-# track that drives UnitVisual.fire_muzzle.
+# Firing has no muzzle frame: play_burst emits one muzzle event per round as it
+# replays shoot_recoil, so the count is decided at runtime rather than baked.
 # ---------------------------------------------------------------------------
 
 FPS = 30
 
 CLIPS = {
-    "idle":            [(0, "idle"), (50, "idle_b"), (100, "idle")],
+    # Generated: IDLE_KEYS sway keys evenly spaced round a 6 s loop, closing on
+    # the first key again. Authored keys would have to be re-hand-tuned every
+    # time the sway rates change.
+    "idle":            [(round(i * IDLE_SECONDS * FPS / IDLE_KEYS),
+                         idle_key_name(i % IDLE_KEYS))
+                        for i in range(IDLE_KEYS + 1)],
     "crouch_idle":     [(0, "crouch"), (55, "crouch_b"), (110, "crouch")],
     "overwatch_hold":  [(0, "watch_l"), (55, "watch_r"), (110, "watch_l")],
     # Frame count is derived from the measured stride, not chosen: see
@@ -1022,9 +1224,13 @@ CLIPS = {
                         (10, "run_contact_R"), (12, "run_down_R"),
                         (14, "run_push_R"), (17, "run_up_R"),
                         (20, "run_contact_L")],
-    "shoot_snap":      [(0, "aim"), (2, "recoil_snap"), (7, "aim"), (12, "aim")],
-    "shoot_aimed":     [(0, "aim"), (7, "aim"), (10, "recoil_aimed"),
-                        (17, "aim"), (27, "aim")],
+    # Firing is built from two clips rather than one per shot type, because the
+    # burst length is rolled at runtime (3-5) and no fixed-length clip can match
+    # a count it doesn't know. aim_hold carries the raise and the settle either
+    # side of the burst; shoot_recoil is a single round's kick and recovery,
+    # replayed from frame 0 once per round. UnitVisual.play_burst drives both.
+    "aim_hold":        [(0, "aim"), (45, "aim")],
+    "shoot_recoil":    [(0, "aim"), (1, "recoil_snap"), (4, "aim")],
     "reload":          [(0, "aim"), (7, "reload"), (17, "mag_in"),
                         (27, "aim"), (36, "aim")],
     "throw_grenade":   [(0, "idle"), (9, "grenade"), (15, "throw"),
@@ -1035,7 +1241,8 @@ CLIPS = {
     "downed":          [(0, "idle"), (5, "hit"), (24, "downed")],
 }
 
-MUZZLE_FRAME = {"shoot_snap": 2, "shoot_aimed": 10}
+# The muzzle event is no longer a frame inside a clip: play_burst emits one per
+# round as it replays shoot_recoil, so the flash lands on frame 0 of each kick.
 
 
 def bake_clips(rig_obj):
@@ -1057,9 +1264,6 @@ def bake_clips(rig_obj):
     rig_obj.animation_data.action = None
     apply_pose(rig_obj, {})
     print("[gen_soldier] clips: " + ", ".join(made))
-    for clip, frame in MUZZLE_FRAME.items():
-        print(f"[gen_soldier] muzzle: {clip} @ frame {frame} "
-              f"({frame / FPS:.2f}s) -> UnitVisual.fire_muzzle()")
 
 
 # Must match Unit.MOVE_SPEED in scripts/unit.gd. Step length is not a free
@@ -1188,7 +1392,7 @@ def main():
     # Needs the built rig, so it can't happen where POSE_LIB is declared. Every
     # downstream path (clips, sheets, trajectory, export) reads POSE_LIB, so
     # solving here keeps them all consistent.
-    solve_run_grip(rig_obj)
+    solve_grips(rig_obj)
     if "--clips" in argv or "--export" in argv:
         bake_clips(rig_obj)
     if "--render" in argv:

@@ -176,6 +176,16 @@ func chebyshev_dist(a: Vector3i, b: Vector3i) -> int:
 	return maxi(absi(a.x - b.x), absi(a.z - b.z))
 
 
+func is_melee_adjacent(a: Vector3i, b: Vector3i) -> bool:
+	# Contact range (Sec 11.4) — deliberately the same adjacency movement uses,
+	# so a unit can only reach what it could have stepped onto. `chebyshev_dist`
+	# is the wrong test here: it ignores floors, and would call a unit standing
+	# under the platform distance 0 from one standing on top of it. Reusing
+	# `neighbors` also inherits the no-corner-cutting rule, so nothing swings
+	# diagonally around a wall it can't see past.
+	return b in neighbors(a)
+
+
 func has_line_of_sight(shooter: Node3D, target: Node3D) -> bool:
 	# Single ray shooter-eye -> target-center, blocked only by map geometry
 	# (collision layer 1). Multi-sample LOS (Sec 10.6) deferred.

@@ -3,7 +3,7 @@ extends Unit
 ## Input handling while this unit is the active (pool-drawn) unit.
 ## The HUD sets `pending_action`; clicks in the world resolve it.
 
-enum Mode { NONE, MOVE, SHOOT, BARRAGE }
+enum Mode { NONE, MOVE, SHOOT, BARRAGE, FACE }
 
 signal action_logged(text: String)
 
@@ -147,6 +147,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	var hit := _raycast_mouse()
 	if hit.is_empty():
 		return
+	if mode == Mode.FACE:
+		# Deliberately ahead of the unit lookup: aiming the beam *at* something is
+		# the main reason to use this, so clicking an alien has to be allowed.
+		_try_face(hit["position"])
+		return
 	var unit := _unit_from_collider(hit["collider"])
 	if unit and not unit.is_player_controlled and mode in [Mode.SHOOT, Mode.BARRAGE]:
 		_try_shoot(unit)
@@ -242,6 +247,18 @@ func try_overwatch() -> void:
 	set_mode(Mode.NONE)
 	action_logged.emit("%s is on overwatch" % stats.display_name)
 	_check_activation_end()
+
+
+func _try_face(world_pos: Vector3) -> void:
+	# Free action (0 AP, Sec 4.2), like the flashlight toggle, and for the same
+	# reason: sweeping a beam to find out what's in a room must not compete with
+	# shooting what's found. Doesn't end the activation.
+	if is_busy:
+		return
+	set_mode(Mode.NONE)
+	await face_toward(world_pos)
+	action_logged.emit("%s turned to face %s" % [
+		stats.display_name, GridManager.world_to_grid(world_pos)])
 
 
 func try_toggle_flashlight() -> void:

@@ -386,6 +386,12 @@ Final Accuracy % =
 - Slow, tanky, individually weak damage output.
 - Threat is **attrition** — forces the player to spend AP/ammo/turns on numbers rather than posing serious per-hit risk.
 - Combat bias: direct approach toward the nearest player unit, low priority on flanking/repositioning.
+- **No ranged weapon at all.** Its only action is a **melee attack at contact range**, so the whole loop is: crawl toward the target, claw it once adjacent.
+- **Movement: 3 tiles per 1 AP** — a fixed rate below what its Fitness would otherwise allow (contrast the general 4 + Fitness/20 of Sec 4.0). Deliberately outrunnable: a squad that keeps moving should be able to disengage, which is what makes a swarm a resource cost rather than a chase.
+- **Melee costs 1 AP**, so a 2 AP activation is *crawl 3 and swing*, *crawl 6*, or — already in contact — *two swings*.
+- **Contact range** is the same adjacency movement uses (8-way, no cutting wall corners, stair links count), **not** a raw Chebyshev distance of 1: the latter ignores floor level and would let a swarm on the deck claw a unit standing on the platform above it.
+- **Melee accuracy** = attacker Perception + melee base accuracy, ± the high-ground bonus and the target's Hunker penalty, then both sides' Luck (Sec 4.6.4) exactly as for a shot. Defaults: **melee base accuracy 45, damage 5.**
+- **Cover, distance falloff, and the light modifier deliberately do not apply to melee.** All three exist to model *distance*: cover can't shield a body something is already on top of, falloff is zero at one tile, and letting darkness reduce a claw's accuracy would make standing in the dark a *defence* against the swarm — backwards for a game built on darkness being the danger. Melee also does not damage cover, since the swing never travels through it.
 
 ### 11.5 Agile Hunter — Ambusher
 
@@ -416,6 +422,8 @@ Final Accuracy % =
 - **`Nest` node/scene** — HP, spawn timer (3-turn interval), spawn table (70/20/10 weighted), spawns into a valid unoccupied/passable tile (Section 10.7); removed from spawn population at 0 HP.
 - **Alert propagation** via the room-graph structure from Section 10.4 — an alerted unit signals its current room node, propagation reaches only `AlienUnit`s registered to that node or its associated nest cluster.
 - Each `AlienUnit` participates in the shared initiative pool (Section 4.1) like any other unit — its state machine determines what it *does* when drawn, not whether it's drawn.
+
+**Current state of the scaffold.** `EnemyUnit` is the shared alien base described above (it predates the name `AlienUnit` and holds the iteration-1 ranged loop directly); `SwarmUnit extends EnemyUnit` is the first real roster type, overriding `take_turn` for the melee loop and `_move_budget` for the crawl rate. The state machine of 11.1 does **not** exist yet. Its seam is `EnemyUnit.acquire_target()` — the single point every AI loop gets a target from, currently omniscient (nearest living player, no sight or awareness check). Detection, alert propagation and the four states replace the body of that one method; returning `null` already means "no target, end the activation", which is what an Unaware alien idling at its nest should do. `Nest` (11.7) does not exist either — per-type stat rolls live in `main.gd` for now and want moving into its spawn table.
 
 ---
 

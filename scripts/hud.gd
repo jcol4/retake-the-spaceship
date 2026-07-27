@@ -8,7 +8,8 @@ extends CanvasLayer
 	"move": $Actions/Move,
 	"shoot": $Actions/Shoot, "barrage": $Actions/Barrage,
 	"hunker": $Actions/Hunker, "overwatch": $Actions/Overwatch,
-	"reload": $Actions/Reload, "flashlight": $Actions/Flashlight, "end_turn": $Actions/EndTurn,
+	"reload": $Actions/Reload, "face": $Actions/Face,
+	"flashlight": $Actions/Flashlight, "end_turn": $Actions/EndTurn,
 }
 
 
@@ -22,6 +23,7 @@ func _ready() -> void:
 	buttons["hunker"].pressed.connect(_on_hunker)
 	buttons["overwatch"].pressed.connect(_on_overwatch)
 	buttons["reload"].pressed.connect(_on_reload)
+	buttons["face"].pressed.connect(_set_mode.bind(PlayerUnit.Mode.FACE))
 	buttons["flashlight"].pressed.connect(_on_flashlight)
 	buttons["end_turn"].pressed.connect(_on_end_turn)
 	_refresh(null)
@@ -75,7 +77,9 @@ func _refresh(unit: Unit) -> void:
 	buttons["hunker"].disabled = not is_player or player.ap < 1
 	buttons["overwatch"].disabled = not is_player or player.ap < 2 or (is_player and not player.can_shoot())
 	buttons["reload"].disabled = not is_player or player.ap < 1
-	buttons["flashlight"].disabled = not is_player  # free action — no AP gate
+	# Both free actions (Sec 4.2) — no AP gate on either.
+	buttons["face"].disabled = not is_player
+	buttons["flashlight"].disabled = not is_player
 	buttons["end_turn"].disabled = not is_player
 
 

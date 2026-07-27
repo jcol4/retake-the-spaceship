@@ -97,13 +97,14 @@ static func compute_accuracy(shooter, target, action: ShotAction) -> int:
 	return clampi(acc, 1, 99)
 
 
-static func resolve_shot(shooter, target, action: ShotAction) -> ShotResult:
-	var result := ShotResult.new()
-	result.accuracy = compute_accuracy(shooter, target, action)
+static func _roll_hit(result: ShotResult, attacker, target) -> void:
+	# The Luck layer (Sec 4.6.4), shared by shots and melee — only the accuracy
+	# that feeds it and the damage read off the far side differ between them.
+	# Expects result.accuracy already set; writes hit/crit/lucky_* in place.
 	result.hit = randf() * 100.0 < result.accuracy
 
 	# Attacker's Luck: a small chance to turn a missed roll into a hit.
-	if not result.hit and randf() * 100.0 < shooter.stats.luck / LUCK_REROLL_DIVISOR:
+	if not result.hit and randf() * 100.0 < attacker.stats.luck / LUCK_REROLL_DIVISOR:
 		result.hit = true
 		result.lucky_reroll = true
 
@@ -111,11 +112,17 @@ static func resolve_shot(shooter, target, action: ShotAction) -> ShotResult:
 		# Crit is checked first and is guaranteed once rolled — a critical hit
 		# cannot be dodged. Only a non-crit hit is subject to the defender's
 		# Luck downgrading it back into a miss.
-		if randf() * 100.0 < shooter.stats.luck / LUCK_CRIT_DIVISOR:
+		if randf() * 100.0 < attacker.stats.luck / LUCK_CRIT_DIVISOR:
 			result.crit = true
 		elif randf() * 100.0 < target.stats.luck / LUCK_REROLL_DIVISOR:
 			result.hit = false
 			result.lucky_dodge = true
+
+
+static func resolve_shot(shooter, target, action: ShotAction) -> ShotResult:
+	var result := ShotResult.new()
+	result.accuracy = compute_accuracy(shooter, target, action)
+	_roll_hit(result, shooter, target)
 
 	if result.hit:
 		result.damage = shooter.stats.weapon_damage * (CRIT_MULTIPLIER if result.crit else 1)
@@ -126,6 +133,35 @@ static func resolve_shot(shooter, target, action: ShotAction) -> ShotResult:
 		result.had_cover = true
 		result.cover_tile = cover_pos
 		GridManager.damage_cover(cover_pos, shooter.stats.weapon_damage)
+	return result
+
+
+static func compute_melee_accuracy(attacker, target) -> int:
+	# Melee happens at contact range, so the modifiers that exist to model
+	# *distance* are all deliberately absent (Sec 11.4):
+	#   - cover: a crate can't shield a body something is already on top of,
+	#   - distance falloff: zero by definition at one tile,
+	#   - light: darkness changes what you can shoot, not what a claw can reach —
+	#     and taken the other way it would make standing in the dark a defence
+	#     against the swarm, which is backwards for the game's whole premise.
+	# What's left is the attacker's own skill, elevation, hunkering, and Luck.
+	var acc: int = attacker.stats.perception + attacker.stats.melee_base_accuracy
+	if attacker.grid_pos.y > target.grid_pos.y:
+		acc += HIGH_GROUND_BONUS
+	if target.hunkered:
+		acc -= HUNKER_PENALTY
+	return clampi(acc, 1, 99)
+
+
+static func resolve_melee(attacker, target) -> ShotResult:
+	# Reuses ShotResult so `describe` and the HUD log read one shape for every
+	# attack; the cover fields simply stay unset. Melee doesn't damage cover
+	# either — the swing never travels through it.
+	var result := ShotResult.new()
+	result.accuracy = compute_melee_accuracy(attacker, target)
+	_roll_hit(result, attacker, target)
+	if result.hit:
+		result.damage = attacker.stats.melee_damage * (CRIT_MULTIPLIER if result.crit else 1)
 	return result
 
 

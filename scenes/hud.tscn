@@ -64,6 +64,10 @@ text = "Overwatch (2)"
 layout_mode = 2
 text = "Reload (1)"
 
+[node name="Face" type="Button" parent="Actions"]
+layout_mode = 2
+text = "Face (0)"
+
 [node name="Flashlight" type="Button" parent="Actions"]
 layout_mode = 2
 text = "Flashlight (0)"

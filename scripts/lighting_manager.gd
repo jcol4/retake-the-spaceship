@@ -10,6 +10,11 @@ extends Node
 ##   base    — static fixtures only; changes only at load and on flicker.
 ##   dynamic — flashlights only; changes whenever a unit moves/turns/toggles.
 
+## Emitted once per recompute, after every tile's light_value is settled.
+## Detection listens to this (Sec 11.2) — the lighting layer itself stays
+## ignorant of the AI, and remains the only writer of light_value.
+signal lighting_changed
+
 const AMBIENT_FLOOR := 0.0  # tiles no source reaches are pitch dark (Sec 5.3)
 const FLASHLIGHT_RANGE := 6.0  # tiles (Sec 5.2)
 const FLASHLIGHT_CONE_DEGREES := 90.0  # Sec 5.2
@@ -17,6 +22,13 @@ const FLASHLIGHT_INTENSITY := 75.0  # 0-100 contribution at zero distance
 
 var _sources: Array[LightSource] = []
 var _base: Dictionary = {}  # Vector3i -> float, static fixtures only
+# The dynamic layer, kept rather than summed away, because "is a flashlight on
+# this tile" is a different question from "is this tile lit" and detection needs
+# the former: an alien standing under an overhead fixture must not read as
+# spotted. Aliens set has_flashlight false, so this layer is only ever player
+# beams — a non-zero value here means a player is deliberately lighting the tile.
+var _dynamic: Dictionary = {}  # Vector3i -> float, flashlights only
+var _dynamic_source: Dictionary = {}  # Vector3i -> Unit, whose beam is brightest
 
 
 func register_source(source: LightSource) -> void:
@@ -54,7 +66,8 @@ func reroll_flicker() -> void:
 func recompute_dynamic() -> void:
 	# Flashlights only. Called often (every step of a move), so each unit only
 	# walks tiles within its own flashlight range rather than the whole map.
-	var dynamic: Dictionary = {}
+	_dynamic.clear()
+	_dynamic_source.clear()
 	for unit: Unit in _flashlight_units():
 		var facing: Vector3 = -unit.global_transform.basis.z
 		for pos in GridManager.tiles.keys():
@@ -68,10 +81,26 @@ func recompute_dynamic() -> void:
 				continue
 			if not GridManager.has_clear_line(unit, unit.global_position + Vector3(0, 1.2, 0), t.world_pos + Vector3(0, 0.5, 0)):
 				continue
-			dynamic[pos] = maxf(dynamic.get(pos, 0.0), c)
+			# Brightest beam wins the tile, and owns it for detection purposes —
+			# whoever is lighting a tile hardest is who gets noticed standing on it.
+			if c > _dynamic.get(pos, 0.0):
+				_dynamic[pos] = c
+				_dynamic_source[pos] = unit
 	for pos in GridManager.tiles.keys():
 		var t: GridTileData = GridManager.get_tile(pos)
-		t.light_value = clampf(_base.get(pos, AMBIENT_FLOOR) + dynamic.get(pos, 0.0), 0.0, 100.0)
+		t.light_value = clampf(_base.get(pos, AMBIENT_FLOOR) + _dynamic.get(pos, 0.0), 0.0, 100.0)
+	lighting_changed.emit()
+
+
+func flashlight_value(pos: Vector3i) -> float:
+	# Flashlight contribution only, deliberately excluding static fixtures — see
+	# the note on _dynamic. Aggro reads this, accuracy reads tile.light_value.
+	return _dynamic.get(pos, 0.0)
+
+
+func flashlight_source(pos: Vector3i) -> Unit:
+	# Which unit's beam is lighting this tile, or null if none is.
+	return _dynamic_source.get(pos)
 
 
 func _flashlight_units() -> Array[Unit]:

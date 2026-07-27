@@ -4,6 +4,7 @@ extends Node3D
 
 const PLAYER_SCENE := preload("res://scenes/player_unit.tscn")
 const ENEMY_SCENE := preload("res://scenes/enemy_unit.tscn")
+const SWARM_SCENE := preload("res://scenes/swarm_unit.tscn")
 
 @onready var map: Node3D = $TestMap
 @onready var camera_rig: Node3D = $CameraRig
@@ -44,6 +45,15 @@ func _ready() -> void:
 		add_child(enemy)
 		enemy.action_logged.connect(_on_unit_log)
 		enemy_index += 1
+
+	var swarm_index := 1
+	for spawn in map.swarm_spawns:
+		var swarm: SwarmUnit = SWARM_SCENE.instantiate()
+		swarm.stats = _swarm_stats("Swarm_%d" % swarm_index)
+		swarm.position = GridManager.grid_to_world(spawn)
+		add_child(swarm)
+		swarm.action_logged.connect(_on_unit_log)
+		swarm_index += 1
 
 	if not map.player_spawns.is_empty():
 		camera_rig.focus_on(GridManager.grid_to_world(map.player_spawns[0]))
@@ -117,4 +127,27 @@ func _alien_stats(alien_name: String) -> UnitStats:
 	stats.mag_size = 10
 	stats.class_base_initiative = 40
 	stats.equipment_initiative = 30
+	return stats
+
+
+func _swarm_stats(swarm_name: String) -> UnitStats:
+	# Fodder (Sec 11.3/11.4): tanky, since max HP is Fitness, but each swing is
+	# small — three or four of them are what hurts, never one. `mag_size` 0 is
+	# what "has no gun" means mechanically: can_shoot() is false forever.
+	# Lowest initiative on the board, so a swarm generally acts after the squad
+	# has already had its say. (Both roster entries want moving into a spawn
+	# table on the Nest node, Sec 11.7, once that exists.)
+	var stats := UnitStats.new()
+	stats.display_name = swarm_name
+	stats.perception = randi_range(25, 40)
+	stats.reflexes = randi_range(15, 30)
+	stats.fitness = randi_range(50, 65)
+	stats.luck = 15
+	stats.weapon_base_accuracy = 0
+	stats.weapon_damage = 0
+	stats.mag_size = 0
+	stats.melee_base_accuracy = 45
+	stats.melee_damage = 5
+	stats.class_base_initiative = 25
+	stats.equipment_initiative = 20
 	return stats
