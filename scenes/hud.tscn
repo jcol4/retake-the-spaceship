@@ -29,6 +29,53 @@ grow_horizontal = 0
 layout_mode = 2
 scroll_following = true
 
+[node name="AimedShotMenu" type="CenterContainer" parent="."]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="AimedShotMenu"]
+layout_mode = 2
+
+[node name="VBox" type="VBoxContainer" parent="AimedShotMenu/Panel"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="AimedShotMenu/Panel/VBox"]
+layout_mode = 2
+text = "Choose target zone"
+horizontal_alignment = 1
+
+[node name="Head" type="Button" parent="AimedShotMenu/Panel/VBox"]
+layout_mode = 2
+text = "Head"
+
+[node name="Torso" type="Button" parent="AimedShotMenu/Panel/VBox"]
+layout_mode = 2
+text = "Torso"
+
+[node name="ArmL" type="Button" parent="AimedShotMenu/Panel/VBox"]
+layout_mode = 2
+text = "Left Arm"
+
+[node name="ArmR" type="Button" parent="AimedShotMenu/Panel/VBox"]
+layout_mode = 2
+text = "Right Arm"
+
+[node name="LegL" type="Button" parent="AimedShotMenu/Panel/VBox"]
+layout_mode = 2
+text = "Left Leg"
+
+[node name="LegR" type="Button" parent="AimedShotMenu/Panel/VBox"]
+layout_mode = 2
+text = "Right Leg"
+
+[node name="Cancel" type="Button" parent="AimedShotMenu/Panel/VBox"]
+layout_mode = 2
+text = "Cancel"
+
 [node name="Actions" type="HBoxContainer" parent="."]
 anchors_preset = 12
 anchor_top = 1.0
@@ -48,9 +95,9 @@ text = "Move (1-2)"
 layout_mode = 2
 text = "Shoot (1)"
 
-[node name="Barrage" type="Button" parent="Actions"]
+[node name="AimedShot" type="Button" parent="Actions"]
 layout_mode = 2
-text = "Barrage (2)"
+text = "Aimed Shot (2)"
 
 [node name="Hunker" type="Button" parent="Actions"]
 layout_mode = 2
@@ -58,7 +105,7 @@ text = "Hunker (1)"
 
 [node name="Overwatch" type="Button" parent="Actions"]
 layout_mode = 2
-text = "Overwatch (2)"
+text = "Overwatch (1)"
 
 [node name="Reload" type="Button" parent="Actions"]
 layout_mode = 2

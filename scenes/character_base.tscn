@@ -27,7 +27,7 @@ bone_name = "hand.R"
 bone_idx = 12
 
 [node name="rifle" parent="soldier/Rig/Skeleton3D/RifleMount" instance=ExtResource("3_rifle")]
-transform = Transform3D(0.5131822, 0.8582797, -0.00013112849, -0.12005699, 0.07163314, -0.9901793, -0.84984136, 0.50815815, 0.13980334, 0, 0.055, 0)
+transform = Transform3D(0.80447906, 0.59398097, -0.00015179557, -0.08303954, 0.112214476, -0.99020827, -0.5881478, 0.7966144, 0.1395981, 0, 0.055, 0)
 
 ; The barrel tip, hung off the rifle rather than off the bone so it needs no
 ; transform of its own beyond the offset: MUZZLE from tools/gen_soldier.py,

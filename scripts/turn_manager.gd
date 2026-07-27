@@ -60,6 +60,11 @@ func _draw_next() -> void:
 	pool.erase(drawn)
 	active_unit = drawn
 	drawn.begin_activation()
+	if drawn.stunned:
+		# Sec 4.2: a torso crit burns the target's next activation outright.
+		drawn.stunned = false
+		drawn.ap = 0
+		log_message.emit("%s is STUNNED and loses their turn!" % drawn.stats.display_name)
 	log_message.emit("%s drawn from the pool" % drawn.stats.display_name)
 	unit_activated.emit(drawn)
 	if drawn is EnemyUnit:
@@ -88,7 +93,7 @@ func check_overwatch(mover: Unit) -> void:
 		if not watcher.can_shoot() or not GridManager.has_line_of_sight(watcher, mover):
 			continue
 		watcher.on_overwatch = false  # the reserved shot is spent
-		var result: Combat.ShotResult = await watcher.fire_at(mover, Combat.ShotAction.SHOOT)
+		var result: Combat.ShotResult = await watcher.fire_at(mover, Combat.ShotAction.OVERWATCH)
 		log_message.emit("OVERWATCH! %s fires at %s (%d%% acc): %s" % [
 			watcher.stats.display_name, mover.stats.display_name, result.accuracy, Combat.describe(result),
 		])

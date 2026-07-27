@@ -2,12 +2,25 @@ class_name Combat
 extends RefCounted
 ## Pure combat resolution functions (design doc Sec 6.5/4.6.4).
 
-enum ShotAction { SHOOT, BARRAGE }
+enum ShotAction { SHOOT, AIMED_SHOT, OVERWATCH }
+
+## VATS-style targeting zones for Aimed Shot (Sec 4.2/6.5 body-part targeting).
+enum BodyPart { HEAD, TORSO, ARM_L, ARM_R, LEG_L, LEG_R }
 
 const HIGH_GROUND_BONUS := 15
 const COVER_PENALTY_HEAVY := 40
 const COVER_PENALTY_LIGHT := 20
 const HUNKER_PENALTY := 20
+const OVERWATCH_PENALTY := 30  # flat accuracy hit on top of a normal Shoot's math
+
+# Aimed Shot accuracy relative to the "no Reflexes" full-aim baseline (Sec 6.5):
+# Torso is the easy, reliable target; limbs are harder; the head is a severe ask.
+const ZONE_ACCURACY_MOD := {
+	BodyPart.TORSO: 0,
+	BodyPart.ARM_L: -20, BodyPart.ARM_R: -20,
+	BodyPart.LEG_L: -20, BodyPart.LEG_R: -20,
+	BodyPart.HEAD: -50,
+}
 
 # Light modifier (Sec 5.1): linear between a dark target (penalty) and a
 # fully-lit one (bonus). GridTileData.light_value is written by LightingManager.
@@ -28,6 +41,12 @@ const LUCK_CRIT_DIVISOR := 4.0
 const LUCK_REROLL_DIVISOR := 8.0
 const CRIT_MULTIPLIER := 2
 
+# A headshot doubles the normal crit roll (half the divisor), and a crit rolled
+# on a headshot has a further chance to upgrade to a severe critical.
+const HEADSHOT_CRIT_DIVISOR := LUCK_CRIT_DIVISOR / 2.0
+const SEVERE_CRIT_DIVISOR := 8.0
+const SEVERE_CRIT_MULTIPLIER := 3
+
 
 class ShotResult:
 	var hit: bool = false
@@ -37,8 +56,12 @@ class ShotResult:
 	var had_cover: bool = false
 	var flanked: bool = false
 	var crit: bool = false
+	var severe_crit: bool = false  # headshot-only upgrade over a normal crit
 	var lucky_reroll: bool = false  # attacker's Luck saved an otherwise-missed shot
 	var lucky_dodge: bool = false  # defender's Luck saved an otherwise-landed shot
+	var body_part: int = -1  # Combat.BodyPart targeted, only set for AIMED_SHOT
+	var newly_injured: bool = false  # this hit just crossed the targeted part's injury threshold
+	var stunned: bool = false  # a torso crit stuns the target for its next activation
 
 
 static func find_defending_cover(shooter_pos: Vector3i, target_pos: Vector3i) -> Vector3i:
@@ -80,10 +103,14 @@ static func light_modifier(target_pos: Vector3i) -> int:
 	return roundi(lerp(-float(LIGHT_DARK_PENALTY), float(LIGHT_BRIGHT_BONUS), lit))
 
 
-static func compute_accuracy(shooter, target, action: ShotAction) -> int:
+static func compute_accuracy(shooter, target, action: ShotAction, body_part: int = BodyPart.TORSO) -> int:
 	var acc: int = shooter.stats.perception + shooter.stats.weapon_base_accuracy
-	if action == ShotAction.SHOOT:
+	if action == ShotAction.SHOOT or action == ShotAction.OVERWATCH:
 		acc += shooter.stats.reflexes
+	if action == ShotAction.OVERWATCH:
+		acc -= OVERWATCH_PENALTY
+	if action == ShotAction.AIMED_SHOT:
+		acc += ZONE_ACCURACY_MOD.get(body_part, 0)
 	if shooter.grid_pos.y > target.grid_pos.y:
 		acc += HIGH_GROUND_BONUS
 	var cover_pos := find_defending_cover(shooter.grid_pos, target.grid_pos)
@@ -94,13 +121,15 @@ static func compute_accuracy(shooter, target, action: ShotAction) -> int:
 		acc -= HUNKER_PENALTY
 	acc -= distance_penalty(GridManager.chebyshev_dist(shooter.grid_pos, target.grid_pos))
 	acc += light_modifier(target.grid_pos)
+	acc -= shooter.ranged_accuracy_penalty()  # Sec 4.2: an injured arm shakes every ranged shot, not just melee
 	return clampi(acc, 1, 99)
 
 
-static func _roll_hit(result: ShotResult, attacker, target) -> void:
+static func _roll_hit(result: ShotResult, attacker, target, crit_divisor: float = LUCK_CRIT_DIVISOR) -> void:
 	# The Luck layer (Sec 4.6.4), shared by shots and melee — only the accuracy
 	# that feeds it and the damage read off the far side differ between them.
 	# Expects result.accuracy already set; writes hit/crit/lucky_* in place.
+	# `crit_divisor` lets a headshot roll crit at double the normal rate.
 	result.hit = randf() * 100.0 < result.accuracy
 
 	# Attacker's Luck: a small chance to turn a missed roll into a hit.
@@ -112,20 +141,30 @@ static func _roll_hit(result: ShotResult, attacker, target) -> void:
 		# Crit is checked first and is guaranteed once rolled — a critical hit
 		# cannot be dodged. Only a non-crit hit is subject to the defender's
 		# Luck downgrading it back into a miss.
-		if randf() * 100.0 < attacker.stats.luck / LUCK_CRIT_DIVISOR:
+		if randf() * 100.0 < attacker.stats.luck / crit_divisor:
 			result.crit = true
 		elif randf() * 100.0 < target.stats.luck / LUCK_REROLL_DIVISOR:
 			result.hit = false
 			result.lucky_dodge = true
 
 
-static func resolve_shot(shooter, target, action: ShotAction) -> ShotResult:
+static func resolve_shot(shooter, target, action: ShotAction, body_part: int = BodyPart.TORSO) -> ShotResult:
 	var result := ShotResult.new()
-	result.accuracy = compute_accuracy(shooter, target, action)
-	_roll_hit(result, shooter, target)
+	result.accuracy = compute_accuracy(shooter, target, action, body_part)
+	var is_headshot := action == ShotAction.AIMED_SHOT and body_part == BodyPart.HEAD
+	_roll_hit(result, shooter, target, HEADSHOT_CRIT_DIVISOR if is_headshot else LUCK_CRIT_DIVISOR)
 
 	if result.hit:
-		result.damage = shooter.stats.weapon_damage * (CRIT_MULTIPLIER if result.crit else 1)
+		var mult := CRIT_MULTIPLIER if result.crit else 1
+		if is_headshot and result.crit and randf() * 100.0 < shooter.stats.luck / SEVERE_CRIT_DIVISOR:
+			result.severe_crit = true
+			mult = SEVERE_CRIT_MULTIPLIER
+		result.damage = shooter.stats.weapon_damage * mult
+		if action == ShotAction.AIMED_SHOT:
+			result.body_part = body_part
+			# Sec 4.2: a crit to center-mass knocks the wind out of them.
+			if body_part == BodyPart.TORSO and result.crit:
+				result.stunned = true
 
 	# Sec 6.1.1: every shot at a unit in cover damages the cover, hit or miss.
 	var cover_pos := find_defending_cover(shooter.grid_pos, target.grid_pos)
@@ -134,6 +173,17 @@ static func resolve_shot(shooter, target, action: ShotAction) -> ShotResult:
 		result.cover_tile = cover_pos
 		GridManager.damage_cover(cover_pos, shooter.stats.weapon_damage)
 	return result
+
+
+static func body_part_name(part: int) -> String:
+	match part:
+		BodyPart.HEAD: return "Head"
+		BodyPart.TORSO: return "Torso"
+		BodyPart.ARM_L: return "Left Arm"
+		BodyPart.ARM_R: return "Right Arm"
+		BodyPart.LEG_L: return "Left Leg"
+		BodyPart.LEG_R: return "Right Leg"
+		_: return "?"
 
 
 static func compute_melee_accuracy(attacker, target) -> int:
@@ -150,6 +200,7 @@ static func compute_melee_accuracy(attacker, target) -> int:
 		acc += HIGH_GROUND_BONUS
 	if target.hunkered:
 		acc -= HUNKER_PENALTY
+	acc -= attacker.melee_accuracy_penalty()
 	return clampi(acc, 1, 99)
 
 
@@ -161,11 +212,14 @@ static func resolve_melee(attacker, target) -> ShotResult:
 	result.accuracy = compute_melee_accuracy(attacker, target)
 	_roll_hit(result, attacker, target)
 	if result.hit:
-		result.damage = attacker.stats.melee_damage * (CRIT_MULTIPLIER if result.crit else 1)
+		var base_damage := roundi(attacker.stats.melee_damage * attacker.melee_damage_multiplier())
+		result.damage = base_damage * (CRIT_MULTIPLIER if result.crit else 1)
 	return result
 
 
 static func describe(result: ShotResult) -> String:
+	if result.severe_crit:
+		return "SEVERE CRITICAL for %d dmg!!" % result.damage
 	if result.crit:
 		return "CRITICAL HIT for %d dmg!" % result.damage
 	if result.hit:

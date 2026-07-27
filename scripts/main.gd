@@ -88,7 +88,7 @@ func _auto_play(unit: Unit) -> void:
 			if full_path.size() <= 1:
 				break
 			full_path.resize(full_path.size() - 1)
-			var path := full_path.slice(0, mini(player.stats.move_run(), full_path.size()))
+			var path := full_path.slice(0, mini(player.move_run(), full_path.size()))
 			player.spend_ap(1)
 			await player.move_along(path)
 			_on_unit_log("%s auto-moved to %s" % [player.stats.display_name, path[-1]])

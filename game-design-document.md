@@ -64,26 +64,44 @@ Every soldier has **2 Action Points (AP)** per activation, spent on the followin
 | **Run** | 1 AP | Move up to half movement range |
 | **Sprint** | 2 AP | Move up to full movement range |
 | **Shoot** | 1 AP | Fire weapon at an accuracy penalty (snap shot) |
-| **Barrage** | 2 AP | Fire weapon at full accuracy (aimed shot) |
+| **Aimed Shot** | 2 AP | VATS-style targeted shot at a chosen body part — Head, Torso, either Arm, or either Leg (Section 4.2.1) |
 | **Throw Grenade** | 1 AP | Throw a grenade at a target location (separate action from Shoot) |
 | **Hunker Down** | 1 AP | Improve unit's Cover stat for incoming attacks until its next activation |
-| **Overwatch** | 2 AP | Reserve action; unit interrupts the pool draw to fire when an **enemy** unit moves into its line of sight (does not trigger against allies) |
+| **Overwatch** | 1 AP | Reserve action, fired at a significant accuracy penalty; unit interrupts the pool draw to fire when an **enemy** unit moves into its line of sight (does not trigger against allies) |
 | **Reload** | 1 AP | Refill weapon magazine (see 4.3) |
 
-**Overwatch & the pool:** Overwatch is the one action that breaks the normal draw order — but only in one direction. A unit on Overwatch can interrupt and act when an enemy walks into its sightline, regardless of whose "turn" the pool would otherwise draw. It does **not** trigger off allied movement.
+**Overwatch & the pool:** Overwatch is the one action that breaks the normal draw order — but only in one direction. A unit on Overwatch can interrupt and act when an enemy walks into its sightline, regardless of whose "turn" the pool would otherwise draw. It does **not** trigger off allied movement. Its low AP cost is paid for by accuracy: the reserved shot carries a **flat −30% penalty** on top of a normal Shoot's math, reflecting a reactive snap-shot rather than one lined up in advance.
 
 **Flashlight toggle** (Section 5.2) is a separate, **free action (0 AP)** — not part of the table above, and can be used freely alongside any activation.
+
+### 4.2.1 Aimed Shot — VATS-Style Body-Part Targeting
+
+Replaces the old flat "full accuracy" Barrage. Aimed Shot lets the shooter pick one of six zones on the target before firing, Fallout-VATS-style:
+
+| Zone | Accuracy vs. the full-aim baseline | On landing a hit |
+|---|---|---|
+| Torso | +0% (the reliable, default target) | A **critical** hit also **stuns** the target for its next activation |
+| Head | **−50%** (severe penalty) | **Doubled** crit chance vs. normal, and a landed crit has a further chance to upgrade to a **severe critical (3× damage)** |
+| Left/Right Arm | −20% each | Damage accumulates toward that arm's own injury threshold |
+| Left/Right Leg | −20% each | Damage accumulates toward that leg's own injury threshold |
+
+**Body-part health & injury:** independently of the unit's own HP pool (which an Aimed Shot's damage also depletes as normal — an Aimed Shot can still down its target), each body part tracks the cumulative damage landed on it, against its own threshold (a fraction of the unit's max HP: Torso 50%, Arms/Legs 35% each, Head 25%). Once a part's threshold is exceeded, it becomes **injured** for the rest of the mission (or until treated by a future medical-resource action, Section 4.4) and applies a passive debuff:
+
+- **Injured leg:** movement range (Run/Sprint tile counts) reduced by 33% per injured leg.
+- **Injured arm:** −15% ranged accuracy and −25% melee accuracy per injured arm; melee damage cut 40% per injured arm (multiplicative, so both arms injured is a much harder cut than one).
+
+Torso and Head injuries are tracked the same way for future medical-system purposes, but their combat effect (stun / crit upgrade) triggers per landed crit on that zone rather than requiring the threshold to be crossed first.
 
 ### 4.3 Ammo & Reload
 
 - Weapons have a **fixed magazine size**.
 - Once empty, the soldier must spend **Reload (1 AP)** before firing again.
-- Creates a tradeoff around Barrage (2 AP, full accuracy) burning through ammo faster than Shoot, and makes Reload timing a real decision.
+- Creates a tradeoff around Aimed Shot (2 AP) burning through ammo faster than Shoot, and makes Reload timing a real decision.
 
 ### 4.4 Injury, Not Permadeath
 
 - Units that fall in battle are **downed/injured**, not permanently killed.
-- **Recovery is resource-based:** spending a medical resource (item/consumable, exact name/economy TBD) heals an injured soldier instantly or accelerates their recovery, rather than a passive timer or automatic free healing.
+- **Recovery is resource-based:** spending a medical resource (item/consumable, exact name/economy TBD) heals an injured soldier instantly or accelerates their recovery, rather than a passive timer or automatic free healing. This is also where a body-part injury from Aimed Shot (Section 4.2.1) gets cleared.
 - Keeps emotional stakes without classic *XCOM*-style permadeath, while giving the meta-game (Section 7) a resource to manage.
 
 ### 4.5 Unit Classes
@@ -103,19 +121,19 @@ A SPECIAL-inspired stat system (minus Charisma, and deliberately trimmed to four
 
 | Stat | Governs |
 |---|---|
-| **Perception** | Ranged accuracy contribution to **both Shoot and Barrage**; also determines a unit's maximum vision/detection range |
-| **Reflexes** | Ranged accuracy contribution to **Shoot only** (not Barrage); contributes to the Initiative stat (Section 4.1) alongside class and equipment factors |
+| **Perception** | Ranged accuracy contribution to **Shoot, Aimed Shot, and Overwatch**; also determines a unit's maximum vision/detection range |
+| **Reflexes** | Ranged accuracy contribution to **Shoot and Overwatch only** (not Aimed Shot); contributes to the Initiative stat (Section 4.1) alongside class and equipment factors |
 | **Fitness** | Max HP; movement range (Run/Sprint tile counts, Section 4.0) |
 | **Luck** | Crit chance/severity on successful hits; chance of a "second chance" reroll on failed rolls |
 
 **4.6.1 Perception**
 
-- Contributes to the shooter's accuracy roll for **both Shoot and Barrage**.
+- Contributes to the shooter's accuracy roll for **Shoot, Aimed Shot, and Overwatch**.
 - Defines the unit's **maximum vision/detection range** — a hard distance cutoff beyond which the LOS raycast (Section 10.6) isn't even attempted, regardless of lighting.
 
 **4.6.2 Reflexes**
 
-- Contributes to accuracy for **Shoot only** — Barrage relies on Perception alone.
+- Contributes to accuracy for **Shoot and Overwatch only** — Aimed Shot relies on Perception (and the chosen zone's own modifier) alone.
 - Contributes to the unit's **Initiative** value (Section 4.1) alongside class base modifiers and equipment bonuses (60% weighting, see 4.1).
 
 **4.6.3 Fitness**

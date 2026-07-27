@@ -33,7 +33,26 @@ var ammo: int
 var is_downed: bool = false
 var hunkered: bool = false
 var on_overwatch: bool = false
+var stunned: bool = false  # set by an incoming torso crit; burns this unit's next activation
 var is_busy: bool = false  # animating a move or a shot — reject new orders
+
+# VATS-style body-part injury tracking (Sec 4.2/6.5). Each part accumulates the
+# raw damage Aimed Shots land on it; crossing its threshold flags it injured for
+# the rest of the mission (or until `heal_injury` is called by a future medical-
+# resource action — not wired up to any action/UI yet).
+const PART_HP_FRACTION := {
+	Combat.BodyPart.TORSO: 0.50,
+	Combat.BodyPart.HEAD: 0.25,
+	Combat.BodyPart.ARM_L: 0.35, Combat.BodyPart.ARM_R: 0.35,
+	Combat.BodyPart.LEG_L: 0.35, Combat.BodyPart.LEG_R: 0.35,
+}
+const LEG_INJURY_SPEED_PENALTY := 0.33  # per injured leg, fraction of move range lost
+const ARM_RANGED_ACC_PENALTY := 15  # per injured arm
+const ARM_MELEE_ACC_PENALTY := 25  # per injured arm
+const ARM_MELEE_DMG_MULT := 0.6  # per injured arm, multiplicative (40% cut each)
+
+var _body_part_damage: Dictionary = {}  # Combat.BodyPart -> int accumulated
+var _injured_parts: Dictionary = {}  # Combat.BodyPart -> bool
 
 # Sec 5.2: a free (0 AP) toggle. Aliens rely on their own senses rather than a
 # rig-mounted light, so EnemyUnit sets has_flashlight false in _init().
@@ -170,6 +189,7 @@ func take_damage(amount: int) -> void:
 	if current_hp == 0 and not is_downed:
 		is_downed = true
 		on_overwatch = false
+		stunned = false
 		GridManager.set_occupant(grid_pos, null)
 		if _name_label:
 			_name_label.visible = false
@@ -186,7 +206,85 @@ func can_shoot() -> bool:
 	return ammo > 0
 
 
-func fire_at(target: Unit, action: Combat.ShotAction) -> Combat.ShotResult:
+func move_run() -> int:
+	return maxi(1, roundi(stats.move_run() * _leg_speed_multiplier()))
+
+
+func move_sprint() -> int:
+	return maxi(1, roundi(stats.move_sprint() * _leg_speed_multiplier()))
+
+
+func ranged_accuracy_penalty() -> int:
+	return ARM_RANGED_ACC_PENALTY * _injured_arm_count()
+
+
+func melee_accuracy_penalty() -> int:
+	return ARM_MELEE_ACC_PENALTY * _injured_arm_count()
+
+
+func melee_damage_multiplier() -> float:
+	return pow(ARM_MELEE_DMG_MULT, _injured_arm_count())
+
+
+func is_part_injured(part: int) -> bool:
+	return _injured_parts.get(part, false)
+
+
+func injured_summary() -> String:
+	var names: Array[String] = []
+	for part in _injured_parts:
+		if _injured_parts[part]:
+			names.append(Combat.body_part_name(part))
+	return ", ".join(names) if not names.is_empty() else "None"
+
+
+func apply_body_part_damage(part: int, amount: int) -> bool:
+	# Accumulates raw damage against this part's own threshold (Sec 4.2/6.5).
+	# Returns true the first time this hit pushes it over the threshold —
+	# callers use that to log "X's Y is injured!" only once, on the hit that did it.
+	_body_part_damage[part] = _body_part_damage.get(part, 0) + amount
+	if _injured_parts.get(part, false):
+		return false
+	if _body_part_damage[part] >= _body_part_threshold(part):
+		_injured_parts[part] = true
+		return true
+	return false
+
+
+func heal_injury(part: int) -> void:
+	# Hook for a future medical-resource action (GDD Sec 4.4) — not yet wired to
+	# any action or UI. Clears the injury and resets its damage counter.
+	_injured_parts[part] = false
+	_body_part_damage[part] = 0
+
+
+func _body_part_threshold(part: int) -> int:
+	return maxi(1, roundi(stats.max_hp() * PART_HP_FRACTION.get(part, 0.35)))
+
+
+func _injured_leg_count() -> int:
+	var n := 0
+	if is_part_injured(Combat.BodyPart.LEG_L):
+		n += 1
+	if is_part_injured(Combat.BodyPart.LEG_R):
+		n += 1
+	return n
+
+
+func _injured_arm_count() -> int:
+	var n := 0
+	if is_part_injured(Combat.BodyPart.ARM_L):
+		n += 1
+	if is_part_injured(Combat.BodyPart.ARM_R):
+		n += 1
+	return n
+
+
+func _leg_speed_multiplier() -> float:
+	return 1.0 - LEG_INJURY_SPEED_PENALTY * _injured_leg_count()
+
+
+func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.BodyPart.TORSO) -> Combat.ShotResult:
 	# Coroutine — callers MUST `await`. Damage lands when the shot animation
 	# finishes, so the target drops in time with the effect, not before it.
 	# Swing onto the target before anything else. The weapon points where the
@@ -195,7 +293,7 @@ func fire_at(target: Unit, action: Combat.ShotAction) -> Combat.ShotResult:
 	# which changes what is lit before the shot resolves.
 	await face_toward(target.global_position)
 	ammo -= 1
-	var result := Combat.resolve_shot(self, target, action)
+	var result := Combat.resolve_shot(self, target, action, body_part)
 	is_busy = true
 	var rounds := randi_range(BURST_MIN, BURST_MAX)
 	_pending_shot = result
@@ -207,6 +305,10 @@ func fire_at(target: Unit, action: Combat.ShotAction) -> Combat.ShotResult:
 	_pending_target = null
 	if result.hit:
 		target.take_damage(result.damage)
+		if action == Combat.ShotAction.AIMED_SHOT and not target.is_downed:
+			result.newly_injured = target.apply_body_part_damage(body_part, result.damage)
+			if result.stunned:
+				target.stunned = true
 	is_busy = false
 	return result
 

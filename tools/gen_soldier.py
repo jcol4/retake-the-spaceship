@@ -624,18 +624,18 @@ def level_weapon(p, pitch=0.0):
 # Both hands on the weapon, shouldered and pointing forward. Every shooting,
 # overwatch and reload pose is built on this so the grip stays consistent.
 GRIP_AIM = {
-    "upperarm.R": (38, 0, -22),
+    "upperarm.R": (38, 0, 85),
     "lowerarm.R": (78, 0, 0),
-    "upperarm.L": (58, 0, 26),
+    "upperarm.L": (58, 0, -85),
     "lowerarm.L": (88, 0, 0),
     "chest": (2, 0, -8),
 }
 
 # Weapon carried low across the body.
 GRIP_LOW = {
-    "upperarm.R": (16, 0, -10),
+    "upperarm.R": (16, 0, 75),
     "lowerarm.R": (48, 0, 0),
-    "upperarm.L": (32, 0, 14),
+    "upperarm.L": (32, 0, -75),
     "lowerarm.L": (62, 0, 0),
     "chest": (3, 0, -4),
 }
@@ -735,8 +735,8 @@ RUN_LEGS_UP = {
 # so these only need to be in the right neighbourhood for coordinate descent to
 # find its way; they are not the poses that ship.
 RUN_GRIP = {
-    "upperarm.R": (34, 0, -24), "lowerarm.R": (74, 0, 0),
-    "upperarm.L": (40, 0, 26), "lowerarm.L": (80, 0, 0),
+    "upperarm.R": (34, 0, 80), "lowerarm.R": (74, 0, 0),
+    "upperarm.L": (40, 0, -80), "lowerarm.L": (80, 0, 0),
 }
 
 
@@ -943,7 +943,7 @@ WEAPON_HOME = Vector((-0.08, 0.15, 1.22))
 # whole arm-and-rifle unit travels instead. Mostly up and across rather than
 # forward: a forward reach costs support-hand range, and the diagonal is what
 # stands in for the reference's opposed arm swing anyway. Metres at |drive| = 12.
-WEAPON_DRIVE = Vector((0.05, 0.04, 0.05))
+WEAPON_DRIVE = Vector((0.11, 0.09, 0.11))
 
 
 def _solve_arm(rig_obj, out, side, target, tip):
@@ -1071,6 +1071,14 @@ def _derive_engaged_poses(rig_obj):
         _solve_arm(rig_obj, p, "L", target, PALM)
         POSE_LIB[name] = p
 
+    # crouch is solved the same way as aim (see solve_grips) rather than left on
+    # level_weapon's arithmetic, which is only exact for pure flexion and drifts
+    # tens of degrees off once the shoulder abducts as far as this grip does.
+    # Its own derivatives follow the same pattern as aim's above.
+    POSE_LIB["crouch"] = crouch = nudge(POSE_LIB["crouch"], chest=(2, 0, -8))
+    POSE_LIB["recoil_crouch"] = nudge(crouch, chest=(-8, 0, 0), head=(-4, 0, 0))
+    POSE_LIB["crouch_b"] = nudge(crouch, spine=(2, 0, 0), head=(1, 0, 0))
+
 
 def solve_grips(rig_obj):
     """Solve every pose that holds the weapon in both hands.
@@ -1105,6 +1113,7 @@ def solve_grips(rig_obj):
     POSE_LIB["idle"] = POSE_LIB[idle_key_name(0)]
 
     solve("aim", AIM_WRIST, AIM_PITCH, support=AIM_SUPPORT)
+    solve("crouch", AIM_WRIST, AIM_PITCH, support=0.0)
     _derive_engaged_poses(rig_obj)
 
     apply_pose(rig_obj, {})
@@ -1117,7 +1126,12 @@ POSE_LIB = {
     "idle": level_weapon(pose(GRIP_LOW, spine=(3, 0, 0), head=(-2, 0, 0)), -20),
     "aim": level_weapon(pose(GRIP_AIM, spine=(4, 0, 0)), 0),
     # chest carries both the crouch lean and the grip's shoulder turn.
-    "crouch": level_weapon(pose(CROUCH_LEGS, GRIP_AIM, chest=(10, 0, -8)), 0),
+    # The crouched lean itself (on top of CROUCH_LEGS' own spine/chest) is
+    # applied as a nudge after solve_grips solves the grip — see
+    # _derive_engaged_poses — so the support hand is solved against a torso
+    # close to the standing aim pose's, which is within its reach, rather than
+    # already twisted into the crouch's final lean.
+    "crouch": level_weapon(pose(CROUCH_LEGS, GRIP_AIM), 0),
     # Overwatch is the aim pose turned off-centre: the scan sweeps from here.
     "overwatch": level_weapon(pose(GRIP_AIM, spine=(4, 0, 12), head=(0, 0, -6)), 0),
     # Reload: weapon stays up on the right, left hand drops away to the
@@ -1180,12 +1194,10 @@ POSE_LIB["aim"] = level_weapon(pose(GRIP_AIM, AIM_LEGS, {
     "head": (-4, -14, 0),
 }), AIM_PITCH)
 
-# Derived variants. Everything that hangs off "aim" — the recoils, overwatch,
-# reload — is rebuilt in _derive_engaged_poses instead, because "aim" itself is
-# not final until the rig exists and its grip has been solved. Only the poses
-# built on crouch, grenade and interact can be finished here.
-POSE_LIB["recoil_crouch"] = nudge(POSE_LIB["crouch"], chest=(-8, 0, 0), head=(-4, 0, 0))
-POSE_LIB["crouch_b"] = nudge(POSE_LIB["crouch"], spine=(2, 0, 0), head=(1, 0, 0))
+# Derived variants. Everything that hangs off "aim" or "crouch" — the recoils,
+# overwatch, reload — is rebuilt in _derive_engaged_poses instead, because
+# neither is final until the rig exists and its grip has been solved. Only the
+# poses built on grenade and interact can be finished here.
 POSE_LIB["throw"] = nudge(POSE_LIB["grenade"], **{"upperarm.L": (108, 0, -16),
                                                   "lowerarm.L": (-64, 0, 0),
                                                   "spine": (14, 0, -8)})

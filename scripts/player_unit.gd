@@ -3,9 +3,14 @@ extends Unit
 ## Input handling while this unit is the active (pool-drawn) unit.
 ## The HUD sets `pending_action`; clicks in the world resolve it.
 
-enum Mode { NONE, MOVE, SHOOT, BARRAGE, FACE }
+enum Mode { NONE, MOVE, SHOOT, AIMED_SHOT, FACE }
 
 signal action_logged(text: String)
+# Fired instead of firing immediately when a valid target is clicked while
+# Aimed Shot is armed (Sec 4.2/6.5) — the HUD catches this to pop up its
+# Fallout-VATS-style zone menu; `fire_aimed_shot` below does the actual shot
+# once the player picks a zone from it.
+signal aimed_shot_target_picked(target: Unit)
 
 # Sentinel for "the cursor isn't over a walkable tile". Floor -9999 can never
 # collide with a real grid key.
@@ -44,14 +49,14 @@ func set_mode(new_mode: Mode) -> void:
 		highlights.clear_highlights()
 	match mode:
 		Mode.MOVE:
-			_run_tiles = GridManager.get_reachable_tiles(grid_pos, stats.move_run())
+			_run_tiles = GridManager.get_reachable_tiles(grid_pos, move_run())
 			if ap >= 2:
 				# Only offer the sprint band when the second AP is actually there.
 				_sprint_tiles = _outer_band(
-					_run_tiles, GridManager.get_reachable_tiles(grid_pos, stats.move_sprint()))
+					_run_tiles, GridManager.get_reachable_tiles(grid_pos, move_sprint()))
 			if highlights:
 				highlights.show_move_range(_run_tiles, _sprint_tiles)
-		Mode.SHOOT, Mode.BARRAGE:
+		Mode.SHOOT, Mode.AIMED_SHOT:
 			if highlights:
 				_show_targets(highlights)
 	set_process(mode != Mode.NONE)
@@ -81,9 +86,11 @@ func _cost_for(tile: Vector3i) -> int:
 func _show_targets(highlights: Node) -> void:
 	# Every hostile this unit can actually put a shot on right now — the same
 	# line-of-sight test _try_shoot enforces — labelled with its hit chance.
+	# Aimed Shot previews against the Torso baseline; the per-zone breakdown
+	# only appears once a target is actually picked (Sec 4.2/6.5's VATS menu).
 	var tiles: Array[Vector3i] = []
 	var accuracies: Array[int] = []
-	var action := Combat.ShotAction.SHOOT if mode == Mode.SHOOT else Combat.ShotAction.BARRAGE
+	var action := Combat.ShotAction.SHOOT if mode == Mode.SHOOT else Combat.ShotAction.AIMED_SHOT
 	for node in get_tree().get_nodes_in_group("enemy_units"):
 		var enemy := node as Unit
 		if enemy == null or enemy.is_downed:
@@ -91,12 +98,12 @@ func _show_targets(highlights: Node) -> void:
 		if not GridManager.has_line_of_sight(self, enemy):
 			continue
 		tiles.append(enemy.grid_pos)
-		accuracies.append(Combat.compute_accuracy(self, enemy, action))
+		accuracies.append(Combat.compute_accuracy(self, enemy, action, Combat.BodyPart.TORSO))
 	highlights.show_targets(tiles, accuracies)
 
 
 func _range_for(cost: int) -> int:
-	return stats.move_run() if cost == 1 else stats.move_sprint()
+	return move_run() if cost == 1 else move_sprint()
 
 
 func _process(_delta: float) -> void:
@@ -110,7 +117,7 @@ func _process(_delta: float) -> void:
 	match mode:
 		Mode.MOVE:
 			_update_path_preview(highlights)
-		Mode.SHOOT, Mode.BARRAGE:
+		Mode.SHOOT, Mode.AIMED_SHOT:
 			_update_target_hover(highlights)
 
 
@@ -153,7 +160,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		_try_face(hit["position"])
 		return
 	var unit := _unit_from_collider(hit["collider"])
-	if unit and not unit.is_player_controlled and mode in [Mode.SHOOT, Mode.BARRAGE]:
+	if unit and not unit.is_player_controlled and mode in [Mode.SHOOT, Mode.AIMED_SHOT]:
 		_try_shoot(unit)
 	elif unit == null and mode == Mode.MOVE:
 		_try_move(GridManager.world_to_grid(hit["position"]))
@@ -209,24 +216,59 @@ func _try_move(target: Vector3i) -> void:
 
 
 func _try_shoot(target: Unit) -> void:
-	var cost := 1 if mode == Mode.SHOOT else 2
-	if ap < cost or not can_shoot():
+	if mode == Mode.AIMED_SHOT:
+		# Doesn't fire yet — Aimed Shot needs a zone first. The HUD listens for
+		# this and opens the VATS-style menu; `fire_aimed_shot` below finishes
+		# the job once the player picks one.
+		if ap < 2 or not can_shoot():
+			return
+		if not GridManager.has_line_of_sight(self, target):
+			action_logged.emit("%s: no line of sight to %s" % [stats.display_name, target.stats.display_name])
+			return
+		aimed_shot_target_picked.emit(target)
+		return
+	if ap < 1 or not can_shoot():
 		return
 	if not GridManager.has_line_of_sight(self, target):
 		action_logged.emit("%s: no line of sight to %s" % [stats.display_name, target.stats.display_name])
 		return
-	var action := Combat.ShotAction.SHOOT if mode == Mode.SHOOT else Combat.ShotAction.BARRAGE
-	spend_ap(cost)
-	var result: Combat.ShotResult = await fire_at(target, action)
+	spend_ap(1)
+	var result: Combat.ShotResult = await fire_at(target, Combat.ShotAction.SHOOT)
 	action_logged.emit("%s fired at %s (%d%% acc): %s" % [stats.display_name, target.stats.display_name, result.accuracy, Combat.describe(result)])
+	_log_shot_aftermath(target, result)
+	set_mode(Mode.NONE)
+	_check_activation_end()
+
+
+func fire_aimed_shot(target: Unit, body_part: int) -> void:
+	# Called by the HUD once the player picks a zone from the VATS-style menu
+	# opened after `aimed_shot_target_picked`. Re-validates everything, since
+	# AP/LOS/ammo could all have changed while that menu was up.
+	if ap < 2 or not can_shoot() or target.is_downed:
+		return
+	if not GridManager.has_line_of_sight(self, target):
+		action_logged.emit("%s: no line of sight to %s" % [stats.display_name, target.stats.display_name])
+		return
+	spend_ap(2)
+	var result: Combat.ShotResult = await fire_at(target, Combat.ShotAction.AIMED_SHOT, body_part)
+	var zone_tag := " [%s]" % Combat.body_part_name(body_part)
+	action_logged.emit("%s fired at %s%s (%d%% acc): %s" % [stats.display_name, target.stats.display_name, zone_tag, result.accuracy, Combat.describe(result)])
+	if result.newly_injured:
+		action_logged.emit("%s's %s is INJURED!" % [target.stats.display_name, Combat.body_part_name(body_part)])
+	if result.stunned:
+		action_logged.emit("%s is STUNNED!" % target.stats.display_name)
+	_log_shot_aftermath(target, result)
+	set_mode(Mode.NONE)
+	_check_activation_end()
+
+
+func _log_shot_aftermath(target: Unit, result: Combat.ShotResult) -> void:
 	if target.is_downed:
 		action_logged.emit("%s is DOWN!" % target.stats.display_name)
 	if result.had_cover:
 		var t: GridTileData = GridManager.get_tile(result.cover_tile)
 		if t and t.cover_type == GridTileData.CoverType.NONE:
 			action_logged.emit("Cover at %s destroyed — now impassable rubble!" % result.cover_tile)
-	set_mode(Mode.NONE)
-	_check_activation_end()
 
 
 func try_hunker() -> void:
@@ -240,10 +282,10 @@ func try_hunker() -> void:
 
 
 func try_overwatch() -> void:
-	if ap < 2 or is_busy or not can_shoot():
+	if ap < 1 or is_busy or not can_shoot():
 		return
 	do_overwatch()
-	spend_ap(2)
+	spend_ap(1)
 	set_mode(Mode.NONE)
 	action_logged.emit("%s is on overwatch" % stats.display_name)
 	_check_activation_end()

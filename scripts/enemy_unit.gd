@@ -90,6 +90,15 @@ func take_turn() -> void:
 			pass  # UNAWARE rests at its nest (Sec 11.1) — drawn, but does nothing
 
 
+## Chance to spend the full 2 AP on an Aimed Shot instead of a quick 1 AP Shoot,
+## when there's AP to spare for it. Keeps aliens from *always* eating the AP
+## cost just because they can — a wounded/AP-starved one still snap-shoots.
+const AIMED_SHOT_CHANCE := 0.6
+const HEADSHOT_ACCURACY_THRESHOLD := 50  # only tempted by the head when odds are good
+const HEADSHOT_CHANCE := 0.35
+const LEG_TARGET_CHANCE := 0.4  # vs. a quarry still able to disengage
+
+
 func _combat_turn() -> void:
 	# The ranged loop. Overridden wholesale by melee types (SwarmUnit).
 	while ap > 0 and not is_downed:
@@ -98,9 +107,12 @@ func _combat_turn() -> void:
 			return
 		var in_range := GridManager.chebyshev_dist(grid_pos, quarry.grid_pos) <= ATTACK_RANGE
 		if in_range and GridManager.has_line_of_sight(self, quarry) and can_shoot():
-			spend_ap(1)
-			var result: Combat.ShotResult = await fire_at(quarry, Combat.ShotAction.SHOOT)
-			action_logged.emit("%s fired at %s (%d%% acc): %s" % [stats.display_name, quarry.stats.display_name, result.accuracy, Combat.describe(result)])
+			if ap >= 2 and randf() < AIMED_SHOT_CHANCE:
+				await _take_aimed_shot(quarry)
+			else:
+				spend_ap(1)
+				var result: Combat.ShotResult = await fire_at(quarry, Combat.ShotAction.SHOOT)
+				action_logged.emit("%s fired at %s (%d%% acc): %s" % [stats.display_name, quarry.stats.display_name, result.accuracy, Combat.describe(result)])
 			if quarry.is_downed:
 				action_logged.emit("%s is DOWN!" % quarry.stats.display_name)
 		elif not can_shoot():
@@ -109,6 +121,34 @@ func _combat_turn() -> void:
 			action_logged.emit("%s reloaded" % stats.display_name)
 		else:
 			await _move_toward(quarry)
+
+
+func _take_aimed_shot(quarry: Unit) -> void:
+	var part := _choose_aimed_part(quarry)
+	spend_ap(2)
+	var result: Combat.ShotResult = await fire_at(quarry, Combat.ShotAction.AIMED_SHOT, part)
+	action_logged.emit("%s aims at %s's %s (%d%% acc): %s" % [
+		stats.display_name, quarry.stats.display_name, Combat.body_part_name(part), result.accuracy, Combat.describe(result),
+	])
+	if result.newly_injured:
+		action_logged.emit("%s's %s is INJURED!" % [quarry.stats.display_name, Combat.body_part_name(part)])
+	if result.stunned:
+		action_logged.emit("%s is STUNNED!" % quarry.stats.display_name)
+
+
+func _choose_aimed_part(quarry: Unit) -> int:
+	# Simple heuristic, not full tactical reasoning (Sec 4.2): favour the head
+	# when the odds are actually good enough to be worth the crit-fishing, favour
+	# legs to pin down a quarry that isn't already adjacent (i.e. could still
+	# disengage), and default to the torso's reliable accuracy otherwise.
+	var head_acc := Combat.compute_accuracy(self, quarry, Combat.ShotAction.AIMED_SHOT, Combat.BodyPart.HEAD)
+	if head_acc >= HEADSHOT_ACCURACY_THRESHOLD and randf() < HEADSHOT_CHANCE:
+		return Combat.BodyPart.HEAD
+	var not_adjacent := GridManager.chebyshev_dist(grid_pos, quarry.grid_pos) > 1
+	var legs_intact := not (quarry.is_part_injured(Combat.BodyPart.LEG_L) and quarry.is_part_injured(Combat.BodyPart.LEG_R))
+	if not_adjacent and legs_intact and randf() < LEG_TARGET_CHANCE:
+		return Combat.BodyPart.LEG_L if randf() < 0.5 else Combat.BodyPart.LEG_R
+	return Combat.BodyPart.TORSO
 
 
 func _investigate() -> void:
@@ -281,7 +321,7 @@ func _refresh_label() -> void:
 func _move_budget() -> int:
 	# Tiles walked per 1 AP move. The per-type override point (Sec 11.8): Fodder
 	# crawls at a fixed rate well under what its Fitness would otherwise allow.
-	return stats.move_run()
+	return move_run()
 
 
 func _move_toward(unit: Unit) -> void:
