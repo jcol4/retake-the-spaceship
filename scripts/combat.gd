@@ -95,6 +95,16 @@ static func distance_penalty(dist: int) -> int:
 	return gentle + (dist - DIST_STEEP_START) * DIST_STEEP_RATE
 
 
+static func weapon_range_penalty(weapon: WeaponData, dist: int) -> int:
+	# Weapon-specific range falloff (design doc `weapons/`), stacked on top of
+	# the global distance curve above. Shotgun/SMG use this to be noticeably
+	# worse past their optimal range; most weapons leave it at 0 and rely on
+	# the global curve alone.
+	if weapon == null or weapon.falloff_rate <= 0 or dist <= weapon.optimal_range:
+		return 0
+	return (dist - weapon.optimal_range) * weapon.falloff_rate
+
+
 static func light_modifier(target_pos: Vector3i) -> int:
 	var t: GridTileData = GridManager.get_tile(target_pos)
 	if t == null:
@@ -119,7 +129,9 @@ static func compute_accuracy(shooter, target, action: ShotAction, body_part: int
 		acc -= COVER_PENALTY_HEAVY if t.cover_type == GridTileData.CoverType.HEAVY else COVER_PENALTY_LIGHT
 	if target.hunkered:
 		acc -= HUNKER_PENALTY
-	acc -= distance_penalty(GridManager.chebyshev_dist(shooter.grid_pos, target.grid_pos))
+	var dist := GridManager.chebyshev_dist(shooter.grid_pos, target.grid_pos)
+	acc -= distance_penalty(dist)
+	acc -= weapon_range_penalty(shooter.stats.weapon, dist)
 	acc += light_modifier(target.grid_pos)
 	acc -= shooter.ranged_accuracy_penalty()  # Sec 4.2: an injured arm shakes every ranged shot, not just melee
 	return clampi(acc, 1, 99)

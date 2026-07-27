@@ -26,6 +26,7 @@ func _ready() -> void:
 	if _auto:
 		TurnManager.unit_activated.connect(_auto_play)
 		TurnManager.mission_ended.connect(func(_won: bool) -> void: get_tree().quit.call_deferred())
+	var player_units: Array[PlayerUnit] = []
 	var spawn_index := 0
 	for entry in SQUAD:
 		if spawn_index >= map.player_spawns.size():
@@ -35,6 +36,7 @@ func _ready() -> void:
 		unit.position = GridManager.grid_to_world(map.player_spawns[spawn_index])
 		add_child(unit)  # Unit._ready snaps to grid + registers occupancy
 		unit.action_logged.connect(_on_unit_log)
+		player_units.append(unit)
 		spawn_index += 1
 
 	var enemy_index := 1
@@ -61,7 +63,17 @@ func _ready() -> void:
 	# Static fixtures are already baked in (TestMap._ready ran first); layer in
 	# the squad's flashlights now that the units themselves exist.
 	LightingManager.recompute_dynamic()
-	TurnManager.start_mission.call_deferred()
+
+	if _auto:
+		# Headless smoke test skips the loadout screen entirely — every unit
+		# just deploys with its class's suggested-default weapon.
+		TurnManager.start_mission.call_deferred()
+		return
+
+	var loadout: CanvasLayer = LoadoutMenu.new()
+	add_child(loadout)
+	loadout.setup(player_units)
+	loadout.deployed.connect(func() -> void: TurnManager.start_mission.call_deferred())
 
 
 func _auto_play(unit: Unit) -> void:
@@ -122,9 +134,11 @@ func _alien_stats(alien_name: String) -> UnitStats:
 	stats.reflexes = randi_range(25, 45)
 	stats.fitness = randi_range(30, 45)
 	stats.luck = 20
-	stats.weapon_base_accuracy = 20
-	stats.weapon_damage = 8
-	stats.mag_size = 10
+	var weapon := WeaponData.new()
+	weapon.base_accuracy = 20
+	weapon.damage = 8
+	weapon.mag_size = 10
+	stats.weapon = weapon
 	stats.class_base_initiative = 40
 	stats.equipment_initiative = 30
 	return stats
@@ -143,9 +157,8 @@ func _swarm_stats(swarm_name: String) -> UnitStats:
 	stats.reflexes = randi_range(15, 30)
 	stats.fitness = randi_range(50, 65)
 	stats.luck = 15
-	stats.weapon_base_accuracy = 0
-	stats.weapon_damage = 0
-	stats.mag_size = 0
+	# stats.weapon stays null — no ranged weapon at all (Sec 11.4); the
+	# weapon_base_accuracy/weapon_damage/mag_size getters all read 0 from that.
 	stats.melee_base_accuracy = 45
 	stats.melee_damage = 5
 	stats.class_base_initiative = 25

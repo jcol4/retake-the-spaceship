@@ -24,17 +24,21 @@ ability design implied by the GDD, likely extends some of that benefit to allies
 | Fitness | 45–65 |
 | Luck | 45–75 |
 | Class base Initiative | 50 |
-| Weapon base accuracy | 30 |
-| Weapon damage | 10 |
-| Magazine size | 8 |
 
 Every combat stat sits at the midpoint of the roster's range — the only class with no stat below
 45 — while **Luck's range (45–75) is shifted meaningfully higher** than any other class's Luck
-range, the one deliberate skew. **Largest magazine (8)** and **lowest weapon damage (10)** reads
-as a suppression/utility weapon rather than a primary damage dealer.
+range, the one deliberate skew.
 
 *(Explicitly marked as placeholder/tunable in the code — see
 [`../../design-choices/stat-system.md`](../../design-choices/stat-system.md).)*
+
+## Weapon
+
+Weapon stats (base accuracy, damage, magazine size) are no longer part of the class — they belong
+to player-selected gear. See [`../../weapons/`](../../weapons/) for the full roster. Support's
+suggested weapon is the [SMG](../../weapons/smg.md) — reliable, low-Reload-pressure fire that
+keeps a Support soldier's activations focused on its abilities (healing/buffs, Initiative
+manipulation) rather than ammo management.
 
 ## Relationship to other systems
 

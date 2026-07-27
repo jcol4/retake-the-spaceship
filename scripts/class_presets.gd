@@ -7,19 +7,19 @@ extends RefCounted
 const RANGES := {
 	UnitStats.UnitClass.ASSAULT: {
 		"perception": [30, 50], "reflexes": [45, 65], "fitness": [60, 85], "luck": [30, 60],
-		"class_base_initiative": 60, "weapon_base_accuracy": 30, "weapon_damage": 12, "mag_size": 6,
+		"class_base_initiative": 60,
 	},
 	UnitStats.UnitClass.SNIPER: {
 		"perception": [65, 90], "reflexes": [45, 65], "fitness": [30, 50], "luck": [30, 60],
-		"class_base_initiative": 45, "weapon_base_accuracy": 40, "weapon_damage": 18, "mag_size": 4,
+		"class_base_initiative": 45,
 	},
 	UnitStats.UnitClass.SUPPORT: {
 		"perception": [45, 65], "reflexes": [45, 65], "fitness": [45, 65], "luck": [45, 75],
-		"class_base_initiative": 50, "weapon_base_accuracy": 30, "weapon_damage": 10, "mag_size": 8,
+		"class_base_initiative": 50,
 	},
 	UnitStats.UnitClass.HEAVY: {
 		"perception": [40, 60], "reflexes": [25, 45], "fitness": [65, 90], "luck": [30, 60],
-		"class_base_initiative": 40, "weapon_base_accuracy": 25, "weapon_damage": 16, "mag_size": 10,
+		"class_base_initiative": 40,
 	},
 }
 
@@ -34,7 +34,7 @@ static func roll(unit_class: UnitStats.UnitClass, display_name: String) -> UnitS
 	stats.fitness = randi_range(r["fitness"][0], r["fitness"][1])
 	stats.luck = randi_range(r["luck"][0], r["luck"][1])
 	stats.class_base_initiative = r["class_base_initiative"]
-	stats.weapon_base_accuracy = r["weapon_base_accuracy"]
-	stats.weapon_damage = r["weapon_damage"]
-	stats.mag_size = r["mag_size"]
+	# Suggested default (design doc `weapons/`) — the loadout screen lets the
+	# player override this per soldier before the mission starts.
+	stats.weapon = WeaponPresets.make(WeaponPresets.default_for_class(unit_class))
 	return stats

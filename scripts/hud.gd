@@ -76,10 +76,12 @@ func _refresh(unit: Unit) -> void:
 			reserved = "   HUNKERED"
 		var injuries := player.injured_summary()
 		var injury_line := "\nInjuries: %s" % injuries if injuries != "None" else ""
+		var weapon_name := player.stats.weapon.display_name if player.stats.weapon else "Unarmed"
 		# Own units only — enemy Initiative stays hidden (Sec 4.1).
-		unit_info.text = "%s  [%s]\nHP %d/%d   AP %d   Ammo %d/%d\nInitiative %.0f%s\nFlashlight %s   Standing on %d%% light%s" % [
+		unit_info.text = "%s  [%s]   %s\nHP %d/%d   AP %d   Ammo %d/%d\nInitiative %.0f%s\nFlashlight %s   Standing on %d%% light%s" % [
 			player.stats.display_name,
 			UnitStats.UnitClass.keys()[player.stats.unit_class],
+			weapon_name,
 			player.current_hp, player.stats.max_hp(), player.ap,
 			player.ammo, player.stats.mag_size,
 			player.stats.initiative(), reserved,

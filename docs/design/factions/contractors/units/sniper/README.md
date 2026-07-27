@@ -24,16 +24,17 @@ rather than repositioning turn to turn.
 | Fitness | 30–50 |
 | Luck | 30–60 |
 | Class base Initiative | 45 |
-| Weapon base accuracy | 40 |
-| Weapon damage | 18 |
-| Magazine size | 4 |
-
-**Highest weapon base accuracy (40) and highest weapon damage (18)** of any class, offset by the
-**smallest magazine (4)** — the class hits hardest per shot but runs out of ammo fastest, making
-Reload timing (Section 4.3) a sharper decision for a Sniper than for other classes.
 
 *(Explicitly marked as placeholder/tunable in the code — see
 [`../../design-choices/stat-system.md`](../../design-choices/stat-system.md).)*
+
+## Weapon
+
+Weapon stats (base accuracy, damage, magazine size) are no longer part of the class — they belong
+to player-selected gear. See [`../../weapons/`](../../weapons/) for the full roster. Sniper's
+suggested weapon is the [Battle Rifle](../../weapons/battle-rifle.md) — its high accuracy compounds
+with the class's high Perception (the accuracy contributor to every ranged action, Section 4.6.2),
+and its small magazine reinforces the class's positioning-dependent, not-spray-and-pray identity.
 
 ## Relationship to other systems
 

@@ -10,9 +10,19 @@ enum UnitClass { ASSAULT, SNIPER, SUPPORT, HEAVY }
 @export_range(0, 99) var fitness: int = 50
 @export_range(0, 99) var luck: int = 50
 @export var unit_class: UnitClass = UnitClass.ASSAULT
-@export var weapon_base_accuracy: int = 30
-@export var weapon_damage: int = 12
-@export var mag_size: int = 6
+# Player-selected gear (design doc `weapons/`) — stats live on the weapon, not
+# the class. `null` means unarmed at range (e.g. the Fodder swarm, Sec 11.4).
+@export var weapon: WeaponData = null
+
+var weapon_base_accuracy: int:
+	get: return weapon.base_accuracy if weapon else 0
+
+var weapon_damage: int:
+	get: return weapon.damage if weapon else 0
+
+var mag_size: int:
+	get: return weapon.mag_size if weapon else 0
+
 # Contact-range attack (Sec 11.4). Separate from the weapon numbers above so a
 # unit can be dangerous in melee and harmless at range, or the reverse — the
 # Fodder swarm has no gun at all (mag_size 0) and only these two matter to it.
@@ -27,7 +37,9 @@ func max_hp() -> int:
 
 
 func move_run() -> int:
-	return 4 + fitness / 20  # base 4 tiles, +1 per 20 Fitness (Sec 4.0/4.6.3)
+	var base := 4 + fitness / 20  # base 4 tiles, +1 per 20 Fitness (Sec 4.0/4.6.3)
+	var mult := weapon.move_multiplier if weapon else 1.0
+	return maxi(1, roundi(base * mult))
 
 
 func move_sprint() -> int:

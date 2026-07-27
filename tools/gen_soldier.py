@@ -26,6 +26,11 @@ import bmesh
 import bpy
 from mathutils import Matrix, Vector
 
+# Animations are hand-authored in assets/soldier_rig.blend now, not baked from
+# POSE_LIB — see tools/export_soldier_rig.py. --export checks against this
+# path so a stray rebuild can't silently overwrite that work.
+SHIPPED_SOLDIER_GLB = "assets/soldier.glb"
+
 # ---------------------------------------------------------------------------
 # Proportions. Heroic-stylised: broad shoulders, chunky boots, smallish head, so
 # the silhouette still reads at the 35-75 degree camera pitch (design doc 10.2).
@@ -1405,7 +1410,7 @@ def main():
     # downstream path (clips, sheets, trajectory, export) reads POSE_LIB, so
     # solving here keeps them all consistent.
     solve_grips(rig_obj)
-    if "--clips" in argv or "--export" in argv:
+    if "--clips" in argv or "--export" in argv or "--save" in argv:
         bake_clips(rig_obj)
     if "--render" in argv:
         out = argv[argv.index("--render") + 1]
@@ -1430,11 +1435,42 @@ def main():
     if "--traj" in argv:
         dump_trajectory(rig_obj, argv[argv.index("--traj") + 1])
     if "--export" in argv:
+        out = argv[argv.index("--export") + 1]
+        # assets/soldier_rig.blend is the source of truth for Contractor
+        # animations now (hand-authored in Blender, see
+        # tools/export_soldier_rig.py) — this path building fresh POSE_LIB
+        # poses and overwriting the shipped glb would silently wipe that work.
+        # --force-export exists for the rare deliberate rebase (e.g. starting
+        # a new soldier_rig.blend after a proportions change).
+        if os.path.abspath(out) == os.path.abspath(SHIPPED_SOLDIER_GLB) \
+                and "--force-export" not in argv:
+            raise SystemExit(
+                f"[gen_soldier] refusing to overwrite {out}: animations are "
+                "now hand-authored in assets/soldier_rig.blend and shipped "
+                "via tools/export_soldier_rig.py. Pass --force-export if you "
+                "really mean to rebase it from POSE_LIB instead.")
         # Soldier and rig only. The rifle ships as its own glb so Godot can hang
         # it off a BoneAttachment3D and swap it per class.
-        export_glb(argv[argv.index("--export") + 1], [rig_obj, mesh_obj])
+        export_glb(out, [rig_obj, mesh_obj])
     if "--export-rifle" in argv:
         export_glb(argv[argv.index("--export-rifle") + 1], [rifle_obj])
+    if "--save" in argv:
+        out = argv[argv.index("--save") + 1]
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        # Grip the rifle onto hand.R the same way Godot's BoneAttachment3D
+        # does at runtime, so scrubbing any action in the dope sheet carries
+        # the weapon along with it instead of leaving it stranded where build()
+        # left it. inverse_matrix is set directly (not via "Set Inverse") to
+        # GRIP_LOCAL, which is exactly the constant hand-to-grip offset the
+        # runtime attachment uses, so this tracks correctly at any pose.
+        con = rifle_obj.constraints.new("CHILD_OF")
+        con.target = rig_obj
+        con.subtarget = "hand.R"
+        con.inverse_matrix = GRIP_LOCAL
+        apply_pose(rig_obj, POSE_LIB["aim"])
+        bpy.ops.wm.save_as_mainfile(filepath=out)
+        size = os.path.getsize(out) / 1024.0
+        print(f"[gen_soldier] wrote {out} ({size:.0f} KB)")
 
 
 main()

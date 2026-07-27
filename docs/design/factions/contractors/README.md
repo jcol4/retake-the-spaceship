@@ -37,6 +37,12 @@ gear, mismatched wear patterns, no unit insignia (see
 | [Support](units/support/) | Healing/buffs, Initiative manipulation | Balanced, slight Luck skew |
 | [Heavy Weapons](units/heavy-weapons/) | High damage, slow, area-effect | High Fitness, lower Reflexes, moderate Perception |
 
+## Weapons
+
+- [`weapons/`](weapons/) — the five player-selectable weapons (Assault Rifle, Shotgun, SMG, LMG,
+  Battle Rifle) and their stats. Weapon choice is independent of class: each class has a suggested
+  default that fits its role, but any soldier can carry any weapon.
+
 ## Design choices
 
 - [`design-choices/stat-system.md`](design-choices/stat-system.md) — the four-stat percentile
@@ -55,4 +61,5 @@ gear, mismatched wear patterns, no unit insignia (see
 - Exact per-class stat numeric ranges — tendencies are set (and partially rolled out as code
   defaults in `scripts/class_presets.gd`), but not fully finalized/playtested.
 - Medical resource economy — name, and how it's earned/spent.
-- Weapon base accuracy values per weapon type.
+- ~~Weapon base accuracy values per weapon type~~ — resolved in [`weapons/`](weapons/); not yet
+  implemented in code (`class_presets.gd` still hard-codes weapon stats per class).

@@ -25,16 +25,20 @@ over snap-shooting.
 | Fitness | 65–90 |
 | Luck | 30–60 |
 | Class base Initiative | 40 |
-| Weapon base accuracy | 25 |
-| Weapon damage | 16 |
-| Magazine size | 10 |
 
-**Lowest class base Initiative (40) and lowest weapon base accuracy (25)** of the four classes —
-the tradeoff for high Fitness (highest range, 65–90, tied for the roster's top) and high damage.
-**Largest magazine (10)** supports its area-effect/suppression role without constant reloading.
+**Lowest class base Initiative (40)** of the four classes — the tradeoff for high Fitness
+(highest range, 65–90, tied for the roster's top) and high damage.
 
 *(Explicitly marked as placeholder/tunable in the code — see
 [`../../design-choices/stat-system.md`](../../design-choices/stat-system.md).)*
+
+## Weapon
+
+Weapon stats (base accuracy, damage, magazine size) are no longer part of the class — they belong
+to player-selected gear. See [`../../weapons/`](../../weapons/) for the full roster. Heavy
+Weapons' suggested weapon is the [LMG](../../weapons/lmg.md) — its large magazine supports
+sustained fire without constant reloading, and its low base accuracy pushes toward Aimed Shot,
+matching this class's already-established Reflexes-driven lean away from Shoot.
 
 ## Relationship to other systems
 

@@ -44,9 +44,9 @@ Fixed magazine sizes (Section 4.3) mean Aimed Shot's payoff isn't free over a wh
 burning through ammo faster forces Reload (1 AP) more often, which is itself a full action that
 can't also move or shoot. This is the mechanism that keeps "just always Aimed Shot" from being a
 dominant strategy: it's locally better per-shot, but globally more expensive in activations spent
-reloading. Magazine size varies significantly by class (Sniper 4, Support 8, Heavy Weapons 10 in
-current `ClassPresets` defaults — see each class's doc under [`../units/`](../units/)), so this
-tradeoff lands differently per class by design.
+reloading. Magazine size now varies by **weapon**, not class (Shotgun 2, Battle Rifle 5, Assault
+Rifle 6, SMG 12, LMG 15 — see [`../weapons/`](../weapons/)), so this tradeoff lands differently
+depending on the soldier's loadout rather than being fixed by class.
 
 ## Overwatch as the pool's one interrupt
 

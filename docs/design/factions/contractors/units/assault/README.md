@@ -22,9 +22,6 @@ movement range (+1 tile per 20 Fitness) to actually reach close range and surviv
 | Fitness | 60–85 |
 | Luck | 30–60 |
 | Class base Initiative | 60 |
-| Weapon base accuracy | 30 |
-| Weapon damage | 12 |
-| Magazine size | 6 |
 
 Notably has the **highest class base Initiative (60)** of the four classes — combined with
 moderate Reflexes (which also feeds Initiative, Section 4.1), this makes Assault the class most
@@ -32,6 +29,14 @@ likely to act early in the draw pool, fitting a "gets into the fight first" iden
 
 *(Explicitly marked as placeholder/tunable in the code — see
 [`../../design-choices/stat-system.md`](../../design-choices/stat-system.md).)*
+
+## Weapon
+
+Weapon stats (base accuracy, damage, magazine size) are no longer part of the class — they belong
+to player-selected gear. See [`../../weapons/`](../../weapons/) for the full roster. Assault's
+suggested weapons are the [Assault Rifle](../../weapons/assault-rifle.md) (baseline) and the
+[Shotgun](../../weapons/shotgun.md) (aggressive, close-range), both leaning on this class's
+Fitness-driven movement range to actually reach effective range.
 
 ## Relationship to other systems
 
