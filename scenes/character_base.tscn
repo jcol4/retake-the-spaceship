@@ -1,0 +1,54 @@
+[gd_scene format=3 uid="uid://ccharbase01"]
+
+[ext_resource type="Script" path="res://scripts/unit_visual.gd" id="1_visual"]
+[ext_resource type="PackedScene" path="res://assets/soldier.glb" id="2_soldier"]
+[ext_resource type="PackedScene" path="res://assets/rifle.glb" id="3_rifle"]
+[ext_resource type="Script" path="res://scripts/flashlight_beam.gd" id="4_beam"]
+
+[node name="Visual" type="Node3D"]
+script = ExtResource("1_visual")
+anim_path = NodePath("soldier/AnimationPlayer")
+
+[node name="soldier" parent="." instance=ExtResource("2_soldier")]
+
+; Rifle and flashlight share one transform: Rx(82 deg) = a 90 deg axis swap plus
+; the -8 deg grip pitch. The swap is needed because the exported barrel points
+; -Z in Godot (it was Blender +Y) while the bone's own axis is +Y. Omitting it
+; leaves the weapon dangling diagonally off the wrist.
+[node name="RifleMount" type="BoneAttachment3D" parent="soldier/Rig/Skeleton3D" index="1"]
+bone_name = "hand.R"
+bone_idx = 12
+
+[node name="rifle" parent="soldier/Rig/Skeleton3D/RifleMount" instance=ExtResource("3_rifle")]
+transform = Transform3D(1, 0, 0, 0, -0.139173, -0.990268, 0, 0.990268, -0.139173, 0, 0.055, 0)
+
+; The barrel tip, hung off the rifle rather than off the bone so it needs no
+; transform of its own beyond the offset: MUZZLE from tools/gen_soldier.py,
+; which is Blender (0, 0.455, 0.014) mapped to Godot (0, 0.014, -0.455). Being a
+; child of the rifle means it inherits the grip transform above instead of
+; duplicating it — the previous attempt did duplicate it, got the basis
+; transposed, and put the beam up by the soldier's shoulder.
+;
+; The light hangs off this rather than off the grip so the rifle's own mesh
+; stops sitting inside the light and shadowing the beam it casts. -Z here is
+; straight down the bore.
+[node name="Muzzle" type="Node3D" parent="soldier/Rig/Skeleton3D/RifleMount/rifle"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.014, -0.455)
+
+; spot_angle stays at 45 (a 90 degree cone) to match LightingManager's
+; FLASHLIGHT_CONE_DEGREES — what you see lit is what the unit can actually see
+; by. The angle attenuation concentrates that into a harsh centre with a dim
+; spill out to the edge; the Beam below draws the ray itself.
+[node name="Flashlight" type="SpotLight3D" parent="soldier/Rig/Skeleton3D/RifleMount/rifle/Muzzle"]
+light_color = Color(0.94, 0.96, 1, 1)
+light_energy = 7.0
+light_volumetric_fog_energy = 3.0
+shadow_enabled = true
+shadow_blur = 0.6
+spot_range = 9.0
+spot_angle = 45.0
+spot_attenuation = 1.5
+spot_angle_attenuation = 2.5
+
+[node name="Beam" type="MeshInstance3D" parent="soldier/Rig/Skeleton3D/RifleMount/rifle/Muzzle/Flashlight"]
+script = ExtResource("4_beam")

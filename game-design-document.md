@@ -125,9 +125,13 @@ A SPECIAL-inspired stat system (minus Charisma, and deliberately trimmed to four
 
 **4.6.4 Luck**
 
-- **Crit chance ≈ Luck / 4 (%).**
-- **Reroll chance on a failed roll ≈ Luck / 8 (%).**
-- *(Both tunable defaults — adjust after playtesting; crit severity/effect details still TBD.)*
+Resolved in three ordered phases, Fallout-style, whenever a shot is fired:
+
+1. **Reroll (shooter's Luck).** If the accuracy roll fails, there is a small chance the shot succeeds anyway: **Reroll chance ≈ Luck / 8 (%)**. This check only fires on an already-failed roll — it doesn't make already-successful shots "more" successful.
+2. **Critical hit (shooter's Luck).** Any landed hit — whether from the original roll or the reroll above — has a chance to crit: **Crit chance ≈ Luck / 4 (%)**. **Crit severity: double damage.** A critical hit is guaranteed once rolled and skips step 3 entirely — it cannot be dodged.
+3. **Dodge (target's Luck).** Any landed *non-crit* hit gives the target a chance to turn it back into a miss: **Dodge chance ≈ Luck / 8 (%)**, the same formula as the shooter's reroll. This is the symmetric, defensive half of Luck — being shot at and hit can still whiff if the target is lucky.
+
+- *(All three rates are tunable defaults — adjust after playtesting.)*
 
 **4.6.5 Stat Generation**
 
@@ -152,12 +156,14 @@ Line of sight is a core system — visibility is a **continuous, manageable reso
 - Every tile/position has a **light value from 0–100%**, driven by the environment (see 5.3).
 - Accuracy scales with target visibility: shooting at a poorly-lit target incurs a penalty; a fully-lit target grants a bonus. Applies symmetrically to player and enemy units.
 - **Stacking math is additive**: all modifiers (cover, light, elevation, stats) add to/subtract from a base accuracy percentage rather than multiplying against each other (see Section 6.5 for the full formula).
+- **Light modifier formula:** linear between a **−30% penalty** at 0% light and a **+10% bonus** at 100% light. A tile no fixture or flashlight reaches defaults to 0% (pitch dark), not neutral — total darkness is a real tactical liability, not a wash. *(Tunable default.)*
 
 ### 5.2 Flashlights
 
 - Every soldier carries a **flashlight**, providing a cone of light around their forward-facing direction, improving their own vision range.
 - **Toggle: free action (0 AP).** Toggling off reduces the soldier's own effective vision range but also reduces how visible they are to enemies — a genuine stealth/awareness tradeoff.
 - **Cone spec:** 90° cone, 6-tile range, rotating with facing direction. *(Tunable default.)*
+- **Light contribution:** 75/100 at the shooter's own tile, falling off linearly to 0 at the edge of the cone's range.
 
 ### 5.3 Environmental Light Sources
 
@@ -168,6 +174,14 @@ Line of sight is a core system — visibility is a **continuous, manageable reso
 - **Terminals/screens** — small, localized dim light sources
 - **Muzzle flashes/grenade detonations** — brief, dynamic light spikes when weapons fire
 - **Total darkness zones** — no power at all, forcing reliance on flashlights
+
+| Fixture | Range | Intensity | Notes |
+|---|---|---|---|
+| Overhead light | 6 tiles | 90/100 | steady, matches flashlight range |
+| Monitor/terminal | 2.5 tiles | 45/100 | small pool of light, doesn't fill a room |
+| Flickering light | 6 tiles | 25–90/100, rerolled | intensity rerolled at the start of every turn |
+
+*(All tunable defaults. All fixtures are omnidirectional and occluded by wall geometry the same way weapon line-of-sight is — light doesn't pass through walls or closed doors.)*
 
 ### 5.4 Sound & Detection
 
@@ -223,12 +237,19 @@ Final Accuracy % =
   + Elevation Bonus (+15% if shooter has high ground)
   − Cover Penalty (−40% Heavy / −20% Light / 0% if flanked)
   − Hunker Down Penalty (−20% if target used Hunker Down)
-  − Distance Penalty (falloff by range, exact curve TBD)
+  − Distance Penalty (falloff by range, see below)
 ```
 
 - Perception/Reflexes (Section 4.6) are the shooter's own base accuracy contribution, applied before situational modifiers.
 - Luck (Section 4.6.4) is applied **after** this formula resolves — governing crit chance/severity on a hit, and reroll odds on a miss.
-- *Open item: exact distance-falloff curve and weapon base accuracy values.*
+
+**Distance falloff curve:** flat out to 3 tiles (no penalty), a gentle −1%/tile climb out to 10 tiles, then a steep −12%/tile beyond 10 — a soft effective-range cutoff rather than a hard weapon range, since none is otherwise modeled.
+
+| Tiles | 3 | 6 | 8 | 10 | 12 | 14 | 16 | 18 |
+|---|---|---|---|---|---|---|---|---|
+| Penalty | 0% | −3% | −5% | −7% | −31% | −55% | −79% | −99%+ (floored by the overall 1-99 clamp) |
+
+- *Open item: weapon base accuracy values per weapon type.*
 
 ---
 
@@ -316,6 +337,18 @@ Final Accuracy % =
 
 - Exactly one unit may occupy a given tile at any time; movement resolution and the reachable-tile preview both check and exclude occupied tiles.
 
+### 10.8 Lighting System
+
+- **`LightSource` node** — a static fixture (overhead light, monitor, flickering light). Exported `light_range`, `intensity`, `light_color`, and optional `flickers`/`flicker_min`/`flicker_max`. Carries its own shadow-casting `SpotLight3D`, aimed straight down, for a harsh beam-of-light look; this is a visual-only cone, decoupled from the radial/Chebyshev falloff `LightingManager` uses for gameplay `light_value` below. Registers into the grid explicitly via `register_with_grid()` (same pattern as `CoverObject`) rather than from `_ready()`, so placement code controls exact ordering.
+- **Muzzle flashes** emit a transient, unshadowed, room-filling `OmniLight3D` (`VfxManager.muzzle_flash()`) timed to the shot's muzzle animation frame — a brief white flood rather than a lit pool, decaying to nothing within a fraction of a second.
+- **`LightingManager` autoload** — the only writer of `GridTileData.light_value`. Split into two layers to keep recomputation cheap:
+  - **Base layer** — static fixtures only. Computed once at map load and again whenever a flickering fixture rerolls (turn start).
+  - **Dynamic layer** — flashlights only. Recomputed whenever a flashlight-carrying unit moves a tile, toggles its light, or a mission starts — never every frame, matching the LOS recomputation policy (10.6).
+- **Occlusion:** both layers reuse the same wall raycast as weapon line-of-sight (`GridManager.has_clear_line`, collision layer 1) — light doesn't pass through walls or closed doors, consistent with 5.1.
+- **Falloff:** linear, full intensity at the source's own tile to zero at `light_range` tiles, using the same Chebyshev distance metric as movement and accuracy range.
+- **Flashlight toggle:** a free action (0 AP, Sec 4.2) on `Unit`, gated to the unit's own activation. `EnemyUnit` opts out (`has_flashlight = false`) — aliens rely on their own senses, not a rig-mounted light, reinforcing the Agile Hunter's darkness-dependent ambush (11.5).
+- **Movement preview:** the run/sprint highlight tiles (Sec 4.0) are darkened proportionally to `light_value`, so routing through darkness is a visible choice at the point of deciding a move, not just a stat a player has to check.
+
 ---
 
 ## 11. AI & Enemy Design
@@ -390,16 +423,14 @@ Final Accuracy % =
 
 Most prior open items now have concrete (tunable) defaults set throughout this document. What's genuinely still undecided:
 
-1. Exact distance-falloff curve for accuracy (Section 6.5).
-2. Weapon base accuracy values per weapon type.
-3. Luck crit *severity* effect (beyond chance) — bonus damage amount, status effect, etc. (Section 4.6.4).
-4. Exact per-class stat numeric ranges (Section 4.6.5) — tendencies are set, ranges are not.
-5. Campaign-level win condition / end state, beyond the mission-pool structure (Section 7).
-6. Objective-specific mission fail conditions beyond squad wipe (timers, escort failure, etc.) (Section 7.1).
-7. Spitter exact range, damage falloff, and minimum effective range (Section 11.6).
-8. Exact ambush thresholds (light value cutoff, proximity range) for the Agile Hunter (Section 11.5).
-9. Medical resource economy — what it's called, how it's earned/spent (Section 4.4).
-10. Exact cover HP values per tier and bonus-damage multiplier for grenades/Heavy Weapons against cover (Section 6.1.1).
+1. Weapon base accuracy values per weapon type.
+2. Exact per-class stat numeric ranges (Section 4.6.5) — tendencies are set, ranges are not.
+3. Campaign-level win condition / end state, beyond the mission-pool structure (Section 7).
+4. Objective-specific mission fail conditions beyond squad wipe (timers, escort failure, etc.) (Section 7.1).
+5. Spitter exact range, damage falloff, and minimum effective range (Section 11.6).
+6. Exact ambush thresholds (light value cutoff, proximity range) for the Agile Hunter (Section 11.5).
+7. Medical resource economy — what it's called, how it's earned/spent (Section 4.4).
+8. Exact cover HP values per tier and bonus-damage multiplier for grenades/Heavy Weapons against cover (Section 6.1.1).
 
 ---
 
