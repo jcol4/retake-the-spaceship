@@ -10,28 +10,56 @@ extends SceneTree
 ## grip, left hand on the handguard, so (LeftHand - RightHand) is the barrel
 ## axis the rifle should lie along.
 ##
+## Defaults measure the soldier through its assembled scene, so the reported
+## forward is post-correction and should read ~0 degrees. Point it at a raw GLB
+## instead to measure a model BEFORE any scene-level yaw, which is what tells you
+## how much correction a new character needs:
+##
 ##   godot --headless --path . --script res://tools/_debug_facing.gd
+##   FACING_SCENE=res://assets/swarm_mixamo.glb FACING_MODEL=. \
+##     FACING_CLIPS=idle,run,melee godot --headless --path . \
+##     --script res://tools/_debug_facing.gd
+##
+## FACING_MODEL is "." when the scene root is already the model, as it is for a
+## bare GLB. Not the empty string: PowerShell deletes an env var assigned "",
+## which silently falls back to the default and reports every bone at the
+## origin.
+##
+## The hand block below is only meaningful for a character that holds a weapon in
+## both hands; on anything else it is noise, not a finding.
 
-const CLIPS := ["aim_hold", "idle", "run", "crouch_idle"]
 const SETTLE_FRAMES := 3
 
+var _clips: PackedStringArray
 var _root: Node3D
+var _model: Node3D
 var _skel: Skeleton3D
 var _anim: AnimationPlayer
 var _clip := 0
 var _waited := 0
 
 
+func _env(key: String, fallback: String) -> String:
+	return OS.get_environment(key) if OS.has_environment(key) else fallback
+
+
 func _initialize() -> void:
-	_root = load("res://scenes/character_base.tscn").instantiate()
+	var scene := _env("FACING_SCENE", "res://scenes/character_base.tscn")
+	# "." means the scene root IS the model — the case when loading a GLB
+	# directly, where there is no wrapper node to reach through.
+	var model := _env("FACING_MODEL", "soldier")
+	_clips = _env("FACING_CLIPS", "aim_hold,idle,run,crouch_idle").split(",")
+	_root = load(scene).instantiate()
 	root.add_child(_root)
-	_skel = _root.get_node("soldier/Rig/Skeleton3D")
-	_anim = _root.get_node("soldier/AnimationPlayer")
+	_model = _root if model.is_empty() else _root.get_node(model)
+	_skel = _model.get_node("Rig/Skeleton3D")
+	_anim = _model.get_node("AnimationPlayer")
+	print("[face] %s  model=%s  clips=%s" % [scene, model, ", ".join(_clips)])
 	_start()
 
 
 func _start() -> void:
-	_anim.play(CLIPS[_clip])
+	_anim.play(_clips[_clip])
 	_anim.seek(0.0, true)
 	_waited = 0
 
@@ -58,7 +86,7 @@ func _process(_delta: float) -> bool:
 	_waited += 1
 	if _waited < SETTLE_FRAMES:
 		return false
-	var clip: String = CLIPS[_clip]
+	var clip: String = _clips[_clip]
 
 	var foot := _bone("LeftFoot")
 	var toe := _bone("LeftToeBase")
@@ -91,7 +119,7 @@ func _process(_delta: float) -> bool:
 		print("[face]     hand %s: dot(world_up)=%+.3f" % [pair[0], perp.dot(Vector3.UP)])
 
 	_clip += 1
-	if _clip >= CLIPS.size():
+	if _clip >= _clips.size():
 		return true
 	_start()
 	return false

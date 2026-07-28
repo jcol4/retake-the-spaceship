@@ -302,9 +302,24 @@ func _propagate_alert() -> void:
 func _set_state(new_state: AlertState) -> void:
 	if alert_state == new_state:
 		return
+	var was := alert_state
 	alert_state = new_state
 	if new_state != AlertState.COMBAT:
 		target = null
+	# Waking up is the one awareness change with a performance behind it. Fired
+	# on leaving UNAWARE by either channel — spotting a player, or catching a
+	# beam — because both mean "it has noticed", which is what the player needs
+	# to read. ALERT -> COMBAT deliberately does NOT re-fire: that is the same
+	# creature narrowing down a stimulus it is already reacting to, and screaming
+	# twice over one contact reads as a bug rather than as escalation.
+	#
+	# Deliberately NOT awaited, like the DOWNED collapse. This is reached from
+	# _on_lighting_changed as well as from the unit's own activation, and that
+	# callback runs once per tile in the MIDDLE of a player unit's walk — holding
+	# it would freeze the player halfway down a corridor for the length of a
+	# scream. Nothing downstream depends on the clip finishing.
+	if was == AlertState.UNAWARE and new_state != AlertState.UNAWARE:
+		visual.play_action(UnitVisual.ALERT_SCREAM)
 	_refresh_label()
 	state_changed.emit(self)
 

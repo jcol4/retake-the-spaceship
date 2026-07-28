@@ -1,5 +1,14 @@
 """Generate a blockout rifle sized to this rig's hands, and export it to GLB.
 
+SUPERSEDED as the source of assets/rifle.glb -- tools/import_rifle.py now builds
+that from art_src/RIfleLow.fbx. This script still writes to the same default
+path, so running it bare will overwrite the real model with the blockout; pass
+--export somewhere else if what you want is the blockout for comparison.
+
+Kept because the proportions here are measured against the rig rather than
+copied from it, which makes this the fastest way to re-derive them if the rig
+changes -- and import_rifle.py checks its scale against these numbers.
+
 Deliberately featureless. The job is not to look like a gun, it is to give the
 hands something correctly proportioned to hold, so the weapon mount can be
 judged against real geometry instead of against a stand-in that is the wrong

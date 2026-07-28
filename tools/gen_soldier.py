@@ -1283,7 +1283,7 @@ def bake_clips(rig_obj):
     print("[gen_soldier] clips: " + ", ".join(made))
 
 
-# Must match Unit.MOVE_SPEED in scripts/unit.gd. Step length is not a free
+# Must match Unit.move_speed in scripts/unit.gd. Step length is not a free
 # choice: it is MOVE_SPEED * cycle / 2, and if the authored stride disagrees the
 # feet skate and every bit of apparent weight is lost.
 MOVE_SPEED = 4.5

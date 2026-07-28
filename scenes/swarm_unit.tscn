@@ -2,54 +2,75 @@
 
 [ext_resource type="Script" path="res://scripts/swarm_unit.gd" id="1_script"]
 [ext_resource type="Script" path="res://scripts/unit_visual.gd" id="2_visual"]
-
-; Placeholder body: squatter and wider than the shooter capsule so the two alien
-; types are told apart at XCOM camera distance by silhouette, not just colour.
-
-[sub_resource type="CapsuleMesh" id="capsule_mesh"]
-radius = 0.42
-height = 1.2
-
-[sub_resource type="StandardMaterial3D" id="capsule_mat"]
-albedo_color = Color(0.36, 0.5, 0.18, 1)
+[ext_resource type="PackedScene" path="res://assets/swarm_mixamo.glb" id="3_zombie"]
 
 [sub_resource type="CapsuleShape3D" id="capsule_shape"]
 radius = 0.42
-height = 1.2
+height = 1.8
 
-[sub_resource type="BoxMesh" id="facing_mesh"]
-size = Vector3(0.16, 0.12, 0.3)
-
-[sub_resource type="StandardMaterial3D" id="facing_mat"]
-albedo_color = Color(0.9, 0.85, 0.5, 1)
-
+; No character_base.tscn equivalent for the swarm, and deliberately so: that
+; scene exists to carry the soldier's two-bone weapon mount, muzzle, flashlight
+; and beam, and a zombie has none of them. There is one swarm body, so it is
+; assembled here rather than behind another layer of indirection.
 [node name="SwarmUnit" type="Node3D" groups=["enemy_units", "units"]]
 script = ExtResource("1_script")
+; Derived from the clip, not chosen — see Unit.move_speed. Zombie Walk is
+; authored at 0.32 m/s, measured off the planted foot's backward sweep (the clip
+; is In Place, so there is no root travel to read). That is unplayable as a turn
+; pace: a single tile would take 4.7s. 1.5 m/s is the compromise — a third of the
+; soldier's 4.5, so the swarm still visibly reads as outrunnable, which is the
+; whole point of Fodder — and run_speed_scale below takes up half the remaining
+; skate. The rest is hidden by the clip itself: this zombie's left foot never
+; leaves the floor, so a sliding planted foot IS the animation.
+move_speed = 1.5
 
 [node name="Visual" type="Node3D" parent="."]
 script = ExtResource("2_visual")
-anim_path = NodePath("")
-fallback_mesh_path = NodePath("Mesh")
+anim_path = NodePath("zombie/AnimationPlayer")
+; Explicitly empty, overriding the soldier-shaped defaults on these exports. The
+; swarm has no rifle, so no muzzle to fire from, no light to mount and no spine
+; pitch to aim with. Left at their defaults these would silently resolve to null
+; anyway, but writing them out says "this unit has none" rather than "someone
+; forgot"; muzzle_origin() then falls back to a point above the unit.
+flashlight_path = NodePath("")
+muzzle_path = NodePath("")
+aim_pitch_path = NodePath("")
+; No fallback mesh: this unit has a real model, and DOWNED holds the last frame
+; of the collapse on the floor instead of making the body vanish.
+fallback_mesh_path = NodePath("")
+run_speed_scale = 2.0
 
-[node name="Mesh" type="MeshInstance3D" parent="Visual"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.6, 0)
-mesh = SubResource("capsule_mesh")
-surface_material_override/0 = SubResource("capsule_mat")
+; Yawed 180 for the same reason as the soldier in character_base.tscn: Mixamo
+; authors facing -Y in Blender, which glTF maps to +Z, and Godot's forward is -Z.
+;
+; Measured with tools/_debug_facing.gd against the raw GLB, not assumed — the
+; swarm clips carry a per-clip Hips yaw baseline the soldier's do not, so it was
+; worth checking whether they needed individual corrections. They do not. All six
+; face +Z (feet forward +150 to +185 deg from -Z), and what is left after the 180
+; is a splay of -29 to +5 deg on the feet against +5 to +20 on the shoulders —
+; straddling zero, averaging ~+4. That spread is a hunched zombie's feet and
+; shoulders pointing different ways, which is the animation, not an error.
+;
+; No build-time ROOT_YAW entry for the same reason: unlike the soldier's aim_hold,
+; where 31.6 deg of body twist put a rifle barrel off-target, nothing on this
+; character has to point anywhere precisely. Correcting per clip would be fitting
+; noise.
+[node name="zombie" parent="Visual" instance=ExtResource("3_zombie")]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 0)
 
-[node name="Facing" type="MeshInstance3D" parent="Visual"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.75, -0.4)
-mesh = SubResource("facing_mesh")
-surface_material_override/0 = SubResource("facing_mat")
-
+; Layer 2, mask 0 — nothing raycasts against it today (grid_manager's LOS and
+; lighting occlusion both query layer 1 map geometry only), so this is a body
+; volume rather than a gameplay surface. Grown from the placeholder capsule's
+; 1.2m to match the model, which stands 1.78m.
 [node name="Body" type="StaticBody3D" parent="."]
 collision_layer = 2
 collision_mask = 0
 
 [node name="Collision" type="CollisionShape3D" parent="Body"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.6, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
 shape = SubResource("capsule_shape")
 
 [node name="NameLabel" type="Label3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.2, 0)
 billboard = 1
 text = "Swarm"

@@ -176,6 +176,11 @@ Headless Blender, following the existing `tools/*.py` conventions:
 The `CLIP_MAP` dict is the whole point — it's the one place the Mixamo catalog
 name meets the game's clip name, so re-sourcing a clip is a one-line change.
 
+> **Superseded 2026-07-28 by §10.** `CLIP_MAP` and every other per-clip table
+> now live inside a `Profile`, one per character, selected with `--profile`. The
+> claim above survives intact — it is still one place per character — but the
+> dict is no longer at module scope.
+
 Everything stays reproducible from a checked-in command, matching how the rest
 of `tools/` works. The Mixamo *downloads* are the one manual step; commit the
 FBX files so a rebuild never needs the website.
@@ -330,13 +335,15 @@ this is the summary.
 | `hit_react` | Hit Reaction | 0.47s | |
 | `downed` | Dying | 4.43s | travels 0.34m, deliberately kept |
 
-**Still missing — `interact` and `melee`.** No suitable Mixamo clip found.
-`unit_visual.gd` handles both: `play_action` falls back to a timer of
-`FALLBACK_TIME` length and the unit holds its stance, which is exactly the
-behaviour that existed before any of this. `melee` is alien-side and there is no
-alien rig either, so it is doubly not on the critical path. Revisit when
-browsing Mixamo for something else — search terms to try are "button push",
-"picking up", "rifle butt", "kick".
+**Still missing — `interact`.** No suitable Mixamo clip found. `unit_visual.gd`
+handles it: `play_action` falls back to a timer of `FALLBACK_TIME` length and the
+unit holds its stance, which is exactly the behaviour that existed before any of
+this. Revisit when browsing Mixamo for something else — search terms to try are
+"button push", "picking up".
+
+**`melee` — sourced 2026-07-28, on the swarm, not the soldier.** It was always
+alien-side; §10 built the alien. The soldier still has no melee clip and does not
+need one, since nothing in `player_unit.gd` swings.
 
 Two clip lengths are much longer than the placeholders they replace: `reload`
 3.33s vs a 1.20s stand-in, `downed` 4.43s vs 0.80s. Turn pacing will feel
@@ -591,6 +598,12 @@ MOVE_SPEED = stride_per_step × 2 / cycle_time
 Measure stride off the imported clip. If the resulting speed plays badly, drive
 `anim.speed_scale` from actual speed instead — same fallback as before.
 
+> **Updated 2026-07-28 (§10.4).** `MOVE_SPEED` is now `@export var move_speed`,
+> per unit rather than per game, because two characters cannot share one derived
+> speed. The soldier's stays 4.5. The fallback above is no longer hypothetical:
+> the swarm needed *both*, since its clip is authored at 0.32 m/s and no single
+> number satisfies the clip and the turn pacing at once.
+
 ### 6.5 Obsoleted tooling
 `tools/add_ik_controls.py`, `tools/bake_run_ik.py`, `tools/verify_ik_controls.py`,
 `tools/verify_run_ik.py` — Mixamo clips are already foot-planted by mocap, so the
@@ -640,9 +653,252 @@ blocks gameplay work, and the mesh swap at step 7 is a one-file change.
 6. **MakeHuman character build** (§4.1) — body, gear, T-pose, auto-rig, texture.
    Runs in parallel with nothing else being blocked.
 7. Swap the mesh in. Re-solve the rifle mount once more (proportions changed);
-   re-derive `MOVE_SPEED` only if stride changed, which it shouldn't — same
+   re-derive `move_speed` only if stride changed, which it shouldn't — same
    clips, same skeleton.
+8. **The swarm** (§10) — second character, entirely additive. Off the critical
+   path above, and it validated §0's thesis before the MakeHuman work starts.
 
 Note that steps 4 and 7 both re-solve the rifle mount. That's expected and cheap:
 `tools/_debug_aim.gd` regenerates the line. It is not duplicated work, it's the
 cost of the mount being solved rather than derived.
+
+---
+
+## 10. The swarm — second character, same pipeline (done 2026-07-28)
+
+The zombie fodder of `SwarmUnit`, built from `art_src/T-Pose-Zombie.fbx` (Mixamo
+`Ch10`) plus seven clips in `art_src/anims/swarm_anims/`. Run it with:
+
+```
+blender -b -P tools/build_anims.py -- --profile swarm --strip-root
+godot --headless --path . --import
+```
+
+**The thesis in §0 held.** The whole point of standardising on `mixamorig` was
+that a second character would be data, not work. Bone sets matched exactly
+(`missing=0 surplus=0`, 65 bones) on every clip against a character downloaded
+separately, months apart, from the same site. No retargeting layer, no BoneMap,
+no clip-by-clip fixing. The build script needed a refactor to hold two
+characters' worth of tables, and after that the swarm was a `Profile` literal.
+
+### 10.1 Profiles — why the tables moved
+
+`CLIP_MAP`, `LOOPING`, `TRIM`, `STRIP_MODE`, `ROOT_YAW` and `SUPPORT_LOCKED` were
+module-level, which was correct for one character and actively dangerous for two.
+Every one of them holds a number **measured against a specific body**: the −31.6°
+aim yaw is where a rifle sits in a bladed stance, and the support lock is a rifle
+grip solved on a rifle-carrying skeleton. Applied to a zombie that holds nothing,
+they would have exported, imported and played, moving the wrong things — this
+pipeline's signature failure. They are now fields on a `Profile`, selected by
+`--profile`, so a correction cannot reach a character it was not measured on.
+
+The soldier rebuilds byte-for-byte in behaviour after the refactor: 13 clips, same
+lengths, same yaw, same per-clip support-lock displacements as §5.0 recorded.
+
+### 10.2 Clips
+
+| Game clip | Source | Length | Notes |
+|---|---|---|---|
+| `idle` | Zombie Idle | 4.37s | loop |
+| `idle_fidget` | Zombie Agonizing | 6.17s | **trimmed** from 11.63s, see §10.7 |
+| `run` | Zombie Walk | 4.07s | loop, In Place at source |
+| `melee` | Zombie Neck Bite | 1.23s | **trimmed** from 4.17s, see §10.3 |
+| `alert_scream` | Zombie Scream | 2.83s | new clip, no soldier counterpart |
+| `hit_react` | Zombie Reaction Hit | 2.03s | |
+| `downed` | Zombie Death | 3.00s | travels 1.015m, deliberately kept (in-tile) |
+
+**`Zombie Turn` is downloaded and deliberately unmapped.** Measured, it yaws the
+Hips 110° over 3.0s. That is root *rotation*, which `--strip-root` does not
+touch — the open problem of §5.3, needing the quaternion-unwinding pass that
+still does not exist. `face_toward` also tweens its own yaw in 0.18s, so playing
+this as-is would leave the unit 110° off. Nothing regressed by leaving it out:
+turning still snaps, exactly as it did before.
+
+Everything else the soldier has, the swarm simply does not: no crouch, no aim, no
+reload, no grenade, no `run_stop`, no shoot. All of them degrade correctly
+already — `_play` guards on `has_animation`, and `play_stance_exit` falls through
+to a hard cut at zero time cost.
+
+### 10.3 The bite had to be trimmed, for the same reason `shoot_recoil` did
+
+`melee_at` **awaits** the animation before damage lands, so an untrimmed 4.17s
+bite is 4.17s of turn time per claw — against `FALLBACK_TIME`'s 0.55s guess, and
+multiplied by however many fodder are in the room.
+
+Measured by dumping the head's per-frame displacement: **11 dead lead-in frames**,
+the reach opens the arms at f12, the lunge runs f20–f28 peaking at 2.60 m/s of
+head speed, contact lands ~f28 — and then **43 frames (1.4s) of plateau** where
+the head does not move, followed by 1.5s of returning to rest.
+
+`TRIM` keeps f12–f48: reach, lunge, bite. 1.20s. The recovery is handed to
+`unit_visual.gd`'s 0.15s stance blend rather than animated, which is a real
+trade — a fast spring back to idle rather than a hand-off — and reads as vicious
+on fodder. Revisit by splicing f12–f40 onto f84–f126 if it ever looks cheap;
+that needs `TRIM` to accept a list of ranges, which it does not today.
+
+The dead lead-in is the point worth carrying forward. **Every Mixamo clip is a
+complete performance with a wind-up, and this game replays only the front of
+them.** Two clips out of nineteen have now needed the same cut.
+
+One consequence: the full bite returns to where it started and has no net travel,
+but the trimmed window ends mid-lunge and so carries 0.338m of real forward
+travel. That travel *is* the lunge, so `strip_mode` pins it to `"none"` — without
+that, a build run with `--strip-root` would quietly flatten the attack into a
+step on the spot.
+
+### 10.4 Speed — the measurement contradicted the estimate
+
+`Zombie Walk` ships In Place, so there is no root travel to read. The authored
+ground speed is still recoverable: the planted foot slides backward under the
+body at exactly that speed. Measured off the toe tracks, **0.32 m/s** — and one
+foot never leaves the floor at all, because it is a drag, not a step.
+
+0.32 m/s is unplayable as a turn pace: 4.7s per 1.5m tile, ~28s for one swarm
+unit to spend 2 AP walking. So the honest answer is that this clip cannot both
+look right and pace right, and the gap gets split:
+
+- `Unit.MOVE_SPEED` became `@export var move_speed`, and the swarm scene sets
+  **1.5 m/s** — a third of the soldier's 4.5, so the fodder still visibly reads
+  as outrunnable, which is its whole design purpose. Cosmetic only: the tile
+  budget and AP economy never see it, so no value here can affect balance.
+- `UnitVisual.run_speed_scale` (new, default 1.0, swarm 2.0) plays the RUN stance
+  at double rate, halving the residual skate to ~2.3×. A 2.0s shamble cycle still
+  reads as a lurch.
+
+What is left is hidden by the clip itself: with one foot permanently dragging, a
+sliding planted foot *is* the animation. Zombie locomotion tolerates skate that
+a soldier's run would not, which is lucky, because a soldier's run is exactly
+what §6.4 had to solve properly.
+
+`run_speed_scale` applies to RUN and nothing else on purpose. Every other clip's
+authored timing is its content, and the game already awaits its real length —
+scaling those would desynchronise animation from turn pacing.
+
+### 10.5 The scream needed a new hook
+
+Nothing in the codebase played an animation off an awareness change. `alert_scream`
+fires from `EnemyUnit._set_state` on leaving `UNAWARE` by **either** channel —
+spotting a player, or catching a flashlight beam — because both mean "it has
+noticed", which is what the player needs to read. `ALERT → COMBAT` deliberately
+does not re-fire: that is one creature narrowing down a stimulus it is already
+reacting to, and screaming twice over one contact reads as a bug.
+
+**Not awaited**, like the `DOWNED` collapse, and for a sharper reason: this is
+reached from `_on_lighting_changed`, which runs once per tile in the *middle* of a
+player unit's walk. Awaiting it would freeze the player halfway down a corridor
+for 2.8s. Nothing downstream depends on the clip finishing.
+
+Known cosmetic edge: `play_action` blocks stance changes while it runs, so a
+scream still playing when the swarm's own activation begins will have it slide
+while screaming. It needs the scream to fire in the last moments of the player's
+turn to happen at all, and it self-corrects in under 2.8s.
+
+### 10.6 Facing — measured, and it did not need correcting
+
+`tools/_debug_facing.gd` now takes `FACING_SCENE` / `FACING_MODEL` / `FACING_CLIPS`
+from the environment, so it can measure a raw GLB *before* any scene yaw. (Pass
+`FACING_MODEL=.` when the scene root is the model. Not the empty string —
+PowerShell deletes an env var assigned `""`, which silently falls back to the
+default and reports every bone at the origin. That cost ten minutes.)
+
+All six clips face +Z, so the same 180° correction as the soldier, on the model
+node in `swarm_unit.tscn`. It was worth measuring rather than assuming, because
+the swarm clips carry a per-clip Hips yaw baseline the soldier's do not (−19° on
+most, +23° on the walk) and might have needed individual `ROOT_YAW` entries.
+
+They do not. After the 180°, the residual is −29° to +5° on the feet against +5°
+to +20° on the shoulders — straddling zero, averaging ~+4°. That spread is a
+hunched zombie's feet and shoulders pointing different ways, which is the
+animation, not an error. And unlike `aim_hold`, where 31.6° of body twist put a
+rifle barrel off-target and off-flashlight, **nothing on this character has to
+point anywhere precisely**. Correcting per clip would be fitting noise.
+
+### 10.7 Idle variation — a third kind of clip
+
+`Zombie Agonizing` became `idle_fidget`, played at a random 12–35s interval while
+the IDLE stance holds. It is worth writing down because it did not fit either of
+the two categories `unit_visual.gd` had.
+
+**Not a stance:** it ends, and hands back. **Not an action either** — and that is
+the load-bearing part. `play_action` sets `_action`, which makes `set_stance`
+record-but-not-play until the one-shot finishes. That is correct for a reload,
+where the game is awaiting the clip anyway. It is disastrous for a fidget: IDLE
+is the *default* stance, so a 6-second fidget would routinely be in flight when a
+move order arrived, and the unit would slide to its destination still convulsing.
+
+So `_fidget_loop` calls `anim.play` directly and never touches `_action`. Any
+real stance change cuts the fidget off mid-frame and wins outright, which is the
+priority a decoration should have. The loop then checks `current_animation ==
+IDLE_FIDGET` before handing back — testing the *clip* and not the stance is what
+makes the interruption safe, because anything that took over has already called
+`play()` itself and the hand-back correctly becomes a no-op.
+
+The gap is rolled fresh each time rather than fixed. With several units on
+screen a constant interval would have a whole nest convulsing in lockstep, and
+nothing reads as scripted faster than that.
+
+**Trimmed 11.63s → 6.13s**, by the same measurement as the bite: per-10-frame
+upper-body speed shows the convulsion running f1–f171 at 0.2–0.89 m/s and then
+falling off a cliff to 0.06–0.15 m/s for the remaining *six seconds*. That tail
+is a low-amplitude standing sway — indistinguishable from the idle loop it is
+about to return to, so playing it means six seconds where the zombie is busy
+doing what it would be doing anyway.
+
+The cost is stated rather than hidden: the full clip's last frame matches its
+first to within 0.000 m on every bone, and cutting the tail ends it 0.13 m from
+idle's pose instead of 0.065 m. Across `STANCE_BLEND` that is 0.87 m/s of travel,
+inside the range the clip itself moves at, so it reads as motion rather than a
+snap. And unlike `melee` or `shoot_recoil`, **nothing awaits this clip**, so a
+larger blend has no gameplay consequence whatever.
+
+Costs nothing for any other character: `_maybe_start_fidget` returns immediately
+when the model has no `idle_fidget`, and `_instant` (headless) disables it
+outright. Verified — a 45s watch on a player unit logs `idle` once and nothing
+else.
+
+Deliberately *not* gated on awareness state. A zombie writhing while it chases
+you is arguably odd, but `UnitVisual` is driven by intent and knows nothing about
+`AlertState`, and teaching it would put gameplay logic in the wrong file. If it
+looks wrong on screen, the gate belongs in `EnemyUnit`, not here.
+
+### 10.8 Verifying something that fires on a random timer
+
+Neither existing tool could check this. `--auto` runs headless, and headless sets
+`Unit._instant`, which disables self-driven animation *on purpose* — so the smoke
+test would have reported the unit sitting in one clip forever and looked like a
+bug in the thing being tested. `screenshot.gd` catches one instant, and a fidget
+with a 12–35s gap is not reliably at that instant.
+
+`tools/_debug_anim_watch.gd` boots the real game windowed and logs every
+animation change on one unit for N seconds:
+
+```
+WATCH_GROUP=enemy_units WATCH_NAME=Swarm WATCH_SECONDS=70 \
+  godot --path . --script res://tools/_debug_anim_watch.gd
+```
+
+The run that confirmed this: fidget at 34.21s and 52.50s, each lasting 6.17s to
+the frame and handing back to `idle`, with a 12.1s gap — the bottom of the
+declared range. It reads the AnimationPlayer off `UnitVisual.anim` rather than a
+node path, so it works on any character.
+
+### 10.9 Smaller things
+
+- `scenes/swarm_unit.tscn` assembles the model directly rather than getting a
+  `character_base.tscn` equivalent. That scene exists to carry the soldier's
+  two-bone weapon mount, muzzle, flashlight and beam; a zombie has none of them,
+  and there is one swarm body, so another layer of indirection would buy nothing.
+- `flashlight_path`, `muzzle_path` and `aim_pitch_path` are written out as empty
+  rather than left at their soldier-shaped defaults. They would resolve to null
+  either way; writing them says "this unit has none" rather than "someone forgot".
+- `build_anims.py` now **fails the build** if any clip in a profile's `looping`
+  set was not produced. Looping clips are the stances, `_play` guards every call
+  with `has_animation`, and so a missing stance does not error — the unit just
+  stands in the rig's T-pose forever. Fatal by default, per §2.1's conclusion.
+- `UnitVisual.setup` gained a `has_animation` guard on its one unguarded `play`.
+- `tools/screenshot.gd` takes `SHOT_GROUP` and `SHOT_NAME`, because
+  `enemy_units` holds both alien types and the group alone no longer identifies a
+  character.
+- The collision capsule grew from the placeholder's 1.2m to 1.8m to match the
+  model. Gameplay-neutral: LOS and lighting occlusion both query layer 1 map
+  geometry, and unit bodies are layer 2 with mask 0, so nothing raycasts it.

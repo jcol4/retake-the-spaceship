@@ -11,9 +11,16 @@ the reason: Godot animation track paths are themselves colon-delimited
 ("Skeleton3D:BoneName"), so a colon inside a bone name is asking for trouble.
 Stripping it also gives clean NodePaths for BoneAttachment3D ("RightHand").
 
-Clip names come from CLIP_MAP, which is the single place Mixamo's catalogue
-vocabulary meets the game's clip names in unit_visual.gd. Re-sourcing a clip is a
-one-line change here and nothing downstream notices.
+Clip names come from a Profile's clip_map, which is the single place Mixamo's
+catalogue vocabulary meets the game's clip names in unit_visual.gd. Re-sourcing a
+clip is a one-line change here and nothing downstream notices.
+
+A Profile is one character plus every per-clip correction measured against it.
+There are two: the rifle-carrying soldier and the swarm zombie. They share the
+mixamorig skeleton and nothing else, which is exactly why the corrections are
+scoped rather than global -- a trim window or a yaw applied to the character it
+was not measured on is silently wrong, and silent wrongness is this pipeline's
+recurring failure mode.
 
 Source FBX lives in art_src/, which carries a .gdignore so Godot's resource
 scanner never sees it: the character FBX alone is 142 MB, and letting Godot
@@ -21,9 +28,9 @@ import build inputs it will never load at runtime wastes a lot of disk. Only the
 exported GLB belongs under assets/.
 
 Run headless:
-    blender -b -P tools/build_anims.py -- --inspect
-    blender -b -P tools/build_anims.py -- --character art_src/T-Pose.fbx \
-        --anims art_src/anims --export assets/soldier_mixamo.glb
+    blender -b -P tools/build_anims.py -- --profile soldier --inspect
+    blender -b -P tools/build_anims.py -- --profile soldier
+    blender -b -P tools/build_anims.py -- --profile swarm
 """
 
 import argparse
@@ -44,67 +51,165 @@ from mathutils import Quaternion, Vector
 # and moves nothing.
 MIXAMO_PREFIX = re.compile(r"mixamorig\d*:")
 
-# Mixamo catalogue name (the FBX filename, sans extension) -> game clip name.
-# The game side lives in scripts/unit_visual.gd; keep the right column matching
-# the constants there.
-#
-# Keys are matched loosely -- case, spacing and punctuation are normalised -- so
-# "Rifle Run To Stop.fbx", "rifle_run_to_stop.fbx" and "Rifle Run To Stop (1).fbx"
-# all land on the same entry. Anything unmatched is reported with the exact key
-# to paste in, never silently skipped.
-#
-# Entries below the divider are GUESSES at catalogue names, written ahead of the
-# download so the clips work on arrival. A guess that misses costs one log line.
-# A value may be a single clip name, a tuple of names (one source serving
-# several game clips), or None (present on disk but deliberately unused).
-CLIP_MAP = {
-    # Stances.
-    "Rifle Idle": "idle",
-    "Rifle Run In Place": "run",
-    "Idle Crouching": "crouch_idle",
-    # Mixamo has no overwatch animation, and overwatch IS a held aim, so one
-    # source clip serves both.
-    "Rifle Aiming Idle": ("aim_hold", "overwatch_hold"),
-    # Transitions -- one-shots that bridge one stance into another.
-    "Rifle Run To Stop": "run_stop",
-    "Stand To Crouch": "stand_to_crouch",
-    "Crouch To Standing With Rifle": "crouch_to_stand",
-    # Actions.
-    "Firing Rifle": "shoot_recoil",
-    "Reloading": "reload",
-    "Toss Grenade": "throw_grenade",
-    "Hit Reaction": "hit_react",
-    "Dying": "downed",
-    # Superseded by "Rifle Run In Place". Kept on disk as the reference that
-    # measured the 4.34 m/s stride (see docs/mixamo-pipeline-plan.md 2.1);
-    # mapped to None so it doesn't collide with the in-place version.
-    "Rifle Run": None,
-}
-
-# NOT YET SOURCED -- no Mixamo clip found, so unit_visual.gd falls back to its
-# FALLBACK_TIME timer for these and the unit holds its stance:
-#   interact  -- searching a console/terminal
-#   melee     -- alien-side attack; no alien rig exists yet either
-# Turn clips are also unsourced; see docs/mixamo-pipeline-plan.md 5.3.
-
-# Clips that should loop in Godot. Everything else is a one-shot -- note that
-# run_stop is deliberately absent: it is a settle, and looping it would stutter.
-LOOPING = {"idle", "run", "aim_hold", "crouch_idle", "overwatch_hold"}
-
-
 def normalize(name):
     """Fold a filename to a loose match key: lowercase, alphanumerics only."""
     return " ".join("".join(
         c if c.isalnum() else " " for c in name).lower().split())
 
 
-CLIP_MAP_NORM = {normalize(k): v for k, v in CLIP_MAP.items()}
+class Profile:
+    """One character, plus every per-clip correction measured against it.
 
-# Mixamo FBX is authored in centimetres. Blender's importer usually corrects
-# this, but "usually" is not good enough to build a pipeline on -- --inspect
-# reports the real height so this can be set from measurement, not belief.
-TARGET_HEIGHT_M = 1.8
-HEIGHT_TOLERANCE = 0.5
+    Every field here used to be a module-level table, which was fine while there
+    was one character. With two, a global would silently apply the soldier's
+    31.6-degree aim yaw or its rifle-grip lock to a zombie that holds nothing --
+    and it would export, import and play, moving the wrong things. Scoping the
+    tables makes that class of mistake impossible to express.
+
+    clip_map values may be a single game clip name, a tuple of names (one source
+    serving several clips), or None (the file is on disk but deliberately
+    unused). Keys are matched loosely -- case, spacing and punctuation are
+    normalised -- so "Rifle Run To Stop.fbx", "rifle_run_to_stop.fbx" and
+    "Rifle Run To Stop (1).fbx" all land on the same entry. Anything unmatched is
+    reported with the exact key to paste in, never silently skipped.
+    """
+
+    def __init__(self, character, anims, export, clip_map, looping, trim=None,
+                 strip_mode=None, root_yaw=None, support_locked=()):
+        self.character = character
+        self.anims = anims
+        self.export = export
+        self.clip_map = {normalize(k): v for k, v in clip_map.items()}
+        self.looping = set(looping)
+        self.trim = dict(trim or {})
+        self.strip_mode = dict(strip_mode or {})
+        self.root_yaw = dict(root_yaw or {})
+        self.support_locked = set(support_locked)
+
+
+PROFILES = {}
+
+# --------------------------------------------------------------------------
+# Soldier -- the player squad. Rifle in both hands, so it carries the support
+# lock and the aim-axis yaw; see the blocks further down for what those mean.
+# --------------------------------------------------------------------------
+PROFILES["soldier"] = Profile(
+    character="art_src/T-Pose.fbx",
+    anims="art_src/anims",
+    export="assets/soldier_mixamo.glb",
+    clip_map={
+        # Stances.
+        "Rifle Idle": "idle",
+        "Rifle Run In Place": "run",
+        "Idle Crouching": "crouch_idle",
+        # Mixamo has no overwatch animation, and overwatch IS a held aim, so one
+        # source clip serves both.
+        "Rifle Aiming Idle": ("aim_hold", "overwatch_hold"),
+        # Transitions -- one-shots that bridge one stance into another.
+        "Rifle Run To Stop": "run_stop",
+        "Stand To Crouch": "stand_to_crouch",
+        "Crouch To Standing With Rifle": "crouch_to_stand",
+        # Actions.
+        "Firing Rifle": "shoot_recoil",
+        "Reloading": "reload",
+        "Toss Grenade": "throw_grenade",
+        "Hit Reaction": "hit_react",
+        "Dying": "downed",
+        # Superseded by "Rifle Run In Place". Kept on disk as the reference that
+        # measured the 4.34 m/s stride (see docs/mixamo-pipeline-plan.md 2.1);
+        # mapped to None so it doesn't collide with the in-place version.
+        "Rifle Run": None,
+    },
+    # Clips that should loop in Godot. Everything else is a one-shot -- note that
+    # run_stop is deliberately absent: it is a settle, looping it would stutter.
+    looping={"idle", "run", "aim_hold", "crouch_idle", "overwatch_hold"},
+    trim={"shoot_recoil": (4, 14)},
+    strip_mode={
+        "run_stop": "hold",
+        "downed": "none",  # a body falling forward should travel; 0.34m is in-tile
+    },
+    root_yaw={"aim_hold": -31.6, "overwatch_hold": -31.6},
+    support_locked={
+        "idle", "run", "aim_hold", "overwatch_hold", "crouch_idle",
+        "run_stop", "stand_to_crouch", "crouch_to_stand", "shoot_recoil",
+    },
+)
+
+# NOT YET SOURCED for the soldier -- no Mixamo clip found, so unit_visual.gd
+# falls back to its FALLBACK_TIME timer and the unit holds its stance:
+#   interact  -- searching a console/terminal
+# Turn clips are also unsourced; see docs/mixamo-pipeline-plan.md 5.3.
+
+# --------------------------------------------------------------------------
+# Swarm -- the melee fodder of SwarmUnit. Carries no weapon, so no support lock
+# and no aim yaw; its whole clip set is shamble, bite, scream, flinch, die.
+# --------------------------------------------------------------------------
+PROFILES["swarm"] = Profile(
+    character="art_src/T-Pose-Zombie.fbx",
+    anims="art_src/anims/swarm_anims",
+    export="assets/swarm_mixamo.glb",
+    clip_map={
+        "Zombie Idle": "idle",
+        # Idle variation, played at random intervals by UnitVisual while the IDLE
+        # stance holds. In Place, and it opens on a pose 0.06m from idle's own
+        # first frame, so it blends in without popping. Trimmed -- see below.
+        "Zombie Agonizing": "idle_fidget",
+        # The swarm has one gait, so Mixamo's walk fills the RUN stance -- which
+        # is named for when it plays (moving along a path), not for a speed.
+        "Zombie Walk": "run",
+        "Zombie Neck Bite": "melee",
+        # New clip, no soldier counterpart: played when an alien wakes. See
+        # EnemyUnit._set_state.
+        "Zombie Scream": "alert_scream",
+        "Zombie Reaction Hit": "hit_react",
+        "Zombie Death": "downed",
+        # Unmapped ON PURPOSE, not an oversight. Measured, this clip yaws the
+        # Hips 110 degrees over 3.0 seconds, so it is root ROTATION rather than
+        # the root translation --strip-root handles -- the open problem of
+        # docs/mixamo-pipeline-plan.md 5.3, needing a quaternion-unwinding pass
+        # that does not exist. face_toward also tweens its own 0.18s yaw, so
+        # playing this as-is would leave the unit facing 110 degrees off.
+        "Zombie Turn": None,
+    },
+    looping={"idle", "run"},
+    # The bite is 4.17s of which 1.4s is a stationary plateau and 1.5s is a slow
+    # return to rest, and melee_at AWAITS it before damage lands -- so untrimmed
+    # every claw costs four seconds of turn time. Measured with a per-frame head
+    # displacement dump: 11 dead lead-in frames, the reach opens the arms at f12,
+    # the lunge runs f20-f28 peaking at 2.60 m/s of head speed, contact lands
+    # ~f28, and from f37 the head sits still. f12-f48 keeps reach + lunge + bite
+    # and hands the recovery to unit_visual.gd's 0.15s stance blend.
+    #
+    # Same lesson as shoot_recoil: a clip that opens on dead frames is silently
+    # wrong, because those are the frames a short replay would show.
+    #
+    # idle_fidget is the same story from the other end -- content up front, dead
+    # weight behind. Measured by per-10-frame upper-body speed: the convulsion
+    # runs f1-f171 at 0.2-0.89 m/s and then falls off a cliff to 0.06-0.15 m/s
+    # for the remaining SIX seconds. That tail is a low-amplitude standing sway,
+    # which is indistinguishable from the idle loop it is about to hand back to,
+    # so playing it means six seconds where the zombie is busy doing what it
+    # would be doing anyway. Keeping f1-f185 halves the clip to 6.13s.
+    #
+    # The cost is honest: the full clip's last frame matches its first exactly
+    # (0.000m every bone), and cutting the tail ends it 0.13m from idle's pose
+    # instead of 0.065m. Across STANCE_BLEND that is 0.87 m/s of travel, which is
+    # inside the range the clip itself moves at, so it reads as motion rather
+    # than a snap -- and unlike the trims above, nothing awaits this clip, so a
+    # slightly larger blend has no gameplay consequence at all.
+    trim={"melee": (12, 48), "idle_fidget": (1, 185)},
+    strip_mode={
+        # A zombie falling forward should cover ground. Measured at 1.015m,
+        # inside one 1.5m tile, so it lands where the unit still is.
+        "downed": "none",
+        # The FULL bite returns to where it started, so it has no net travel --
+        # but the trim above ends the clip mid-lunge, which leaves 0.338m of
+        # real forward travel that IS the lunge. Pinned to "none" so a build run
+        # with --strip-root cannot quietly flatten the zombie's own attack into
+        # a step on the spot.
+        "melee": "none",
+    },
+)
 
 
 def log(msg):
@@ -222,7 +327,8 @@ def root_motion(act, fps):
     return dist, speed
 
 
-# How --strip-root removes horizontal travel, per clip.
+# How --strip-root removes horizontal travel. Which mode a clip gets is a
+# Profile's strip_mode; these are what the modes mean.
 #
 #   "linear"  subtract the straight-line trend, keeping intra-cycle sway. Right
 #             for cyclic locomotion, where forward speed is roughly constant so
@@ -233,15 +339,11 @@ def root_motion(act, fps):
 #             early and backward late -- a visible slide in both directions.
 #   "none"    leave the travel alone. Right where the displacement IS the
 #             animation and it stays within a tile.
-STRIP_MODE = {
-    "run_stop": "hold",
-    "downed": "none",  # a body falling forward should travel; 0.34m is in-tile
-}
 DEFAULT_STRIP_MODE = "linear"
 
 
 def strip_root_motion(act, mode):
-    """Remove horizontal Hips travel according to `mode` (see STRIP_MODE)."""
+    """Remove horizontal Hips travel according to `mode` (see above)."""
     if mode == "none":
         return
     for fc in act.fcurves:
@@ -266,19 +368,15 @@ def strip_root_motion(act, mode):
         fc.update()
 
 
-# Source frame ranges to keep, per clip, in Mixamo's own frame numbering.
+# A Profile's trim gives source frame ranges to keep, in Mixamo's own frame
+# numbering. Both entries that exist are there for the same reason, which is
+# worth stating once: Mixamo clips are recorded as complete performances with a
+# wind-up at the front, and the game replays only the front of them. So a clip
+# that opens on dead frames plays as no motion at all -- and errors nowhere.
 #
-# "Firing Rifle" is ONE shot with a long settle, not a burst loop: measured with
-# a per-frame hand-displacement dump, the kick runs f4-f13 (peak f8) and the
-# remaining 23 frames are low-amplitude drift. unit_visual.gd replays this clip
-# from the start once per round on a 0.11s cadence, so it has to BEGIN at the
-# kick -- untrimmed, the three dead lead-in frames are the only part a burst
-# would ever reach, and the weapon would never visibly move.
-TRIM = {
-    "shoot_recoil": (4, 14),
-}
-
-
+# Find the window the same way both were found: dump the driving joint's
+# per-frame displacement (the hand for a recoil, the head for a bite) and read
+# where the motion actually starts and stops.
 def trim_action(act, first, last):
     """Keep only keys in [first, last] and shift the result to start at frame 1."""
     offset = first - 1
@@ -293,26 +391,24 @@ def trim_action(act, first, last):
         fc.update()
 
 
-# Per-clip yaw correction in degrees, applied to the Hips so the whole body
-# turns. Positive is measured empirically, not derived -- verify with
-# tools/_debug_aim.gd after changing.
+# A Profile's root_yaw gives a per-clip yaw correction in degrees, applied to the
+# Hips so the whole body turns. Values are measured empirically, never derived --
+# verify with tools/_debug_aim.gd after changing one.
 #
 # Why this exists: Mixamo's aiming clips do not aim along the character's own
-# forward. Measured in Godot, the grip-to-handguard axis in aim_hold sits 31.6
-# degrees to the character's left. face_toward() turns the unit so its -Z points
-# at the target, so without this every shot would leave the barrel 31.6 degrees
-# off what the unit is looking at -- and the muzzle-mounted flashlight with it.
+# forward. Measured in Godot, the grip-to-handguard axis in the soldier's
+# aim_hold sits 31.6 degrees to the character's left. face_toward() turns the
+# unit so its -Z points at the target, so without this every shot would leave the
+# barrel 31.6 degrees off what the unit is looking at -- and the muzzle-mounted
+# flashlight with it.
 #
 # Yawing the Hips is not a hack around the animation, it IS the animation: a
 # bladed rifle stance genuinely has the body turned relative to the aim line, so
 # rotating the body until the weapon lines up with forward is the anatomically
 # correct reading rather than a fudge.
-ROOT_YAW = {
-    "aim_hold": -31.6,
-    "overwatch_hold": -31.6,
-}
-
-
+#
+# The swarm profile has no entries: nothing about a zombie points anywhere in
+# particular, so there is no axis to correct against.
 def apply_root_yaw(act, degrees):
     """Yaw the entire body by `degrees` via the Hips rotation channels."""
     # The Hips bone points up in its rest pose, so the bone's local Y axis is
@@ -372,22 +468,40 @@ def apply_root_yaw(act, degrees):
 # within 49 mm and 7.6 degrees, sit at ~400 mm (anatomically right for a rifle),
 # and are the median cluster -- so locking here asks the smallest correction of
 # the 466 mm and 317 mm outliers.
-SUPPORT_OFFSET = Vector((-0.097290, 0.368303, 0.120797))
+#
+# Scaled to 95% of the measured 400 mm on 2026-07-28. At the measured length the
+# aim_hold and overwatch_hold targets sat 485 mm from the LEFT SHOULDER against a
+# 477 mm arm -- 8 mm out of reach, so the arm locked out dead straight for all 75
+# frames of both clips. That is invisible while the clip plays alone and violent
+# during a burst: play_burst cross-fades aim_hold against shoot_recoil (which
+# needs only 375 mm) once per round, so the arm snapped between locked-out and
+# relaxed several times a second, and weapon_mount.gd steers the barrel off that
+# hand, so the weapon kicked with it.
+#
+# The trap worth naming: hand SEPARATION was correct at 400 mm in both clips.
+# Reachability is measured from the shoulder, which is a different quantity --
+# the offset is fixed to the RIGHT hand, so right-wrist rotation swings the
+# target on a 400 mm lever and can carry it away from the left shoulder while
+# separation never changes. Validating separation alone cannot catch this.
+SUPPORT_OFFSET = Vector((-0.092426, 0.349888, 0.114757))
 SUPPORT_ROTATION = Quaternion((0.665569, -0.327842, 0.612605, -0.272492))
+
+# Never ask the arm for more than this fraction of its own length. Two reasons:
+# an arm at 100% is one solve away from the degenerate case _solve_elbow already
+# guards, and a locked-out support arm reads as stiff even on the frames where it
+# is not snapping. Backstop rather than the primary fix -- SUPPORT_OFFSET above
+# is sized so the reference clips clear this on their own.
+REACH_LIMIT = 0.95
 
 # Mixamo's left arm chain, post prefix strip.
 ARM_ROOT, ARM_MID, ARM_TIP = "LeftArm", "LeftForeArm", "LeftHand"
 HAND_R_BONE = "RightHand"
 
-# Clips where both hands are on the weapon. Everything else either drops the
-# support hand (reload reaches for a magazine) or lets go entirely (downed,
-# hit_react, throw_grenade), so locking them would fight the animation.
-SUPPORT_LOCKED = {
-    "idle", "run", "aim_hold", "overwatch_hold", "crouch_idle",
-    "run_stop", "stand_to_crouch", "crouch_to_stand", "shoot_recoil",
-}
-
-
+# A Profile's support_locked names the clips where both hands are on the weapon.
+# Everything else either drops the support hand (reload reaches for a magazine)
+# or lets go entirely (downed, hit_react, throw_grenade), so locking them would
+# fight the animation. The swarm's set is empty: it carries nothing, and the
+# constants above are a rifle grip solved on a rifle-carrying skeleton.
 def _bind_action(arm, act):
     """Assign `act` for evaluation, and prove it actually took.
 
@@ -444,6 +558,26 @@ def _solve_elbow(shoulder, elbow, wrist, target):
     return shoulder + axis * a + perp.normalized() * h
 
 
+def _cap_reach(shoulder, elbow, wrist, target):
+    """Pull an out-of-reach target in to REACH_LIMIT of the arm's length.
+
+    Returns (target, overshoot). Capping the TARGET is not the same as clamping
+    inside the IK solve: the solver's clamp leaves the wrist short of a target it
+    still believes in, so the arm goes straight and stays there, and consecutive
+    frames can clamp by different amounts and jitter. Moving the target instead
+    keeps the elbow bent, and because the cap slides the point along the
+    shoulder->target line it stays continuous frame to frame.
+    """
+    l1 = (elbow - shoulder).length
+    l2 = (wrist - elbow).length
+    limit = (l1 + l2) * REACH_LIMIT
+    to_target = target - shoulder
+    d = to_target.length
+    if d <= limit or d < 1e-9:
+        return target, 0.0
+    return shoulder + to_target * (limit / d), d - limit
+
+
 def _point_bone(pb, target):
     """Rotate `pb` about its head so its tail points at `target`."""
     m = pb.matrix
@@ -491,17 +625,27 @@ def lock_support_hand(arm, act):
     start, end = (int(round(x)) for x in act.frame_range)
     solved = []
     moved_mm = []
+    capped_mm = []
     for f in range(start, end + 1):
         scene.frame_set(f)
         bpy.context.view_layer.update()
 
         basis = hand_r.matrix.to_3x3().normalized()
         target = hand_r.matrix.translation + basis @ (SUPPORT_OFFSET / s)
-        moved_mm.append((target - tip.matrix.translation).length * s * 1000.0)
 
-        elbow = _solve_elbow(
-            root.matrix.translation.copy(), mid.matrix.translation.copy(),
-            tip.matrix.translation.copy(), target)
+        sh = root.matrix.translation.copy()
+        el = mid.matrix.translation.copy()
+        wr = tip.matrix.translation.copy()
+        # Capped BEFORE the solve and before _point_bone below, so the elbow
+        # solution and the wrist placement are aimed at the same point. Capping
+        # only inside _solve_elbow would leave the forearm pointing at the
+        # original, unreachable target.
+        target, over = _cap_reach(sh, el, wr, target)
+        if over > 0.0:
+            capped_mm.append(over * s * 1000.0)
+        moved_mm.append((target - wr).length * s * 1000.0)
+
+        elbow = _solve_elbow(sh, el, wr, target)
 
         _point_bone(root, elbow)
         bpy.context.view_layer.update()
@@ -534,7 +678,8 @@ def lock_support_hand(arm, act):
             pb.keyframe_insert("rotation_quaternion", frame=f, group=pb.name)
 
     arm.animation_data.action = None
-    return sum(moved_mm) / len(moved_mm), max(moved_mm)
+    return (sum(moved_mm) / len(moved_mm), max(moved_mm),
+            len(capped_mm), len(moved_mm), max(capped_mm) if capped_mm else 0.0)
 
 
 def clip_files(anim_dir):
@@ -566,7 +711,7 @@ def inspect(character, anim_dir):
     log("=== inspect complete ===")
 
 
-def build(character, anim_dir, out_path, fps, max_texture, strip_root,
+def build(profile, character, anim_dir, out_path, fps, max_texture, strip_root,
           support_lock=True):
     reset_scene()
     bpy.context.scene.render.fps = fps
@@ -586,11 +731,11 @@ def build(character, anim_dir, out_path, fps, max_texture, strip_root,
     for path in clip_files(anim_dir):
         stem = os.path.splitext(os.path.basename(path))[0]
         key = normalize(stem)
-        if key not in CLIP_MAP_NORM:
-            log(f"SKIP {stem!r}: no CLIP_MAP entry "
-                f"-- add {stem!r}: \"<clip name>\" to CLIP_MAP")
+        if key not in profile.clip_map:
+            log(f"SKIP {stem!r}: no clip_map entry "
+                f"-- add {stem!r}: \"<clip name>\" to this profile's clip_map")
             continue
-        targets = CLIP_MAP_NORM[key]
+        targets = profile.clip_map[key]
         if targets is None:
             log(f"  ignoring {stem!r} (mapped to None on purpose)")
             continue
@@ -620,8 +765,8 @@ def build(character, anim_dir, out_path, fps, max_texture, strip_root,
 
         # Trim before measuring: root motion over the kept range is what
         # matters, and the reported length should be the shipped length.
-        if targets[0] in TRIM:
-            first, last = TRIM[targets[0]]
+        if targets[0] in profile.trim:
+            first, last = profile.trim[targets[0]]
             # tuple(), not the raw property: act.frame_range is a live view that
             # would report post-trim values by the time it is logged.
             src = tuple(act.frame_range)
@@ -638,10 +783,12 @@ def build(character, anim_dir, out_path, fps, max_texture, strip_root,
         if dist > ROOT_MOTION_LIMIT_M:
             # Almost always means the Mixamo "In Place" box was left unchecked.
             # Reported rather than silently fixed, because the speed is the
-            # number unit.gd's MOVE_SPEED has to match to avoid foot skate.
-            mode = STRIP_MODE.get(targets[0], DEFAULT_STRIP_MODE)
+            # number unit.gd's move_speed has to match to avoid foot skate.
+            mode = profile.strip_mode.get(targets[0], DEFAULT_STRIP_MODE)
+            verdict = (f" -- stripped ({mode})" if mode != "none"
+                       else " -- KEPT, this clip's travel is deliberate")
             log(f"    ROOT MOTION: travels {dist:.3f}m at {speed:.2f} m/s"
-                f"{f' -- stripped ({mode})' if strip_root else ''}")
+                f"{verdict if strip_root else ''}")
             if strip_root:
                 strip_root_motion(act, mode)
 
@@ -654,7 +801,7 @@ def build(character, anim_dir, out_path, fps, max_texture, strip_root,
         pairs = [(clip, act if i == 0 else act.copy())
                  for i, clip in enumerate(targets)]
         for clip, target_act in pairs:
-            name = f"{clip}-loop" if clip in LOOPING else clip
+            name = f"{clip}-loop" if clip in profile.looping else clip
             if clip in source_of:
                 raise RuntimeError(
                     f"two files both map to clip {clip!r}: "
@@ -662,15 +809,26 @@ def build(character, anim_dir, out_path, fps, max_texture, strip_root,
             source_of[clip] = stem
             target_act.name = name
             target_act.use_fake_user = True
-            if clip in ROOT_YAW:
-                apply_root_yaw(target_act, ROOT_YAW[clip])
-                log(f"    yawed {clip!r} by {ROOT_YAW[clip]:+.1f} deg")
+            if clip in profile.root_yaw:
+                apply_root_yaw(target_act, profile.root_yaw[clip])
+                log(f"    yawed {clip!r} by {profile.root_yaw[clip]:+.1f} deg")
             # After the yaw: the lock solves against evaluated world-space bone
             # positions, so it has to see the pose the clip actually ships with.
-            if support_lock and clip in SUPPORT_LOCKED:
-                mean_mm, max_mm = lock_support_hand(arm, target_act)
+            if support_lock and clip in profile.support_locked:
+                mean_mm, max_mm, n_cap, n_frames, cap_mm = \
+                    lock_support_hand(arm, target_act)
                 log(f"    support-locked {clip!r}: wrist moved "
                     f"{mean_mm:.1f}mm mean, {max_mm:.1f}mm max")
+                # Reported, never silent: capping on a few frames is the backstop
+                # doing its job, but capping on ALL of them means SUPPORT_OFFSET
+                # is simply too far for this character's arm in that pose, and
+                # the clip needs a shorter offset rather than a clamp.
+                if n_cap:
+                    where = "EVERY frame" if n_cap == n_frames else \
+                        f"{n_cap}/{n_frames} frames"
+                    log(f"      reach-capped on {where}, up to {cap_mm:.1f}mm"
+                        + ("  <-- offset too long for this pose"
+                           if n_cap == n_frames else ""))
             built.append((name, fr[1] - fr[0], len(target_act.fcurves)))
 
         # The clip's own skeleton and any stray objects go; only its action stays.
@@ -678,7 +836,22 @@ def build(character, anim_dir, out_path, fps, max_texture, strip_root,
             bpy.data.objects.remove(o, do_unlink=True)
 
     if not built:
-        raise RuntimeError("no clips built -- check CLIP_MAP against the filenames")
+        raise RuntimeError(
+            "no clips built -- check this profile's clip_map against the filenames")
+
+    # Fatal, like the unknown-bone check above. Every looping clip is a STANCE --
+    # a pose the unit holds indefinitely between actions -- and unit_visual.gd
+    # guards each play() with has_animation, so a missing stance does not error:
+    # the unit simply stands in the rig's T-pose forever. Actions are different
+    # and genuinely optional (play_action falls back to a timer), which is why
+    # only the loops are required here.
+    missing = sorted(profile.looping - set(source_of))
+    if missing:
+        raise RuntimeError(
+            f"stance clip(s) {missing} were not built -- every looping clip is a "
+            f"stance the unit holds, and a missing one leaves it in the rest "
+            f"pose with nothing logged. Check the clip_map keys against the "
+            f"filenames in {anim_dir}")
 
     # Each action gets its own NLA track, and the export runs in NLA_TRACKS mode
     # rather than ACTIONS mode.
@@ -713,9 +886,14 @@ def build(character, anim_dir, out_path, fps, max_texture, strip_root,
 def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     p = argparse.ArgumentParser()
-    p.add_argument("--character", default="art_src/T-Pose.fbx")
-    p.add_argument("--anims", default="art_src/anims")
-    p.add_argument("--export", default="assets/soldier_mixamo.glb")
+    p.add_argument("--profile", default="soldier", choices=sorted(PROFILES),
+                   help="which character to build; selects the clip map and "
+                        "every per-clip correction measured against it")
+    # These override the profile's own paths, for one-off experiments. Left
+    # unset, the profile decides -- so the checked-in command is just --profile.
+    p.add_argument("--character")
+    p.add_argument("--anims")
+    p.add_argument("--export")
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--max-texture", type=int, default=1024,
                    help="downscale embedded textures to this many pixels on the "
@@ -732,10 +910,16 @@ def main():
                    help="report format facts and exit without exporting")
     args = p.parse_args(argv)
 
+    profile = PROFILES[args.profile]
+    character = args.character or profile.character
+    anims = args.anims or profile.anims
+    export = args.export or profile.export
+    log(f"profile {args.profile!r}: {character} + {anims} -> {export}")
+
     if args.inspect:
-        inspect(args.character, args.anims)
+        inspect(character, anims)
     else:
-        build(args.character, args.anims, args.export, args.fps, args.max_texture,
+        build(profile, character, anims, export, args.fps, args.max_texture,
               args.strip_root, support_lock=not args.no_support_lock)
 
 

@@ -17,11 +17,21 @@ func _initialize() -> void:
 
 
 func _closeup() -> void:
-	## Drops a camera next to the first player unit — the tactical camera is far
-	## too high to judge a 1.8 m model's rig.
-	var units := root.get_tree().get_nodes_in_group("player_units")
+	## Drops a camera next to the first unit of SHOT_GROUP — the tactical camera
+	## is far too high to judge a 1.8 m model's rig. SHOT_GROUP is any of the
+	## groups units register in ("player_units", "enemy_units"), so an alien rig
+	## can be eyeballed the same way the soldier's is; the weapon diagnostics
+	## below simply report NOT FOUND on a character that carries nothing.
+	var group := OS.get_environment("SHOT_GROUP") if OS.has_environment("SHOT_GROUP") \
+		else "player_units"
+	var units := root.get_tree().get_nodes_in_group(group)
+	# "enemy_units" holds both the ranged alien and the swarm, so the group alone
+	# does not identify a character. SHOT_NAME narrows by node-name substring.
+	if OS.has_environment("SHOT_NAME"):
+		var want := OS.get_environment("SHOT_NAME")
+		units = units.filter(func(n: Node) -> bool: return want in String(n.name))
 	if units.is_empty():
-		print("[screenshot] no player units found")
+		print("[screenshot] no units in group '", group, "'")
 		return
 	var unit: Node3D = units[0]
 	var focus := unit.global_position + Vector3(0.0, 0.95, 0.0)
@@ -46,21 +56,49 @@ func _closeup() -> void:
 	light.look_at(focus)
 	light.light_energy = 0.55
 	print("[screenshot] closeup on ", unit.name, " at ", unit.global_position)
-	# Objective check on the weapon mount, which is hard to judge from pixels.
-	# MUZZLE is (0, 0.455, 0.014) in Blender rifle space; Blender (x,y,z) maps to
-	# Godot (x, z, -y), hence (0, 0.014, -0.455) here.
+	# The HUD sits over the unit in a closeup — including the loadout dialog,
+	# which covers exactly the part of the body the weapon is held against.
+	# Every CanvasLayer, not HUD by name: the loadout menu is built in code by
+	# main.gd rather than living in main.tscn, and it covers exactly the chest
+	# height where a carried weapon sits. Also typed as CanvasLayer and not
+	# CanvasItem -- CanvasLayer descends from Node, so casting to CanvasItem
+	# yields null and silently leaves the overlay up.
+	var hidden := 0
+	for node in root.find_children("*", "CanvasLayer", true, false):
+		(node as CanvasLayer).visible = false
+		hidden += 1
+	print("[screenshot] hid ", hidden, " CanvasLayer(s)")
 	var vis: Node = unit.get_node_or_null("Visual")
 	var ap: AnimationPlayer = vis.get("anim") if vis else null
 	print("[screenshot] visual=", vis, " anim=", ap)
 	if ap:
 		print("[screenshot] playing=", ap.is_playing(), " current='", ap.current_animation,
 			"' root=", ap.root_node, " has_idle=", ap.has_animation("idle"))
+		# SHOT_CLIP pins a specific pose. The game boots into idle, which carries
+		# the weapon slanted across the body — the one pose where a rifle is both
+		# foreshortened and half behind the torso, so it is the worst frame to
+		# judge a weapon model on. SHOT_CLIP=aim_hold shows its full length.
+		if OS.has_environment("SHOT_CLIP"):
+			var clip := OS.get_environment("SHOT_CLIP")
+			if ap.has_animation(clip):
+				ap.play(clip)
+				ap.advance(float(OS.get_environment("SHOT_CLIP_AT")) \
+					if OS.has_environment("SHOT_CLIP_AT") else 0.0)
+				ap.pause()
+				print("[screenshot] pinned clip '", clip, "' at ", ap.current_animation_position)
+			else:
+				print("[screenshot] no such clip '", clip, "' in ", ap.get_animation_list())
 	var mount := unit.get_node_or_null("Visual/soldier/Rig/Skeleton3D/RifleMount")
 	if mount == null:
 		print("[screenshot] RifleMount NOT FOUND")
 		return
 	var rifle: Node3D = mount.get_node_or_null("rifle")
-	var muzzle: Vector3 = rifle.to_global(Vector3(0.0, 0.014, -0.455))
+	# Read the Muzzle node the GLB ships rather than a copy of its coordinates:
+	# this was a hardcoded (0, 0.014, -0.455) that went stale the moment the
+	# barrel got longer, and then quietly reported the wrong tip forever after.
+	var muzzle_node := rifle.get_node_or_null("Muzzle") as Node3D
+	var muzzle: Vector3 = muzzle_node.global_position if muzzle_node \
+		else rifle.global_position
 	var barrel := -rifle.global_transform.basis.z.normalized()
 	print("[screenshot] mount(local to unit)=", unit.to_local(mount.global_position))
 	print("[screenshot] muzzle(local to unit)=", unit.to_local(muzzle))

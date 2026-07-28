@@ -6,6 +6,7 @@
 [ext_resource type="Script" path="res://scripts/flashlight_beam.gd" id="4_beam"]
 [ext_resource type="Script" path="res://scripts/weapon_mount.gd" id="5_mount"]
 [ext_resource type="Script" path="res://scripts/aimed_light.gd" id="6_light"]
+[ext_resource type="Script" path="res://scripts/aim_pitch.gd" id="7_aimpitch"]
 
 [node name="Visual" type="Node3D"]
 script = ExtResource("1_visual")
@@ -37,7 +38,20 @@ transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 0)
 ;
 ; The mount writes its own global_transform, so the 0.01 scale on the Rig node
 ; no longer has to be compensated here; the rifle below is plain identity.
-[node name="RifleMount" type="Node3D" parent="soldier/Rig/Skeleton3D" index="1"]
+; MUST stay ABOVE RifleMount in this file. Both nodes hang off the same
+; skeleton_updated signal, Godot fires it in tree order, and this one pitches the
+; Spine2 bone that moves BOTH hands. Ordered the other way, RifleMount would read
+; the hand positions a frame before the pitch was applied to them and the barrel
+; would lag the body by one frame on every vertical aim.
+;
+; All exports left at their defaults: pitch_axis and max_pitch_deg are meant to be
+; tuned in the editor against aim_hold, and the tuned values from the first pass
+; were lost when this scene was rewritten during a --import (the node had to be
+; reconstructed from the script's own documentation).
+[node name="AimPitch" type="Node3D" parent="soldier/Rig/Skeleton3D" index="1"]
+script = ExtResource("7_aimpitch")
+
+[node name="RifleMount" type="Node3D" parent="soldier/Rig/Skeleton3D" index="2"]
 script = ExtResource("5_mount")
 
 ; Identity: the mount above already puts -Z down the barrel with the sights up,

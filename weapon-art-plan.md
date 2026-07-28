@@ -195,8 +195,38 @@ Two ways to absorb it, and this is a real design choice rather than an arithmeti
   the AR becomes ~925 mm, which is a battle rifle, and the whole roster's length separation
   (Section 6.5) re-scales with it.
 
-Unresolved; see [Section 10](#10-decisions-and-open-questions). Nothing else in the plan depends on
-it, so the palette, silhouette and primitive work are all unaffected.
+**Resolved 2026-07-28 — see 4.3.** The second option won, and it was settled by measurement rather
+than by picking.
+
+### 4.3 Settled by the RifleLow import *(2026-07-28)*
+
+`art_src/RIfleLow.fbx` — an AR-pattern carbine with a full-length handguard — was brought in as the
+Assault Rifle via `tools/import_rifle.py`. Scaling it so trigger-to-muzzle matches the blockout's
+tuned `0.62 m` gives **s = 0.615**, and its own features then land on the blockout's independently
+derived numbers:
+
+| feature | RifleLow @ 0.615 | `gen_rifle.py` blockout |
+| --- | --- | --- |
+| pistol grip | −0.085 … −0.014 | −0.072 … −0.008 |
+| magazine | +0.073 … +0.172 | +0.036 … +0.082 |
+| stock butt | −0.285 | −0.255 |
+
+Two separately derived figures agreeing is why the scale is trustworthy; a bounding box alone would
+have said nothing.
+
+What this settles:
+
+- **Overall length is 905 mm**, against the 925 mm that "grow forward" predicted above. The estimate
+  was right to within 20 mm, so the roster's length separation (Section 6.5) re-scales off 905 mm
+  rather than 780 mm.
+- **`SUPPORT` at 400 mm lands mid-handguard**, 220 mm short of the muzzle — comfortably inside the
+  furniture at both ends. The 110 mm minimum handguard rule from 4.1 is met with room to spare.
+- The handguard no longer has to *absorb variance*. `gen_rifle.py` sized its 0.18–0.54 m handguard to
+  contain a hand gap that swung 0.320–0.468 m; `tools/build_anims.py` now pins that gap at ~400 mm,
+  so the only surviving requirement is that 400 mm be *on* the handguard.
+
+Sections 5 and 6 still need their coordinate tables rewritten against 905 mm, but the design question
+is closed: **conventional layouts, grown forward.**
 
 ---
 
@@ -538,12 +568,20 @@ until zoom is settled.
   because the stock Mixamo clips disagreed by 322 mm on where the support hand goes — see
   [Section 4.1](#41-measured-2026-07-27--and-it-needed-a-pipeline-fix-first). Opt out with
   `--no-support-lock`, which restores the un-buildable original drift.
+- **The Assault Rifle is an imported model, not a generated one.** *(2026-07-28)* `art_src/RIfleLow.fbx`
+  via `tools/import_rifle.py`, at 905 mm. This closes the Section 4.2 layout question with measured
+  geometry — see [Section 4.3](#43-settled-by-the-riflelow-import-2026-07-28). The procedural route
+  in Section 7 still stands for the remaining four; whether they are authored or sourced is now an
+  open choice rather than an assumption.
 
 ### Open
 
-- **How to absorb the 145 mm `SUPPORT` shift** — move the grip back, or grow every weapon forward?
-  See [Section 4.2](#42-consequence-sections-5-and-6-need-a-layout-revision). This blocks the
-  Section 5 and 6 layout tables, and nothing else.
+- **Is the weapon palette too dark to read against the suit?** `import_rifle.py` reuses the
+  blockout's `Metal` (0.115) and `Polymer` (0.080) deliberately, so the model swap changed one
+  variable and not two. But those are near-black against a `suit` of 0.075, which is precisely what
+  [Section 3](#3-palette--the-references-dark-colourway-is-wrong-for-us) argues against. In the
+  aim pose the rifle reads as a silhouette against the lit background and essentially vanishes
+  against the body. One-line fix in `import_rifle.py` when the call is made.
 - **Does the LMG keep an optic?** §6.2 recommends dropping or shrinking it, against the reference,
   because a tall riser optic is the Battle Rifle's primary identifier and BR vs. LMG is already the
   weakest-separated pair in the roster (§6.5). Decide when both models exist side by side — this is

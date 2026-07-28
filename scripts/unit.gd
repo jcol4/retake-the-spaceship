@@ -8,7 +8,6 @@ signal downed(unit: Unit)
 signal moved(unit: Unit)
 
 const MAX_AP := 2
-const MOVE_SPEED := 4.5  # metres/second while walking a path
 const TURN_TIME := 0.09  # seconds to swing toward the next tile
 
 # Rounds per burst. One trigger pull is still one Combat.resolve_shot — one hit
@@ -23,6 +22,15 @@ const BURST_STRAY_MAX := 2
 
 @export var stats: UnitStats
 @export var is_player_controlled: bool = false
+## Metres per second while walking a path. Cosmetic ONLY — the tile budget and
+## the AP economy know nothing about it, so no value here can affect balance.
+##
+## Not a free choice: stride is fixed by whichever clip the unit's RUN stance
+## plays, so this is derived from the clip rather than picked (Sec 6.4 of
+## docs/mixamo-pipeline-plan.md). 4.5 is the soldier's, within 4% of its Mixamo
+## run's authored 4.34 m/s. Types whose clip disagrees override this in their
+## scene and take up the slack with UnitVisual.run_speed_scale.
+@export var move_speed: float = 4.5
 
 @onready var visual: UnitVisual = $Visual
 
@@ -160,7 +168,7 @@ func _step_to(step: Vector3i) -> void:
 		return
 	var tween := create_tween()
 	tween.set_parallel(true)
-	tween.tween_property(self, "global_position", target, dist / MOVE_SPEED)
+	tween.tween_property(self, "global_position", target, dist / move_speed)
 	var yaw := _yaw_toward(target)
 	if not is_nan(yaw):
 		tween.tween_property(self, "rotation:y", yaw, TURN_TIME)
@@ -310,6 +318,9 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	# direction the last move left — and face_toward also swings the flashlight,
 	# which changes what is lit before the shot resolves.
 	await face_toward(target.global_position)
+	# face_toward only yaws the body — this tilts it so the barrel also points
+	# up/down at a target on a different floor or in a different stance.
+	visual.set_aim_pitch(target.global_position)
 	ammo -= 1
 	var result := Combat.resolve_shot(self, target, action, body_part)
 	is_busy = true
@@ -321,6 +332,7 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	await visual.play_burst(rounds)  # emits `muzzle` once per round
 	_pending_shot = null
 	_pending_target = null
+	visual.clear_aim_pitch()
 	if result.hit:
 		target.take_damage(result.damage)
 		if action == Combat.ShotAction.AIMED_SHOT and not target.is_downed:
