@@ -22,7 +22,7 @@ extends SceneTree
 ## Optional: SHEET_COLS (default 3), SHEET_SIDE=1 for the off-shoulder camera,
 ## SHEET_SCALE (default 0.42 of viewport per panel).
 
-const CLIPS := ["idle", "run", "aim_hold", "crouch_idle", "run_stop",
+const CLIPS := ["idle", "run", "walk", "aim_hold", "crouch_idle", "run_stop",
 	"stand_to_crouch", "crouch_to_stand", "shoot_recoil", "overwatch_hold"]
 
 # Metres above/below the shooter's own chest, at 3 m range. Spans the realistic

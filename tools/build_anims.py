@@ -101,6 +101,12 @@ PROFILES["soldier"] = Profile(
         # Stances.
         "Rifle Idle": "idle",
         "Rifle Run In Place": "run",
+        # Short moves walk instead of running -- a hop of a tile or two has no
+        # room to spend the run's deceleration in (see UnitVisual.RUN_STOP_CURVE),
+        # and a sprint that stops after one stride reads as a twitch. Travels
+        # 1.398 m over its 42 frames, so 1.02 m/s authored; that is what
+        # UnitVisual.WALK_SPEED moves the unit at.
+        "Walking": "walk",
         "Idle Crouching": "crouch_idle",
         # Mixamo has no overwatch animation, and overwatch IS a held aim, so one
         # source clip serves both.
@@ -122,7 +128,7 @@ PROFILES["soldier"] = Profile(
     },
     # Clips that should loop in Godot. Everything else is a one-shot -- note that
     # run_stop is deliberately absent: it is a settle, looping it would stutter.
-    looping={"idle", "run", "aim_hold", "crouch_idle", "overwatch_hold"},
+    looping={"idle", "run", "walk", "aim_hold", "crouch_idle", "overwatch_hold"},
     trim={"shoot_recoil": (4, 14)},
     strip_mode={
         "run_stop": "hold",
@@ -130,7 +136,7 @@ PROFILES["soldier"] = Profile(
     },
     root_yaw={"aim_hold": -31.6, "overwatch_hold": -31.6},
     support_locked={
-        "idle", "run", "aim_hold", "overwatch_hold", "crouch_idle",
+        "idle", "run", "walk", "aim_hold", "overwatch_hold", "crouch_idle",
         "run_stop", "stand_to_crouch", "crouch_to_stand", "shoot_recoil",
     },
 )

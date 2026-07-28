@@ -303,6 +303,7 @@ search hints, not verified catalogue entries** — confirm while browsing.
 |---|---|---|
 | `idle` | "rifle idle" | Loop. |
 | `run` | "rifle run" | Loop, In Place. Stride must be measured — see §6.4. |
+| `walk` | "walking" | Loop. The gait for moves too short to run — see §5.1. |
 | `run_stop` | "rifle run to stop" | One-shot settle on arrival, NOT a loop. **In Place is mandatory here, not optional** — see below. |
 | `crouch_idle` | "crouch idle" / "crouching" | Rifle-holding variant may not exist; may need an upper-body blend. |
 | `overwatch_hold` | "rifle aiming idle" | Loop. |
@@ -324,6 +325,7 @@ this is the summary.
 |---|---|---|---|
 | `idle` | Rifle Idle | 10.67s | loop |
 | `run` | Rifle Run **In Place** | 0.70s | loop, no root motion |
+| `walk` | Walking | 1.40s | loop; travelled 1.398m at 1.02 m/s, stripped `linear` |
 | `crouch_idle` | Idle Crouching | 2.13s | loop |
 | `aim_hold` + `overwatch_hold` | Rifle Aiming Idle | 3.13s | loop; one source, two clips |
 | `run_stop` | Rifle Run To Stop | 1.50s | travelled 2.82m, stripped `hold` |
@@ -386,6 +388,28 @@ If Mixamo does not offer In Place for the stop clip, the alternative is to play
 it during the final tile step and let its own root motion carry that last
 metre — real work, and a different shape of change from everything else here.
 Check the checkbox exists before assuming this clip is cheap.
+
+**Resolved 2026-07-28, and not by either of those two options.** The clip is
+stripped `hold`, so it plays in place — but "in place" only moved the problem:
+played on arrival it walked the feet through 2.83 m of strides against ground
+that was not moving. What it needed was to start 2.83 m EARLY.
+
+So the travel was kept as data instead of as animation. `UnitVisual.RUN_STOP_CURVE`
+is the clip's cumulative travel sampled every 2 of its 45 source frames, and
+`Unit.move_along` splits the last leg of the path off at exactly that distance
+and drives the unit's position from the curve, so the ground moves under the
+feet at the pace the feet were authored at. Two consequences worth knowing:
+
+- **The shape of the curve is the point.** It is not a deceleration for most of
+  its length — the first 60% of the clip is a near-constant 3.16 m/s run
+  covering 88% of the distance. No standard easing spends its distance that way,
+  and a wrong distribution is exactly the skate this removes.
+- **A move shorter than 2.83 m cannot pay for it**, and shortening a stop is not
+  possible — the strides are the clip's own length. Those moves take the `walk`
+  clip end to end instead, at its authored 1.02 m/s, and play no stop at all.
+
+Re-measure with `tools/_debug_move.gd`, which traces per-frame speed and the
+clip playing at each point, after touching either clip.
 
 ### 5.3 Turn clips — wanted, but NOT the same shape of job
 

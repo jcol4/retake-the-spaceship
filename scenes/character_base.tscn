@@ -46,7 +46,15 @@ transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 0)
 ; all: aim_pitch.gd holds _has_target = false until something calls aim_at() at
 ; runtime, so scrubbing the AnimationPlayer shows a node doing nothing.
 ;
-; pitch_axis and max_pitch_deg are still at defaults (Vector3.RIGHT, 35 deg).
+; pitch_flip, pitch_axis and max_pitch_deg now drive only the LEGACY bone-aiming
+; path. aim_bore defaults to true, which aims the barrel rather than the spine
+; bone and corrects yaw as well as pitch, so none of those three are read. They
+; are left set so flipping aim_bore off restores the previous behaviour intact.
+;
+; mount_path is likewise left at its default "../RifleMount", which resolves
+; because both nodes are siblings under Skeleton3D -- worth noting only because
+; it means this fix needed no edit to the node list, and this scene has twice
+; been gutted by editor rewrites.
 [node name="AimPitch" type="Node3D" parent="soldier/Rig/Skeleton3D" index="1"]
 script = ExtResource("7_aimpitch")
 pitch_flip = true

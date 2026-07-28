@@ -132,9 +132,42 @@ func move_along(path: Array[Vector3i]) -> void:
 		return
 	GridManager.set_occupant(grid_pos, null)
 	is_busy = true
-	visual.set_stance(UnitVisual.RUN)
-	for step in path:
-		await _step_to(step)
+	# The deceleration clip strides out ground of its own, so it has to START
+	# that far from the destination rather than play on arrival — otherwise the
+	# feet walk out two paces the unit never covers. Zero when the character has
+	# no such clip, which collapses everything below back to a plain run.
+	var stop_span := visual.run_stop_travel()
+	var stop_rate := visual.run_stop_rate(move_speed)
+	var left := _distance_left(path)
+	var total := left[0] + global_position.distance_to(GridManager.grid_to_world(path[0]))
+	# A move with less ground than the deceleration needs cannot pay for it, and
+	# there is no honest way to shorten a stop: the clip's strides are its own
+	# length. Such a move walks instead — nothing to shed speed from, so nothing
+	# to stop out of — which is also what a soldier crossing one tile would do.
+	var walking := total < stop_span and visual.has_walk()
+	var speed := UnitVisual.WALK_SPEED if walking else move_speed
+	if walking:
+		stop_span = 0.0  # keeps the deceleration out of every branch below
+	visual.set_stance(UnitVisual.WALK if walking else UnitVisual.RUN)
+	var stopping := false
+	for i in path.size():
+		var step := path[i]
+		var target := GridManager.grid_to_world(step)
+		var leg := global_position.distance_to(target)
+		# Whatever of this tile lies further out than the stop is still a run.
+		# Usually that is all of it or none of it; the split matters on the one
+		# tile the handover falls inside, which is rarely a tile boundary.
+		var run_span := clampf(leg + left[i] - stop_span, 0.0, leg)
+		if run_span > 0.001:
+			await _step_to(global_position.move_toward(target, run_span), speed)
+		if run_span < leg - 0.001:
+			# Metres of the clip's travel already behind us where this leg opens:
+			# zero on any path long enough to fit the whole deceleration, positive
+			# on a short hop, which skips into the clip rather than crawling it.
+			var covered := stop_span - left[i] - (leg - run_span)
+			if not stopping:
+				stopping = visual.begin_run_stop(covered, stop_rate)
+			await _decelerate_to(target, covered, stop_span - left[i], stop_rate)
 		grid_pos = step
 		if is_downed:
 			break
@@ -148,31 +181,99 @@ func move_along(path: Array[Vector3i]) -> void:
 	is_busy = false
 	if is_downed:
 		return  # the collapse is already playing — don't stand it back up
-	# Grid state is settled BEFORE the deceleration plays: the unit owns its
-	# destination tile from the moment it arrives, so the settle is purely
-	# cosmetic and nothing downstream waits on it to know where the unit is.
+	# Grid state is settled BEFORE the settle plays out: the unit owns its
+	# destination tile from the moment it arrives, and what is left of the clip is
+	# purely cosmetic — nothing downstream waits on it to know where the unit is.
 	GridManager.set_occupant(grid_pos, self)
 	global_position = GridManager.grid_to_world(grid_pos)
-	await visual.play_stance_exit(UnitVisual.RUN_STOP, UnitVisual.IDLE)
+	if stopping:
+		await visual.finish_run_stop()
+	elif walking:
+		# A walk is already at rest by the time it ends — there is nothing to
+		# decelerate out of, so it settles straight into idle.
+		visual.set_stance(UnitVisual.IDLE)
+	else:
+		# No deceleration clip on this character: the old path, where the
+		# transition either plays in place or degrades to a hard cut.
+		await visual.play_stance_exit(UnitVisual.RUN_STOP, UnitVisual.IDLE)
 	moved.emit(self)
 
 
-func _step_to(step: Vector3i) -> void:
-	var target := GridManager.grid_to_world(step)
-	var delta := target - global_position
-	var dist := delta.length()
+## Metres of path still to cover once each step is reached, so move_along can
+## ask "is the stop's worth of ground left?" before committing to a tile.
+func _distance_left(path: Array[Vector3i]) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	out.resize(path.size())
+	var acc := 0.0
+	for i in range(path.size() - 1, -1, -1):
+		out[i] = acc
+		if i > 0:
+			acc += GridManager.grid_to_world(path[i - 1]).distance_to(
+				GridManager.grid_to_world(path[i]))
+	return out
+
+
+func _step_to(target: Vector3, speed: float) -> void:
+	var dist := global_position.distance_to(target)
 	if dist < 0.001:
 		return
 	if _instant:
 		global_position = target
 		return
+	var seconds := dist / speed
 	var tween := create_tween()
 	tween.set_parallel(true)
-	tween.tween_property(self, "global_position", target, dist / move_speed)
-	var yaw := _yaw_toward(target)
-	if not is_nan(yaw):
-		tween.tween_property(self, "rotation:y", yaw, TURN_TIME)
+	tween.tween_property(self, "global_position", target, seconds)
+	_tween_yaw(tween, target, seconds)
 	await tween.finished
+
+
+## Covers the last stretch to `target` on the deceleration clip's own travel
+## curve — `from` and `to` are how far into that travel this leg starts and ends.
+## Position is driven from the clip rather than at a speed of its own, which is
+## the whole point: the feet are planting at the clip's pace, so the ground has
+## to move underneath them at exactly that pace or they skate.
+##
+## One known gap: an overwatch shot between two of these legs pauses the unit
+## while the clip keeps playing, so the rest of the stop runs out of sync. It
+## costs one leg of slide — the same artefact this replaced, at a fraction of the
+## length, and only on an interrupted move.
+func _decelerate_to(target: Vector3, from: float, to: float, rate: float) -> void:
+	var span := to - from
+	var seconds := (visual.run_stop_time_at(to) - visual.run_stop_time_at(from)) / rate
+	if _instant or span < 0.001 or seconds < 0.001:
+		global_position = target
+		return
+	var origin := global_position
+	var tween := create_tween()
+	tween.set_parallel(true)
+	tween.tween_method(_slide.bind(origin, target, from, span),
+		visual.run_stop_time_at(from), visual.run_stop_time_at(to), seconds)
+	_tween_yaw(tween, target, seconds)
+	await tween.finished
+	# The curve's last samples are flat to the millimetre, so the tween can land
+	# a hair short of the tile. Snapped rather than trusted.
+	global_position = target
+
+
+func _slide(clip_time: float, origin: Vector3, target: Vector3,
+		from: float, span: float) -> void:
+	var covered := visual.run_stop_travel_at(clip_time) - from
+	global_position = origin.lerp(target, clampf(covered / span, 0.0, 1.0))
+
+
+## Adds the turn toward `target` to a parallel movement tween, `seconds` long.
+##
+## Both guards are about that parallel: `finished` waits for the LONGEST branch,
+## so a fixed 0.09s turn holds up any leg shorter than that — and the run now
+## ends on a leg deliberately cut short, the sliver between the last tile
+## boundary and where the deceleration takes over. Measured at 50 ms of the unit
+## standing still mid-sprint before the guards went in.
+func _tween_yaw(tween: Tween, target: Vector3, seconds: float) -> void:
+	var yaw := _yaw_toward(target)
+	if is_nan(yaw) or absf(yaw - rotation.y) < 0.001:
+		return  # already facing it: every leg of a straight path
+	tween.tween_property(self, "rotation:y", yaw, minf(TURN_TIME, seconds))
 
 
 func _yaw_toward(world_pos: Vector3) -> float:

@@ -40,6 +40,9 @@ const FIDGET_GAP_MAX := 35.0
 # hand back to the current stance when they finish.
 const IDLE := &"idle"
 const RUN := &"run"
+## Short moves walk. See WALK_SPEED and Unit.move_along for when, and why it is
+## not simply the run played slower.
+const WALK := &"walk"
 const CROUCH := &"crouch_idle"
 const OVERWATCH := &"overwatch_hold"
 
@@ -102,6 +105,45 @@ const DEFAULT_FALLBACK_TIME := 0.4
 const RAISE_TIME := 0.18
 const BURST_CADENCE := 0.11
 const SETTLE_TIME := 0.20
+
+# The ground RUN_STOP covers, and how it spends it. The clip is exported with its
+# root motion held (build_anims.py strip_mode "hold"), so the hips do not travel
+# and the STRIDES have to be paid for by moving the unit — which is what
+# Unit.move_along uses this table for. Playing the clip on arrival instead leaves
+# the feet walking out two more paces against ground that is not moving.
+#
+# Measured off the source, art_src/anims/Rifle Run To Stop.fbx: cumulative
+# horizontal Hips travel in metres, sampled every 2 of its 45 frames, so entry
+# i sits at i/(size-1) of the clip. Note the shape — it is NOT a smooth
+# deceleration. The first 60% of the clip is a near-constant 3.16 m/s run
+# covering 88% of the distance; everything after is the plant and the settle.
+# That is why this is a table and not an ease-out curve: no standard easing
+# spends its distance that way, and a wrong distribution IS foot skate.
+const RUN_STOP_CURVE := [
+	0.000, 0.211, 0.421, 0.610, 0.790, 0.987, 1.221, 1.455,
+	1.654, 1.814, 1.969, 2.121, 2.270, 2.418, 2.530, 2.606,
+	2.674, 2.736, 2.784, 2.814, 2.825, 2.826, 2.826,
+]
+
+## Playback rate for RUN_STOP, as a multiple of the clip's authored speed.
+##
+## The clip enters at 3.16 m/s (its first 2 frames of travel) while the soldier
+## runs at move_speed 4.5, so played as authored the unit would drop 30% of its
+## speed in one frame at the handoff — a visible lurch, at the exact moment the
+## eye is tracking the unit. Scaling by the ratio makes the entry continuous, and
+## it is not a fudge: a runner going 43% faster over the same 2.83 m genuinely
+## has to decelerate 43% harder. Time-scaling cannot introduce skate, because the
+## unit's position is driven from this same clip.
+##
+## Set to 1.0 to get the authored pacing back at the cost of that lurch.
+const RUN_STOP_ENTRY_SPEED := 3.16
+
+## Metres per second for the WALK stance, replacing Unit.move_speed on the moves
+## that take it. Measured the same way as everything else here: Walking.fbx
+## travels 1.398 m over its 42 frames, so 1.02 m/s. Played at its authored rate
+## and moved at its authored speed, which is why it needs no correction of any
+## kind — unlike RUN, whose clip and move_speed were chosen independently.
+const WALK_SPEED := 1.02
 
 # Stand-in barrel height for units with no rigged rifle, so their shots still
 # leave something shoulder-height rather than the floor.
@@ -238,6 +280,96 @@ func play_stance_exit(action: StringName, next: StringName) -> void:
 	# on screen. play_action's tail then blends into whatever _stance has become.
 	_stance = next
 	await play_action(action)
+
+
+## Whether this character can walk a short move rather than run it. False for
+## anything with no walk clip (the swarm, the capsule alien), which keeps those
+## units on the single gait they have.
+func has_walk() -> bool:
+	return not _instant and anim != null and anim.has_animation(WALK)
+
+
+## Metres of ground the deceleration needs, so a mover knows how far from its
+## destination to hand over. Zero when this character has no RUN_STOP clip (and
+## on the headless path), which is what keeps every caller free of the question:
+## a zero-length stop is simply never entered, and the move ends as it used to.
+func run_stop_travel() -> float:
+	if _instant or anim == null or not anim.has_animation(RUN_STOP):
+		return 0.0
+	var last: float = RUN_STOP_CURVE[RUN_STOP_CURVE.size() - 1]
+	return last
+
+
+## Playback rate that makes the clip enter at `speed`. See RUN_STOP_ENTRY_SPEED.
+func run_stop_rate(speed: float) -> float:
+	return speed / RUN_STOP_ENTRY_SPEED
+
+
+## Clip time, in seconds, at which the deceleration has covered `metres`.
+func run_stop_time_at(metres: float) -> float:
+	var last := RUN_STOP_CURVE.size() - 1
+	var full: float = RUN_STOP_CURVE[last]
+	var target := clampf(metres, 0.0, full)
+	for i in last:
+		var to: float = RUN_STOP_CURVE[i + 1]
+		if target > to:
+			continue
+		var from: float = RUN_STOP_CURVE[i]
+		# Guard the flat tail, where several samples share a value and the
+		# fraction would be 0/0.
+		var frac := 0.0 if to == from else (target - from) / (to - from)
+		return (float(i) + frac) / float(last) * _run_stop_length()
+	return _run_stop_length()
+
+
+## The inverse: metres covered by clip time `seconds`.
+func run_stop_travel_at(seconds: float) -> float:
+	var last := RUN_STOP_CURVE.size() - 1
+	var length := _run_stop_length()
+	if length <= 0.0:
+		return 0.0
+	var x := clampf(seconds / length, 0.0, 1.0) * float(last)
+	var i := mini(int(x), last - 1)
+	var from: float = RUN_STOP_CURVE[i]
+	var to: float = RUN_STOP_CURVE[i + 1]
+	return lerpf(from, to, x - float(i))
+
+
+## Starts the deceleration `metres` into its own travel — non-zero only when the
+## path was too short to fit the whole clip, in which case the front of it is
+## skipped so the part that IS played still lands on the ground available.
+## Returns false when there is no clip, leaving the caller on the old path.
+func begin_run_stop(metres: float, rate: float) -> bool:
+	if _instant or anim == null or not anim.has_animation(RUN_STOP):
+		return false
+	# Set like play_action's, so nothing treats the unit as free mid-stop; unlike
+	# play_action this does NOT await, because the caller is driving the unit's
+	# position through the same clip and has to stay in control of the timing.
+	_action = RUN_STOP
+	anim.play(RUN_STOP, ACTION_BLEND, rate)
+	if metres > 0.0:
+		anim.seek(run_stop_time_at(metres), true)
+	return true
+
+
+## Holds until the settle at the tail of the clip — the part past the last of the
+## travel, which no movement pays for — finishes, then lands in IDLE.
+## Coroutine — callers MUST await.
+func finish_run_stop() -> void:
+	if _action == RUN_STOP:
+		while anim.is_playing() and anim.current_animation == RUN_STOP:
+			await anim.animation_finished
+		_action = &""
+		_play(IDLE, STANCE_BLEND)
+	# Written last, and unconditionally: if something else took the body during
+	# the move (a hit react on the way in), that one-shot's own tail hands back to
+	# whatever _stance has become — and a unit that has arrived is standing, not
+	# still running. Same reason play_stance_exit assigns the field directly.
+	_stance = IDLE
+
+
+func _run_stop_length() -> float:
+	return anim.get_animation(RUN_STOP).length if anim else 0.0
 
 
 ## Where a shot leaves the weapon, in world space. Falls back to a point above

@@ -65,10 +65,40 @@ extends Node3D
 var _skel: Skeleton3D = null
 var _grip_idx := -1
 var _steer_idx := -1
+var _muzzle: Node3D = null
+
+
+## Where the bore points, in world space, for the pose the skeleton holds RIGHT
+## NOW — computed from the bones rather than read off this node's basis, so it is
+## valid mid-solve before _follow has written global_transform.
+##
+## AimPitch drives its correction off this: aiming has to steer the BARREL, and
+## the barrel direction lives here, not in the skeleton.
+func bore_direction() -> Vector3:
+	if _skel == null:
+		return -global_transform.basis.z.normalized()
+	var grip := _skel.global_transform * _skel.get_bone_global_pose(_grip_idx)
+	var steer := _skel.global_transform * _skel.get_bone_global_pose(_steer_idx)
+	var along := steer.origin - grip.origin
+	if along.length_squared() < 0.000001:
+		return -global_transform.basis.z.normalized()
+	return along.normalized()
+
+
+## Where a shot leaves the weapon. Prefers the Muzzle node inside the GLB, which
+## tracks the real barrel tip; the grip origin is ~0.5 m short of it, and over a
+## typical 6 m engagement that much error swings the aim by around 5 degrees.
+func bore_origin() -> Vector3:
+	if _muzzle:
+		return _muzzle.global_position
+	return global_position
 
 
 func _ready() -> void:
 	_skel = get_node_or_null(skeleton_path) as Skeleton3D
+	var found := find_children("Muzzle", "", true, false)
+	if not found.is_empty():
+		_muzzle = found[0] as Node3D
 	if _skel == null:
 		push_warning("WeaponMount: no Skeleton3D at %s" % skeleton_path)
 		return
