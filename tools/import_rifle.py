@@ -64,7 +64,40 @@ SOURCE = "art_src/RIfleLow.fbx"
 # between the magazine's rear face (-0.059) and the pistol grip's front (+0.083).
 TRIGGER_Y = 0.060
 GRIP_TO_MUZZLE = 0.62  # metres, matching gen_rifle.py so the mount stays tuned
-SUPPORT_Y = 0.400  # where build_anims.py pins the left hand, for the report only
+SUPPORT_Y = 0.380  # where build_anims.py pins the left hand; see SPLICES
+
+# Bands of Y removed to compact the weapon from 905 mm to roughly 745 mm.
+#
+# NOT a uniform scale, deliberately. Scaling shrinks the pistol grip and the
+# magazine along with everything else, and those are the parts sized to a human
+# hand -- the hand does not scale with them, so an 84% rifle reads as a toy and
+# fights the finger wrap. Length has to come out of the parts a hand never
+# touches.
+#
+# Both bands are chosen inside a CONSTANT cross-section run, measured by
+# intersecting faces with the plane rather than binning vertices (a low-poly
+# tube has vertices only at its ends, so a vertex histogram reports an empty gap
+# exactly where the surface is):
+#
+#   handguard  Y +0.180..+0.580  constant 16.5 mm half-width, 66 mm tall
+#   stock tube Y -0.285..-0.100  constant 18.3 mm half-width
+#
+# Because the section does not change across a band, closing the gap leaves no
+# seam and no reshaping -- the two cut faces are identical. splice() verifies the
+# band really is vertex-free and refuses otherwise, since collapsing a band that
+# contained detail would silently flatten it.
+#
+# The receiver, pistol grip, magazine and trigger group are outside both bands
+# and keep their exact dimensions.
+# Both bands sit inside a measured vertex-free run, NOT merely inside the
+# feature: the collapsible stock carries ridges along its length, and a first
+# attempt at [-0.200,-0.160] straddled a vertex plane at -0.1965. The usable
+# clear run there is -0.2574..-0.1965 (60.9 mm), so the cut is taken well inside
+# it. Re-measure both if the source model is ever replaced.
+SPLICES = [
+    (0.250, 0.370),    # 120 mm out of the handguard: muzzle 0.620 -> 0.500
+    (-0.250, -0.210),  # 40 mm out of the stock tube: butt -0.285 -> -0.245
+]
 
 # Same two materials as the blockout, and light for the same reason: a near-black
 # weapon against an equally near-black character has no silhouette under the
@@ -89,6 +122,46 @@ def material(spec):
     bsdf.inputs["Roughness"].default_value = roughness
     bsdf.inputs["Metallic"].default_value = metallic
     return mat
+
+
+def splice(objs, lo, hi):
+    """Delete the Y band [lo, hi] and close the gap, keeping the trigger at 0.
+
+    Everything on the far side of the band from the origin slides toward it by
+    the band's width; everything between the origin and the band holds still.
+    That keeps the trigger -- the point the mount places in the hand -- fixed,
+    so shortening the weapon never invalidates the grip tuning.
+    """
+    amount = hi - lo
+    behind = hi <= 0.0  # band sits between the trigger and the butt
+    moved = 0
+    inside = 0
+    for o in objs:
+        for v in o.data.vertices:
+            y = v.co.y
+            if behind:
+                if y <= lo:
+                    v.co.y = y + amount
+                    moved += 1
+                elif y < hi:
+                    v.co.y = hi
+                    inside += 1
+            else:
+                if y >= hi:
+                    v.co.y = y - amount
+                    moved += 1
+                elif y > lo:
+                    v.co.y = lo
+                    inside += 1
+    if inside:
+        raise SystemExit(
+            f"splice [{lo:+.3f},{hi:+.3f}] found {inside} vertices INSIDE the "
+            f"band. That band is not a constant cross-section, so closing it "
+            f"would flatten real detail into a plane. Move the band, or narrow "
+            f"it, so it falls in a featureless run.")
+    log(f"  spliced {amount*1000:.0f} mm out of "
+        f"[{lo:+.3f},{hi:+.3f}] ({moved} verts moved, band was clean)")
+    return amount
 
 
 def is_polymer(name, centre):
@@ -153,6 +226,12 @@ def build(out_path, source, smooth_angle):
     bpy.context.view_layer.objects.active = objs[0]
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 
+    # Compaction happens here, in final metres, BEFORE the material regions are
+    # assigned: is_polymer() tests absolute Y, so it has to see the coordinates
+    # the weapon actually ships with.
+    for lo_y, hi_y in SPLICES:
+        splice(objs, lo_y, hi_y)
+
     metal, poly = material(MAT_METAL), material(MAT_POLY)
     for o in objs:
         me = o.data
@@ -171,8 +250,17 @@ def build(out_path, source, smooth_angle):
     # right for the receiver and wrong for the barrel; an angle split gets both.
     bpy.ops.object.shade_auto_smooth(angle=math.radians(smooth_angle))
 
-    bpy.ops.object.empty_add(type="PLAIN_AXES", radius=0.02,
-                             location=(0.0, GRIP_TO_MUZZLE, 0.022))
+    # Muzzle read back off the finished mesh rather than from GRIP_TO_MUZZLE.
+    # The splices move the barrel tip, so the constant is now the length BEFORE
+    # compaction and using it here would leave the muzzle -- and the shots and
+    # light that come off it -- floating 120 mm past the end of the barrel. This
+    # is the same staleness that screenshot.gd had baked in.
+    fv = [rifle.matrix_world @ v.co for v in rifle.data.vertices]
+    tip_y = max(p.y for p in fv)
+    tip = [p for p in fv if p.y > tip_y - 0.006]
+    muzzle = Vector((sum(p.x for p in tip) / len(tip), tip_y,
+                     sum(p.z for p in tip) / len(tip)))
+    bpy.ops.object.empty_add(type="PLAIN_AXES", radius=0.02, location=muzzle)
     bpy.context.active_object.name = "Muzzle"
 
     lo = Vector([min((rifle.matrix_world @ v.co)[i] for v in rifle.data.vertices)
@@ -187,11 +275,19 @@ def build(out_path, source, smooth_angle):
     log(f"  overall length  : {hi.y - lo.y:.3f} m "
         f"(Y {lo.y:+.3f} .. {hi.y:+.3f}, trigger at 0)")
     log(f"  width / height  : {hi.x - lo.x:.3f} / {hi.z - lo.z:.3f} m")
-    log(f"  grip -> muzzle  : {GRIP_TO_MUZZLE:.3f} m")
+    log(f"  grip -> muzzle  : {muzzle.y:.3f} m "
+        f"(was {GRIP_TO_MUZZLE:.3f} before compaction)")
     log(f"  support hand at : Y {SUPPORT_Y:+.3f} m, "
-        f"{GRIP_TO_MUZZLE - SUPPORT_Y:.3f} m short of the muzzle")
-    log(f"  MUZZLE (blender): (0.0, {GRIP_TO_MUZZLE}, 0.022)")
-    log(f"  MUZZLE (godot)  : (0.0, 0.022, {-GRIP_TO_MUZZLE})")
+        f"{muzzle.y - SUPPORT_Y:.3f} m short of the muzzle")
+    log(f"  MUZZLE (blender): ({muzzle.x:.3f}, {muzzle.y:.3f}, {muzzle.z:.3f})")
+    log(f"  MUZZLE (godot)  : ({muzzle.x:.3f}, {muzzle.z:.3f}, {-muzzle.y:.3f})")
+    # The support hand is pinned by the animation, so compaction slides it
+    # FORWARD relative to the mesh. Past the handguard it would grip bare
+    # barrel, which is the one way these cuts can go wrong silently.
+    ahead = muzzle.y - SUPPORT_Y
+    if ahead < 0.05:
+        log(f"  WARNING: only {ahead*1000:.0f} mm of weapon ahead of the support "
+            f"hand -- it is at or past the muzzle. Cut less, or move SUPPORT_OFFSET.")
 
     bpy.ops.export_scene.gltf(filepath=out_path, export_format="GLB",
                               export_animations=False)

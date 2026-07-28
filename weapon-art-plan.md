@@ -216,17 +216,45 @@ have said nothing.
 
 What this settles:
 
-- **Overall length is 905 mm**, against the 925 mm that "grow forward" predicted above. The estimate
-  was right to within 20 mm, so the roster's length separation (Section 6.5) re-scales off 905 mm
-  rather than 780 mm.
+- **Overall length is 905 mm** as imported, against the 925 mm that "grow forward" predicted above —
+  the estimate was right to within 20 mm. **Compacted to 745 mm on 2026-07-28** (see 4.4), and the
+  roster's length separation (Section 6.5) re-scales off *that*.
 - **`SUPPORT` at 400 mm lands mid-handguard**, 220 mm short of the muzzle — comfortably inside the
   furniture at both ends. The 110 mm minimum handguard rule from 4.1 is met with room to spare.
 - The handguard no longer has to *absorb variance*. `gen_rifle.py` sized its 0.18–0.54 m handguard to
   contain a hand gap that swung 0.320–0.468 m; `tools/build_anims.py` now pins that gap at ~400 mm,
   so the only surviving requirement is that 400 mm be *on* the handguard.
 
-Sections 5 and 6 still need their coordinate tables rewritten against 905 mm, but the design question
-is closed: **conventional layouts, grown forward.**
+Sections 5 and 6 still need their coordinate tables rewritten, but the design question is closed:
+**conventional layouts, grown forward.**
+
+### 4.4 Compaction — and why it is not a scale *(2026-07-28)*
+
+At 905 mm the rifle read oversized against a 1.78 m character. The obvious fix, a uniform scale to
+~84%, is **wrong**: it shrinks the pistol grip (27.1 mm radius) and magazine along with everything
+else, and those are the parts sized to a human hand. The hand does not scale with them, so a scaled
+rifle reads as a toy and actively fights the finger wrap.
+
+Length has to come out of the parts a hand never touches. `tools/import_rifle.py` `SPLICES` removes
+two bands of Y and closes the gaps, keeping the trigger at the origin:
+
+| | removed | result |
+| --- | --- | --- |
+| handguard `+0.250 … +0.370` | 120 mm | muzzle 620 → **500 mm** |
+| stock tube `−0.250 … −0.210` | 40 mm | butt 285 → **245 mm** |
+| **overall** | 160 mm | 905 → **745 mm** |
+
+Both bands sit inside a measured **vertex-free** run, so the two cut faces are identical and closing
+them leaves no seam and no reshaping. Vertex count is unchanged at 897, and the pistol grip's
+centroid, axis, length and radius are bit-identical before and after.
+
+`splice()` refuses a band containing vertices rather than flattening them — which caught a first
+attempt at the stock, where `−0.200 … −0.160` straddled a vertex plane at `−0.1965`. The usable clear
+run there is `−0.2574 … −0.1965` (60.9 mm). **Re-measure both bands if the source model is replaced.**
+
+The support hand, pinned at 380 mm by the animation, does not move — so compaction slides it *forward*
+relative to the mesh, from 240 mm short of the muzzle to **120 mm**. Still on handguard, but that is
+now the binding constraint on any further shortening, and `import_rifle.py` warns below 50 mm.
 
 ---
 
