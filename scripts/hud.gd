@@ -77,13 +77,14 @@ func _refresh(unit: Unit) -> void:
 		var injuries := player.injured_summary()
 		var injury_line := "\nInjuries: %s" % injuries if injuries != "None" else ""
 		var weapon_name := player.stats.weapon.display_name if player.stats.weapon else "Unarmed"
+		var reserve_text := "∞" if player.reserve < 0 else str(player.reserve)
 		# Own units only — enemy Initiative stays hidden (Sec 4.1).
-		unit_info.text = "%s  [%s]   %s\nHP %d/%d   AP %d   Ammo %d/%d\nInitiative %.0f%s\nFlashlight %s   Standing on %d%% light%s" % [
+		unit_info.text = "%s  [%s]   %s\nHP %d/%d   AP %d   Ammo %d/%d   Reserve %s\nInitiative %.0f%s\nFlashlight %s   Standing on %d%% light%s" % [
 			player.stats.display_name,
 			UnitStats.UnitClass.keys()[player.stats.unit_class],
 			weapon_name,
 			player.current_hp, player.stats.max_hp(), player.ap,
-			player.ammo, player.stats.mag_size,
+			player.ammo, player.stats.mag_size, reserve_text,
 			player.stats.initiative(), reserved,
 			"ON" if player.flashlight_on else "OFF",
 			roundi(GridManager.get_tile(player.grid_pos).light_value) if GridManager.has_tile(player.grid_pos) else 0,
@@ -99,7 +100,7 @@ func _refresh(unit: Unit) -> void:
 	buttons["aimed_shot"].disabled = not is_player or player.ap < 2 or (is_player and not player.can_shoot())
 	buttons["hunker"].disabled = not is_player or player.ap < 1
 	buttons["overwatch"].disabled = not is_player or player.ap < 1 or (is_player and not player.can_shoot())
-	buttons["reload"].disabled = not is_player or player.ap < 1
+	buttons["reload"].disabled = not is_player or player.ap < 1 or (is_player and not player.can_reload())
 	# Both free actions (Sec 4.2) — no AP gate on either.
 	buttons["face"].disabled = not is_player
 	buttons["flashlight"].disabled = not is_player

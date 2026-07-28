@@ -1,3 +1,6 @@
 # Godot
 .godot/
 *.tmp
+
+# Blender's own auto-backup of the previous save, not something to track
+*.blend1

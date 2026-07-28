@@ -40,13 +40,21 @@ Sniper would.
 
 ## Ammo/Reload as the counterweight to Aimed Shot
 
-Fixed magazine sizes (Section 4.3) mean Aimed Shot's payoff isn't free over a whole mission —
+Fixed magazine sizes (Section 4.3) mean Aimed Shot's payoff isn't free within a single engagement —
 burning through ammo faster forces Reload (1 AP) more often, which is itself a full action that
 can't also move or shoot. This is the mechanism that keeps "just always Aimed Shot" from being a
-dominant strategy: it's locally better per-shot, but globally more expensive in activations spent
-reloading. Magazine size now varies by **weapon**, not class (Shotgun 2, Battle Rifle 5, Assault
-Rifle 6, SMG 12, LMG 15 — see [`../weapons/`](../weapons/)), so this tradeoff lands differently
-depending on the soldier's loadout rather than being fixed by class.
+dominant strategy at the activation level: it's locally better per-shot, but globally more
+expensive in activations spent reloading. Magazine size varies by **weapon**, not class (Battle
+Rifle and Assault Rifle 3, Shotgun and LMG 6, SMG 4 — see [`../weapons/`](../weapons/)), so this
+tradeoff lands differently depending on the soldier's loadout rather than being fixed by class.
+
+**Reload also now draws from a finite per-mission reserve**, not an unlimited pool — see
+[`../weapons/`](../weapons/#ammo-model). Each weapon's total ammo (mag size + reserve) is a fixed
+mission-length budget: 24 for the SMG down to 15 for the Battle Rifle. This adds a second,
+longer-horizon version of the same Aimed-Shot-vs.-Shoot tension: even a weapon a soldier never
+actually reloads *mid-fight* can still run out over the course of a full mission, and once both the
+loaded mag and the reserve hit zero, that soldier has no ranged options (Shoot/Aimed Shot/Overwatch
+all require ammo) for the rest of it — no emergency reserve, no resupply.
 
 ## Overwatch as the pool's one interrupt
 

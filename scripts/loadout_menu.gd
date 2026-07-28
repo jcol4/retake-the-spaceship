@@ -62,7 +62,8 @@ func _build_unit_row(unit: PlayerUnit) -> Control:
 	var selected_index := 0
 	for id in WeaponPresets.all_ids():
 		var d: Dictionary = WeaponPresets.DATA[id]
-		picker.add_item("%s  (Acc %d / Dmg %d / Mag %d)" % [d["display_name"], d["base_accuracy"], d["damage"], d["mag_size"]])
+		var total: int = d["mag_size"] + d["starting_reserve"]
+		picker.add_item("%s  (Acc %d / Dmg %d / Mag %d / %d total)" % [d["display_name"], d["base_accuracy"], d["damage"], d["mag_size"], total])
 		picker.set_item_metadata(picker.item_count - 1, id)
 		if id == default_id:
 			selected_index = picker.item_count - 1
@@ -79,5 +80,6 @@ func _on_deploy() -> void:
 		var id: int = _pickers[i].get_selected_metadata()
 		unit.stats.weapon = WeaponPresets.make(id)
 		unit.ammo = unit.stats.mag_size  # refill to the newly-chosen weapon's magazine
+		unit.reserve = unit.stats.weapon.starting_reserve
 	deployed.emit()
 	queue_free()

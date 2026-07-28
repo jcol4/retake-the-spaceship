@@ -1,18 +1,22 @@
 # Assault Rifle
 
-| Base Accuracy | Damage | Magazine Size |
-|---|---|---|
-| 30 | 12 | 6 |
+| Base Accuracy | Damage | Mag Size | Reserve | Total |
+|---|---|---|---|---|
+| 30 | 12 | 3 | 15 (5 mags) | 18 |
 
 ## Role
 
-The no-tradeoff baseline weapon — median accuracy, median damage, median magazine relative to the
-rest of the roster (see [the roster table](README.md#roster)). It's the weapon every other weapon
-is a deliberate deviation from, rather than a niche pick itself.
+The no-tradeoff baseline weapon — median accuracy, median damage, and (at 18) squarely
+middle-of-the-roster total ammo (see [the roster table](README.md#roster)). It's the weapon every
+other weapon is a deliberate deviation from, rather than a niche pick itself.
 
-These numbers are exactly the old Assault class defaults from before weapon stats were pulled off
-the class (see [`../units/assault/`](../units/assault/)), so a squad running all-default loadouts
-plays identically to the pre-weapons-system numbers.
+Base accuracy and damage are exactly the old Assault class defaults from before weapon stats were
+pulled off the class (see [`../units/assault/`](../units/assault/)). Mag size (3) and reserve (15,
+5 spare mags) reflect the newer, tighter ammo pass — every weapon's mag size dropped and gained a
+finite reserve, so nothing plays *identically* to the original numbers anymore, but this one still
+plays closest to them. Unlike the Shotgun and SMG, it has no weapon-specific range falloff, and
+unlike the LMG, no movement penalty — it just has the plain global Distance Penalty curve (GDD
+Section 6.5) and nothing else layered on top.
 
 ## Suggested class
 
@@ -23,5 +27,6 @@ profile.
 ## Relationship to other systems
 
 - With no extreme in any stat, it's the weapon least likely to make Reload timing (GDD Section 4.3)
-  a sharp decision — 6 rounds is enough to not think about ammo every activation, but not so many
-  that Reload never matters.
+  a sharp decision within a single engagement — but see [Ammo model](README.md#ammo-model): the
+  soldier carries exactly 6 mags total (1 loaded + 5 reserve) for the whole mission, same as every
+  other weapon's total is now finite rather than an assumed-infinite pool.

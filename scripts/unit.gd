@@ -30,6 +30,9 @@ var grid_pos: Vector3i
 var current_hp: int
 var ap: int = 0
 var ammo: int
+# Spare rounds beyond the loaded magazine. -1 means unlimited (never
+# decremented by do_reload) — see WeaponData.starting_reserve.
+var reserve: int = -1
 var is_downed: bool = false
 var hunkered: bool = false
 var on_overwatch: bool = false
@@ -79,6 +82,7 @@ func _ready() -> void:
 		stats = UnitStats.new()
 	current_hp = stats.max_hp()
 	ammo = stats.mag_size
+	reserve = stats.weapon.starting_reserve if stats.weapon else 0
 	grid_pos = GridManager.world_to_grid(global_position)
 	global_position = GridManager.grid_to_world(grid_pos)
 	GridManager.set_occupant(grid_pos, self)
@@ -204,6 +208,10 @@ func take_damage(amount: int) -> void:
 
 func can_shoot() -> bool:
 	return ammo > 0
+
+
+func can_reload() -> bool:
+	return ammo < stats.mag_size and (reserve < 0 or reserve > 0)
 
 
 func move_run() -> int:
@@ -375,8 +383,15 @@ func do_overwatch() -> void:
 
 func do_reload() -> void:
 	# Coroutine, unlike the other two — callers MUST `await`, or the unit will
-	# still be reloading on screen when its next action resolves.
-	ammo = stats.mag_size
+	# still be reloading on screen when its next action resolves. Draws from
+	# `reserve` (spare rounds beyond the loaded mag); reserve < 0 means
+	# unlimited, so it's never decremented — see WeaponData.starting_reserve.
+	var needed := stats.mag_size - ammo
+	var drawn := needed
+	if reserve >= 0:
+		drawn = mini(needed, reserve)
+		reserve -= drawn
+	ammo += drawn
 	is_busy = true
 	await visual.play_action(UnitVisual.RELOAD)
 	is_busy = false

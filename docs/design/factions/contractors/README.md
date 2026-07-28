@@ -61,5 +61,5 @@ gear, mismatched wear patterns, no unit insignia (see
 - Exact per-class stat numeric ranges — tendencies are set (and partially rolled out as code
   defaults in `scripts/class_presets.gd`), but not fully finalized/playtested.
 - Medical resource economy — name, and how it's earned/spent.
-- ~~Weapon base accuracy values per weapon type~~ — resolved in [`weapons/`](weapons/); not yet
-  implemented in code (`class_presets.gd` still hard-codes weapon stats per class).
+- ~~Weapon base accuracy values per weapon type~~ — resolved and implemented, see
+  [`weapons/`](weapons/).

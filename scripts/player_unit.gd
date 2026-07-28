@@ -312,7 +312,7 @@ func try_toggle_flashlight() -> void:
 
 
 func try_reload() -> void:
-	if ap < 1 or is_busy:
+	if ap < 1 or is_busy or not can_reload():
 		return
 	spend_ap(1)  # before the animation, so the HUD greys the buttons immediately
 	set_mode(Mode.NONE)
