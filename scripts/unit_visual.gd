@@ -38,6 +38,12 @@ const OVERWATCH := &"overwatch_hold"
 # SHOOT_RECOIL is one round's kick, replayed from the start once per round.
 const AIM_HOLD := &"aim_hold"
 const SHOOT_RECOIL := &"shoot_recoil"
+# Transitions. Not stances and not actions: each is a one-shot that bridges one
+# stance into another, played through play_stance_exit. All degrade to a hard
+# cut, at zero time cost, when the clip is absent.
+const RUN_STOP := &"run_stop"
+const STAND_TO_CROUCH := &"stand_to_crouch"
+const CROUCH_TO_STAND := &"crouch_to_stand"
 const MELEE := &"melee"
 const RELOAD := &"reload"
 const GRENADE := &"throw_grenade"
@@ -158,6 +164,24 @@ func play_action(action: StringName) -> void:
 	# DOWNED holds its last frame; every other action returns to the stance.
 	if action != DOWNED:
 		_play(_stance, STANCE_BLEND)
+
+
+## Plays a one-shot that bridges the current stance into `next`, then settles
+## there. Coroutine — callers MUST await.
+##
+## Unlike play_action, a missing clip costs NO time: it falls straight through to
+## the stance, which is exactly what the old behaviour was. That makes this safe
+## to call before the clip has been sourced, and means an absent clip degrades to
+## a hard cut rather than to a mysterious pause on every move.
+func play_stance_exit(action: StringName, next: StringName) -> void:
+	if _instant or anim == null or not anim.has_animation(action):
+		set_stance(next)
+		return
+	# Assigned rather than passed to set_stance: writing the field directly
+	# records where to land WITHOUT playing it, so the exit clip is what shows
+	# on screen. play_action's tail then blends into whatever _stance has become.
+	_stance = next
+	await play_action(action)
 
 
 ## Where a shot leaves the weapon, in world space. Falls back to a point above

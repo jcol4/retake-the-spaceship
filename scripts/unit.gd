@@ -97,9 +97,16 @@ func _ready() -> void:
 func begin_activation() -> void:
 	ap = MAX_AP
 	# Sec 6.3 / 4.2: both clear on this unit's next activation.
+	var was_crouched := hunkered
 	hunkered = false
 	on_overwatch = false
-	visual.set_stance(UnitVisual.IDLE)
+	if was_crouched:
+		# Standing back up only reads if the unit was actually down there —
+		# playing it from an idle stance is a rise from nothing. Not awaited,
+		# for the same reason as do_hunker.
+		visual.play_stance_exit(UnitVisual.CROUCH_TO_STAND, UnitVisual.IDLE)
+	else:
+		visual.set_stance(UnitVisual.IDLE)
 	ap_changed.emit(self)
 
 
@@ -133,9 +140,12 @@ func move_along(path: Array[Vector3i]) -> void:
 	is_busy = false
 	if is_downed:
 		return  # the collapse is already playing — don't stand it back up
-	visual.set_stance(UnitVisual.IDLE)
+	# Grid state is settled BEFORE the deceleration plays: the unit owns its
+	# destination tile from the moment it arrives, so the settle is purely
+	# cosmetic and nothing downstream waits on it to know where the unit is.
 	GridManager.set_occupant(grid_pos, self)
 	global_position = GridManager.grid_to_world(grid_pos)
+	await visual.play_stance_exit(UnitVisual.RUN_STOP, UnitVisual.IDLE)
 	moved.emit(self)
 
 
@@ -373,7 +383,10 @@ func _on_muzzle() -> void:
 
 func do_hunker() -> void:
 	hunkered = true
-	visual.set_stance(UnitVisual.CROUCH)
+	# Deliberately not awaited, and do_hunker stays a plain function: dropping
+	# into cover is cosmetic, and the unit is already counted as hunkered by the
+	# line above. The transition hands off to CROUCH when it finishes.
+	visual.play_stance_exit(UnitVisual.STAND_TO_CROUCH, UnitVisual.CROUCH)
 
 
 func do_overwatch() -> void:

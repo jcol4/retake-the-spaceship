@@ -4,3 +4,10 @@
 
 # Blender's own auto-backup of the previous save, not something to track
 *.blend1
+
+# Mixamo source FBX. The animation clips in art_src/anims/ ARE tracked (a few
+# hundred KB each, and they're what a rebuild actually needs) -- this ignores
+# only the character FBX sitting at the top of art_src/, which runs to 142 MB
+# for a single body and is re-downloadable from mixamo.com in a minute.
+# Note the single-level glob: art_src/*.fbx does not reach into anims/.
+art_src/*.fbx

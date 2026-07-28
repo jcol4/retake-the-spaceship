@@ -1,52 +1,66 @@
 [gd_scene format=3 uid="uid://ccharbase01"]
 
 [ext_resource type="Script" path="res://scripts/unit_visual.gd" id="1_visual"]
-[ext_resource type="PackedScene" path="res://assets/soldier.glb" id="2_soldier"]
+[ext_resource type="PackedScene" path="res://assets/soldier_mixamo.glb" id="2_soldier"]
 [ext_resource type="PackedScene" path="res://assets/rifle.glb" id="3_rifle"]
 [ext_resource type="Script" path="res://scripts/flashlight_beam.gd" id="4_beam"]
+[ext_resource type="Script" path="res://scripts/weapon_mount.gd" id="5_mount"]
+[ext_resource type="Script" path="res://scripts/aimed_light.gd" id="6_light"]
 
 [node name="Visual" type="Node3D"]
 script = ExtResource("1_visual")
 anim_path = NodePath("soldier/AnimationPlayer")
 
+; Yawed 180 degrees because the Mixamo mesh faces +Z and Godot's forward is -Z.
+; Measured, not guessed: tools/_debug_facing.gd reported the model's shoulder
+; forward as (+0.01, +1.00) in the idle pose.
+;
+; This correction belongs HERE, at the asset boundary, rather than as a sign
+; flip in _yaw_toward or face_toward: the movement and aim code is already
+; correct in Godot's convention, and every consumer of unit facing (LOS, the
+; flashlight cone in lighting_manager.gd) reads the unit node rather than the
+; mesh. Negating things downstream would spread one asset quirk across gameplay.
+;
+; It must sit on this node and not on Visual: RifleMount hangs off the skeleton
+; below, and has to inherit the same correction.
 [node name="soldier" parent="." instance=ExtResource("2_soldier")]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 0)
 
-; Rifle and flashlight share one transform, SOLVED rather than derived — see
-; tools/_debug_aim.gd, which regenerates the line below.
+; Driven from BOTH hands by weapon_mount.gd, not parented to one bone.
 ;
-; The hand-derived version was Rx(82 deg), reasoned as a 90 deg Blender-to-Godot
-; axis swap plus the -8 deg grip pitch. It is wrong: measured in game it left
-; the barrel 8-16 deg off the pitch gen_soldier.py authored and ~14 deg off in
-; yaw, which at 5 m puts the muzzle over a metre away from where the unit is
-; facing. The bone's own axes do not survive the glTF conversion the way that
-; reasoning assumed. The solver sidesteps the whole question: the aim pose is
-; authored to point dead forward with the sights up, so the mount basis that
-; makes that true is just the inverse of the hand bone's basis in that pose.
-[node name="RifleMount" type="BoneAttachment3D" parent="soldier/Rig/Skeleton3D" index="1"]
-bone_name = "hand.R"
-bone_idx = 12
+; This was a BoneAttachment3D on hand.R with a hand-solved Transform3D, which
+; worked on the old generated rig because its clips were authored with the
+; weapon in mind. Mixamo clips are separate mocap takes with no rifle in the
+; actor's hand, so wrist roll varies between them: a mount solved exact in
+; aim_hold left the barrel 43 deg off in idle and 21 deg off in run. Two hands
+; are stable where one is not — see the script's header for the measurements.
+;
+; The mount writes its own global_transform, so the 0.01 scale on the Rig node
+; no longer has to be compensated here; the rifle below is plain identity.
+[node name="RifleMount" type="Node3D" parent="soldier/Rig/Skeleton3D" index="1"]
+script = ExtResource("5_mount")
 
+; Identity: the mount above already puts -Z down the barrel with the sights up,
+; and rifle.glb is authored with its own -Z down the bore, so there is nothing
+; left to correct here.
 [node name="rifle" parent="soldier/Rig/Skeleton3D/RifleMount" instance=ExtResource("3_rifle")]
-transform = Transform3D(0.80447906, 0.59398097, -0.00015179557, -0.08303954, 0.112214476, -0.99020827, -0.5881478, 0.7966144, 0.1395981, 0, 0.055, 0)
 
-; The barrel tip, hung off the rifle rather than off the bone so it needs no
-; transform of its own beyond the offset: MUZZLE from tools/gen_soldier.py,
-; which is Blender (0, 0.455, 0.014) mapped to Godot (0, 0.014, -0.455). Being a
-; child of the rifle means it inherits the grip transform above instead of
-; duplicating it — the previous attempt did duplicate it, got the basis
-; transposed, and put the beam up by the soldier's shoulder.
-;
-; The light hangs off this rather than off the grip so the rifle's own mesh
-; stops sitting inside the light and shadowing the beam it casts. -Z here is
-; straight down the bore.
-[node name="Muzzle" type="Node3D" parent="soldier/Rig/Skeleton3D/RifleMount/rifle"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.014, -0.455)
-
+; No Muzzle node here any more: tools/gen_rifle.py exports one inside rifle.glb,
+; so the barrel tip travels with the model. It used to be a hand-copied offset
+; in this file, which meant every change to barrel length silently left the
+; muzzle — and the shots and light that come off it — behind at the old spot.
+; The light still hangs off the muzzle rather than the grip so the rifle's own
+; mesh stops sitting inside the light and shadowing the beam it casts.
 ; spot_angle stays at 45 (a 90 degree cone) to match LightingManager's
 ; FLASHLIGHT_CONE_DEGREES — what you see lit is what the unit can actually see
 ; by. The angle attenuation concentrates that into a harsh centre with a dim
 ; spill out to the edge; the Beam below draws the ray itself.
+; Still parented to the muzzle so the beam leaves the barrel, but aimed_light.gd
+; sets top_level and re-imposes the UNIT's orientation every frame. The carry
+; poses hold the rifle 80-85 degrees across the body, and a beam pointing there
+; would contradict the tiles lighting_manager.gd says the unit lights.
 [node name="Flashlight" type="SpotLight3D" parent="soldier/Rig/Skeleton3D/RifleMount/rifle/Muzzle"]
+script = ExtResource("6_light")
 light_color = Color(0.94, 0.96, 1, 1)
 light_energy = 7.0
 light_volumetric_fog_energy = 3.0

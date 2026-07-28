@@ -4,7 +4,7 @@ extends SceneTree
 ##   godot --headless --script res://tools/dump_glb.gd
 
 func _initialize() -> void:
-	for path in ["res://assets/soldier.glb", "res://assets/rifle.glb"]:
+	for path in ["res://assets/soldier_mixamo.glb", "res://assets/rifle.glb"]:
 		print("=== ", path)
 		var packed: PackedScene = load(path)
 		if packed == null:

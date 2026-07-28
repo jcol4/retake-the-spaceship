@@ -55,10 +55,22 @@ func _process(_delta: float) -> bool:
 	print("[aim] %-12s pitch=%+6.1f  yaw=%+6.1f"
 		% [clip, rad_to_deg(asin(dir.y)), rad_to_deg(atan2(dir.x, -dir.z))])
 	if clip == "aim_hold":
-		# Aim points dead forward by construction (AIM_PITCH = 0, no yaw), so the
-		# rifle's world basis in this pose must be identity.
-		var fixed := Transform3D(_mount.global_transform.basis.inverse().orthonormalized(),
-			GRIP_OFFSET)
+		# Aim points dead forward in this pose, so the rifle's world basis must
+		# come out identity — which makes the correct local basis simply the
+		# inverse of the mount's.
+		#
+		# NOT orthonormalized, unlike the first version of this tool. The Mixamo
+		# rig's Rig node carries scale 0.01 and its bones are in centimetres, so
+		# the mount's basis has that scale baked in. Orthonormalizing throws it
+		# away and the rifle renders at 1/100 size. The raw inverse carries the
+		# 100x back, which is exactly the compensation wanted.
+		var basis := _mount.global_transform.basis
+		var scale := basis.get_scale()
+		# The offset lives in the mount's own space, so it has to be expressed in
+		# the skeleton's units (centimetres here) rather than metres.
+		var fixed := Transform3D(basis.inverse(), GRIP_OFFSET / scale)
+		print("[aim] skeleton scale=%s (grip offset %s -> %s)"
+			% [scale, GRIP_OFFSET, GRIP_OFFSET / scale])
 		print("[aim] mount transform for scenes/character_base.tscn:")
 		print("[aim]   transform = %s" % var_to_str(fixed))
 	_clip += 1
