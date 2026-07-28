@@ -39,11 +39,17 @@ transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 0)
 ; the hand positions a frame before the pitch was applied to them, and the barrel
 ; would lag the body by one frame on every vertical aim.
 ;
-; Exports left at defaults: pitch_axis and max_pitch_deg are meant to be tuned in
-; the editor against aim_hold, and the first pass's values were lost when this
-; scene was rewritten during a --import. Reconstructed from the script's own docs.
+; pitch_flip measured, not guessed: tools/shot_sheet.gd with SHEET_MODE=aim
+; renders the same pose against a target swept from 1.6 m below the shooter to
+; 2.6 m above. Unflipped, the barrel rose as the target FELL and fell as it
+; rose -- inverted across all six heights. This cannot be seen in the editor at
+; all: aim_pitch.gd holds _has_target = false until something calls aim_at() at
+; runtime, so scrubbing the AnimationPlayer shows a node doing nothing.
+;
+; pitch_axis and max_pitch_deg are still at defaults (Vector3.RIGHT, 35 deg).
 [node name="AimPitch" type="Node3D" parent="soldier/Rig/Skeleton3D" index="1"]
 script = ExtResource("7_aimpitch")
+pitch_flip = true
 
 ; Driven from BOTH hands by weapon_mount.gd, not parented to one bone.
 ;
