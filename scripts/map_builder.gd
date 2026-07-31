@@ -7,12 +7,51 @@ extends Node3D
 const WALL_HEIGHT := 3.0
 const PLATFORM_HEIGHT := 3.0
 
+# How far behind a wall to look for floor before calling that wall an obstruction.
+# 1 is deliberate, not a first guess: a wall that directly fronts a floor tile IS
+# the near-side boundary of a room, and a wall backed by anything else (another
+# wall, or the void outside the hull) is far-side structure that has to stay up or
+# the deck opens onto nothing. Raising this hides more of the near approach, which
+# only becomes wanted if the camera pitch is flattened well below 35 degrees.
+const OCCLUSION_DEPTH := 1
+
+## Seconds for a wall to fade out or in after the near side changes. A hard cut
+## at the same instant the whole deck swings is two changes at once and reads as
+## a glitch; a fade separates them.
+const OCCLUSION_FADE := 0.2
+
+# The eight grid steps, indexed by octant of atan2(x, z) — so index 0 is +z and
+# the index rises anticlockwise in 45-degree steps. Used to snap a camera yaw onto
+# the grid; see _away_step.
+const OCCLUSION_STEPS: Array[Vector3i] = [
+	Vector3i(0, 0, 1), Vector3i(1, 0, 1), Vector3i(1, 0, 0), Vector3i(1, 0, -1),
+	Vector3i(0, 0, -1), Vector3i(-1, 0, -1), Vector3i(-1, 0, 0), Vector3i(-1, 0, 1),
+]
+
 var data: MapData
 var player_spawns: Array[Vector3i] = []
 var enemy_spawns: Array[Vector3i] = []
 var swarm_spawns: Array[Vector3i] = []
 
+## Cell position -> that wall's MeshInstance3D. Only the mesh is kept, because
+## only the mesh is ever hidden — see _apply_wall_occlusion.
+var _wall_meshes: Dictionary = {}
+## Which grid step currently leads away from the camera. ZERO means "not resolved
+## yet", which is also the state on a freshly built map.
+var _occlusion_step := Vector3i.ZERO
+## Region indices currently holding a player unit, plus the corridors touching
+## them. Recomputed each frame; the occlusion pass only re-runs when it changes.
+var _revealed: Dictionary = {}
+## What `_revealed` was when the wall pass last ran, so that pass can be skipped
+## while it would produce the same answer.
+var _last_revealed: Dictionary = {}
+var _fade_tween: Tween = null
+var _fading_out: Array[MeshInstance3D] = []
+var _fading_in: Array[MeshInstance3D] = []
+
 var _wall_mat: StandardMaterial3D
+var _wall_fade_out_mat: StandardMaterial3D
+var _wall_fade_in_mat: StandardMaterial3D
 var _floor_mat: StandardMaterial3D
 var _platform_mat: StandardMaterial3D
 var _stair_mat: StandardMaterial3D
@@ -23,9 +62,22 @@ var _cover_heavy_mat: StandardMaterial3D
 func build(map_data: MapData) -> void:
 	data = map_data
 	_make_materials()
+	_wall_meshes.clear()
+	_occlusion_step = Vector3i.ZERO  # forces a recompute against the new layout
+	_revealed.clear()
+	_last_revealed.clear()
+	if _fade_tween:
+		_fade_tween.kill()
+	_fading_out = []
+	_fading_in = []
+	_fade_tween = null
 	GridManager.clear()
 	for pos: Vector3i in data.cells:
 		_build_cell(pos, data.get_cell(pos))
+	# After every cell, because an edge prop registers itself against the tiles on
+	# BOTH sides and those tiles have to exist first.
+	for entry: Array in data.cover_edge_list():
+		_add_cover_edge(entry[0], entry[1], entry[2])
 	for link: Array in data.stair_links:
 		GridManager.add_stair_link(link[0], link[1])
 	player_spawns = data.spawns(MapData.Spawn.PLAYER)
@@ -41,7 +93,7 @@ func _build_cell(pos: Vector3i, cell: MapData.Cell) -> void:
 		MapData.Terrain.VOID:
 			return
 		MapData.Terrain.WALL:
-			_add_wall(world)
+			_add_wall(pos, world)
 			return
 		MapData.Terrain.PLATFORM:
 			# The block is solid; the walkable tile is its top surface.
@@ -50,8 +102,6 @@ func _build_cell(pos: Vector3i, cell: MapData.Cell) -> void:
 			return
 	GridManager.add_tile(pos, world)
 	_add_floor_quad(world, _stair_mat if cell.stair else _floor_mat)
-	if cell.cover != MapData.Cover.NONE:
-		_add_cover(world, cell.cover == MapData.Cover.HEAVY)
 	if cell.fixture != MapData.Fixture.NONE:
 		_add_light(world, cell.fixture)
 
@@ -64,6 +114,14 @@ func cell_to_world(pos: Vector3i) -> Vector3:
 
 func _make_materials() -> void:
 	_wall_mat = _mat(Color(0.25, 0.27, 0.32))
+	# Two fading variants of the wall material, not one per wall. A yaw snap
+	# moves every wall in the same direction at the same moment, so at most two
+	# alphas are ever in flight: everything on its way out shares one, everything
+	# on its way in shares the other. DEPTH_PRE_PASS rather than plain ALPHA so a
+	# half-faded bulkhead still writes depth and does not let the floor behind it
+	# sort through.
+	_wall_fade_out_mat = _fade_mat(_wall_mat.albedo_color)
+	_wall_fade_in_mat = _fade_mat(_wall_mat.albedo_color)
 	_floor_mat = _mat(Color(0.42, 0.44, 0.48))
 	_platform_mat = _mat(Color(0.35, 0.38, 0.45))
 	_stair_mat = _mat(Color(0.55, 0.5, 0.3))
@@ -77,11 +135,19 @@ func _mat(color: Color) -> StandardMaterial3D:
 	return m
 
 
+func _fade_mat(color: Color) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = color
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS
+	return m
+
+
 func _add_box_body(world: Vector3, size: Vector3, mat: StandardMaterial3D, layer: int) -> StaticBody3D:
 	var body := StaticBody3D.new()
 	body.collision_layer = layer
 	body.collision_mask = 0
 	var shape := CollisionShape3D.new()
+	shape.name = "Shape"  # CoverObject.set_tier resizes this alongside the mesh
 	var box := BoxShape3D.new()
 	box.size = size
 	shape.shape = box
@@ -98,23 +164,40 @@ func _add_box_body(world: Vector3, size: Vector3, mat: StandardMaterial3D, layer
 	return body
 
 
-func _add_wall(world: Vector3) -> void:
-	_add_box_body(world, Vector3(GridManager.TILE_SIZE, WALL_HEIGHT, GridManager.TILE_SIZE), _wall_mat, 1)
+func _add_wall(pos: Vector3i, world: Vector3) -> void:
+	var body := _add_box_body(world, Vector3(GridManager.TILE_SIZE, WALL_HEIGHT, GridManager.TILE_SIZE), _wall_mat, 1)
+	# Kept so wall occlusion can hide this mesh without touching its collision.
+	_wall_meshes[pos] = body.get_node("Mesh")
 
 
 func _add_platform(world: Vector3) -> void:
 	_add_box_body(world, Vector3(GridManager.TILE_SIZE, PLATFORM_HEIGHT, GridManager.TILE_SIZE), _platform_mat, 1)
 
 
-func _add_cover(world: Vector3, heavy: bool) -> void:
-	# Cover collides on layer 4 only — LOS rays (mask 1) pass over it, the
+## Thickness of an edge prop across the boundary it sits on. Thin on purpose:
+## the prop must straddle the line between two tiles without reaching either
+## tile's centre, which is what keeps it from ever being depth-coincident with a
+## unit sprite standing there.
+const COVER_THICKNESS := 0.3
+## Length along the boundary, as a fraction of a tile. Short of 1.0 so the gap at
+## each end reads as a corner rather than as a continuous wall.
+const COVER_SPAN := 0.9
+
+
+func _add_cover_edge(pos: Vector3i, side: int, cover_type: int) -> void:
+	# Cover collides on layer 4 only — LOS rays (mask 1) pass over it, and the
 	# accuracy penalty represents it instead. Sec 6.1.
-	var height := 1.4 if heavy else 1.0
-	var size := Vector3(GridManager.TILE_SIZE * 0.85, height, GridManager.TILE_SIZE * 0.85)
+	var step: Vector3i = MapData.SIDE_STEP[side]
+	# The boundary itself: half a tile from the centre, along the edge's normal.
+	var world := cell_to_world(pos) + Vector3(step) * (GridManager.TILE_SIZE * 0.5)
+	var height: float = CoverObject.TIER_HEIGHT[cover_type]
+	var along := GridManager.TILE_SIZE * COVER_SPAN
+	var size := Vector3(COVER_THICKNESS, height, along) if step.x != 0 \
+		else Vector3(along, height, COVER_THICKNESS)
+	var heavy := cover_type == MapData.Cover.HEAVY
 	var body := _add_box_body(world, size, _cover_heavy_mat if heavy else _cover_light_mat, 4)
 	body.set_script(load("res://scripts/cover_object.gd"))
-	body.set("is_heavy", heavy)
-	body.call("register_with_grid")
+	body.call("register_with_grid", pos, side, cover_type)
 
 
 func _add_light(world: Vector3, fixture: int) -> void:
@@ -150,6 +233,188 @@ func _add_floor_quad(world: Vector3, mat: StandardMaterial3D) -> void:
 	mesh_instance.material_override = mat
 	add_child(mesh_instance)
 	mesh_instance.global_position = world  # visual only; clicks hit the shared ground body
+
+
+## Wall occlusion (MIGRATION_PLAN.md Phase 4).
+##
+## A camera that snaps between four yaws cannot be orbited past a bulkhead, so
+## the near-side walls of a compartment would otherwise sit permanently between
+## the player and the room. A wall is hidden when BOTH hold:
+##
+##   1. the cell one step further from the camera is walkable floor — that set is
+##      exactly the near-side boundary of each compartment, and a wall backed by
+##      another wall or by the void outside the hull is far-side structure that
+##      has to stay up or the deck opens onto nothing; and
+##   2. that floor belongs to a REVEALED region — one holding a player unit, or a
+##      corridor joined to one.
+##
+## Rule 2 is what the geometric placeholder could not do: it knows an empty room
+## has no interior worth opening, so the far side of the deck stays sealed and
+## the cutaway reads as the squad's own field of view rather than as x-ray. It
+## needs the compartment graph, which MapData.compute_rooms now derives for
+## hand-authored decks as well as generated ones.
+##
+## Platforms and cover props are deliberately left alone. Platform tops are
+## walkable, so hiding one would leave units standing on nothing, and cover is
+## short enough to read past at this pitch — hiding it would remove the exact
+## silhouette that says a unit is behind it.
+##
+## Only the MESH is hidden. The StaticBody3D and its shape stay live, because LOS
+## (GridManager.has_line_of_sight) and lighting occlusion (has_clear_line) both
+## raycast layer 1 map geometry: a wall you can see past must still be a wall you
+## cannot shoot through, or the screen starts disagreeing with the rules.
+##
+## When walls become .glb module instances (Phase 8) the only thing that changes
+## here is what `_wall_meshes` holds — the module root instead of the "Mesh"
+## child. Nothing in the rule below reads the node's type.
+func _process(_delta: float) -> void:
+	if data == null:
+		return
+	_revealed = _revealed_regions()
+	# Ahead of the camera check, and every frame rather than only on a change.
+	#
+	# Ahead, because which units are drawn decides whether their activations are
+	# fast-forwarded, and that is turn PACING — it must not depend on a camera
+	# existing. Every frame, because an enemy walking into a revealed room changes
+	# what should be drawn without changing the revealed set at all.
+	_apply_unit_visibility()
+
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return  # main.tscn builds the map before the rig exists; retried next frame
+	var step := _away_step(-cam.global_transform.basis.z)
+	# One Vector3i compare per frame while nothing is moving. The wall pass below
+	# is heavier, so it is only paid when its answer changes.
+	if step == _occlusion_step and _revealed == _last_revealed:
+		return
+	_occlusion_step = step
+	_last_revealed = _revealed.duplicate()
+	_apply_wall_occlusion(step)
+
+
+## Q12: a unit's sprite is drawn only in a room holding a player unit.
+##
+## Deliberately coarser than GDD Sec 10.6's per-unit line-of-sight raycast. A
+## room is a piece of space the player can hold in their head — "they are in the
+## next compartment" — where a per-unit ray gives a flickering set with no shape
+## to it. It also costs a dictionary lookup rather than a raycast per pair.
+##
+## This does more than hide sprites: an undrawn unit reports `is_instant` and so
+## resolves its whole activation with no time on the clock, instead of making the
+## player wait out animations against a static screen. See Unit.is_instant.
+func _apply_unit_visibility() -> void:
+	for node in get_tree().get_nodes_in_group("units"):
+		var unit := node as Unit
+		if unit:
+			unit.set_rendered(_revealed.has(data.room_index_at(unit.grid_pos)))
+
+
+## Regions a player unit is standing in, plus every corridor joined to one.
+##
+## Corridors ride along because a doorway is its own region under
+## MapData.compute_rooms: without this a squad standing in a room would leave the
+## doorway they are about to walk through sealed, which reads as a bug rather
+## than as fog of war.
+func _revealed_regions() -> Dictionary:
+	var out: Dictionary = {}
+	for node in get_tree().get_nodes_in_group("player_units"):
+		var unit := node as Unit
+		if unit == null or unit.is_downed:
+			continue
+		var index := data.room_index_at(unit.grid_pos)
+		if index < 0:
+			continue
+		out[index] = true
+		for linked in data.linked_rooms(index):
+			if linked in data.corridors:
+				out[linked] = true
+	return out
+
+
+## The grid step leading away from the camera: the camera's look direction,
+## flattened and snapped to the nearest of the eight grid directions.
+##
+## Snapping rather than reading a fixed angle is what makes this work both before
+## and after the camera becomes orthographic with quarter-turn yaws (Phase 1) —
+## under free orbit it re-buckets as the yaw sweeps, and under snapped yaws a snap
+## simply IS a bucket change.
+func _away_step(look: Vector3) -> Vector3i:
+	var flat := Vector3(look.x, 0.0, look.z)
+	if flat.length() < 0.001:
+		return Vector3i.ZERO  # straight down: nothing is in front of anything
+	return OCCLUSION_STEPS[wrapi(roundi(atan2(flat.x, flat.z) / (PI / 4.0)), 0, 8)]
+
+
+func _apply_wall_occlusion(step: Vector3i) -> void:
+	var fading_out: Array[MeshInstance3D] = []
+	var fading_in: Array[MeshInstance3D] = []
+	for pos: Vector3i in _wall_meshes:
+		var mesh: MeshInstance3D = _wall_meshes[pos]
+		var hide := _hides_interior(pos, step)
+		if hide == not mesh.visible:
+			continue  # already where it needs to be
+		if hide:
+			fading_out.append(mesh)
+		else:
+			mesh.visible = true
+			fading_in.append(mesh)
+
+	if fading_out.is_empty() and fading_in.is_empty():
+		return
+	if _fade_tween:
+		# A snap arriving mid-fade: land the old one before starting the new, or
+		# walls caught between the two passes keep a stale material override.
+		_fade_tween.kill()
+		_settle_fade()
+	for mesh in fading_out:
+		mesh.material_override = _wall_fade_out_mat
+	for mesh in fading_in:
+		mesh.material_override = _wall_fade_in_mat
+	_fading_out = fading_out
+	_fading_in = fading_in
+	if _instant_fade():
+		_settle_fade()
+		return
+	_wall_fade_out_mat.albedo_color.a = 1.0
+	_wall_fade_in_mat.albedo_color.a = 0.0
+	_fade_tween = create_tween()
+	_fade_tween.tween_method(_set_fade, 0.0, 1.0, OCCLUSION_FADE)
+	_fade_tween.finished.connect(_settle_fade)
+
+
+func _instant_fade() -> bool:
+	# Nothing to fade across with no frames being drawn, and the headless smoke
+	# test should not spend wall-clock time on a cosmetic transition.
+	return DisplayServer.get_name() == "headless"
+
+
+func _set_fade(t: float) -> void:
+	_wall_fade_out_mat.albedo_color.a = 1.0 - t
+	_wall_fade_in_mat.albedo_color.a = t
+
+
+## Drops both sets back onto the shared opaque material and hides the ones that
+## faded out. Called on completion AND on interruption, so a wall is never left
+## holding a transparent override it is not currently animating.
+func _settle_fade() -> void:
+	for mesh in _fading_out:
+		mesh.visible = false
+		mesh.material_override = _wall_mat
+	for mesh in _fading_in:
+		mesh.material_override = _wall_mat
+	_fading_out = []
+	_fading_in = []
+	_fade_tween = null
+
+
+func _hides_interior(pos: Vector3i, step: Vector3i) -> bool:
+	if step == Vector3i.ZERO:
+		return false
+	for i in range(1, OCCLUSION_DEPTH + 1):
+		var behind := pos + step * i
+		if data.is_walkable(behind) and _revealed.has(data.room_index_at(behind)):
+			return true
+	return false
 
 
 func build_ground_collision() -> void:

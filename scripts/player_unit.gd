@@ -16,6 +16,9 @@ signal aimed_shot_target_picked(target: Unit)
 # collide with a real grid key.
 const NO_TILE := Vector3i(0, -9999, 0)
 
+# Indexed by MapData.Side, for the combat log.
+const _SIDE_WORD := ["east", "south", "west", "north"]
+
 var mode: Mode = Mode.NONE
 # Move is one action whose cost depends on how far the destination is: the
 # inner band is a 1 AP run, the outer band a 2 AP sprint (Sec 4.2).
@@ -265,10 +268,15 @@ func fire_aimed_shot(target: Unit, body_part: int) -> void:
 func _log_shot_aftermath(target: Unit, result: Combat.ShotResult) -> void:
 	if target.is_downed:
 		action_logged.emit("%s is DOWN!" % target.stats.display_name)
-	if result.had_cover:
-		var t: GridTileData = GridManager.get_tile(result.cover_tile)
-		if t and t.cover_type == GridTileData.CoverType.NONE:
-			action_logged.emit("Cover at %s destroyed — now impassable rubble!" % result.cover_tile)
+	if result.had_cover and result.cover_broken:
+		# No "impassable rubble" any more: the tile was always passable under the
+		# edge model, and heavy cover degrades to light rather than vanishing.
+		var now := GridManager.cover_type_on(result.cover_tile, result.cover_side)
+		var where := "%s side of %s" % [_SIDE_WORD[result.cover_side], result.cover_tile]
+		if now == MapData.Cover.NONE:
+			action_logged.emit("Cover on the %s is destroyed!" % where)
+		else:
+			action_logged.emit("Heavy cover on the %s is shot down to light cover" % where)
 
 
 func try_hunker() -> void:

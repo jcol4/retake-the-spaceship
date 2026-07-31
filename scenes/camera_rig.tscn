@@ -5,8 +5,19 @@
 [node name="CameraRig" type="Node3D"]
 script = ExtResource("1_script")
 
-[node name="SpringArm3D" type="SpringArm3D" parent="."]
-spring_length = 18.0
-collision_mask = 0
-
-[node name="Camera3D" type="Camera3D" parent="SpringArm3D"]
+; Plain offset rather than a SpringArm3D: with zoom removed the boom had no
+; remaining job, and its collision_mask was already 0. The camera sits back
+; along the pivot's local +Z purely to keep geometry off the near plane.
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 18)
+projection = 1
+; Vertical world extent on screen, and the only scale control there is now that
+; zoom is gone. Chosen against the XCOM reference framing in
+; character-art-plan.md, which puts a character at 15-20% of viewport height:
+; a 1.92 m sprite over a 12 m extent is 16%. Measured rather than eyeballed —
+; that plan asked for a real number and this is it.
+;
+; Tightening this further trades deck legibility for character detail. At 12 the
+; view is roughly 8 by 14 tiles, which still holds a whole compartment.
+size = 12.0
+far = 200.0

@@ -68,41 +68,20 @@ func _closeup() -> void:
 		(node as CanvasLayer).visible = false
 		hidden += 1
 	print("[screenshot] hid ", hidden, " CanvasLayer(s)")
+	# Sprite diagnostics: which direction bucket each layer resolved to, and
+	# whether they agree. A layer showing a different direction from its
+	# neighbours is the failure mode the lockstep playback exists to prevent, and
+	# it is invisible in a still unless the names are printed alongside it.
 	var vis: Node = unit.get_node_or_null("Visual")
-	var ap: AnimationPlayer = vis.get("anim") if vis else null
-	print("[screenshot] visual=", vis, " anim=", ap)
-	if ap:
-		print("[screenshot] playing=", ap.is_playing(), " current='", ap.current_animation,
-			"' root=", ap.root_node, " has_idle=", ap.has_animation("idle"))
-		# SHOT_CLIP pins a specific pose. The game boots into idle, which carries
-		# the weapon slanted across the body — the one pose where a rifle is both
-		# foreshortened and half behind the torso, so it is the worst frame to
-		# judge a weapon model on. SHOT_CLIP=aim_hold shows its full length.
-		if OS.has_environment("SHOT_CLIP"):
-			var clip := OS.get_environment("SHOT_CLIP")
-			if ap.has_animation(clip):
-				ap.play(clip)
-				ap.advance(float(OS.get_environment("SHOT_CLIP_AT")) \
-					if OS.has_environment("SHOT_CLIP_AT") else 0.0)
-				ap.pause()
-				print("[screenshot] pinned clip '", clip, "' at ", ap.current_animation_position)
-			else:
-				print("[screenshot] no such clip '", clip, "' in ", ap.get_animation_list())
-	var mount := unit.get_node_or_null("Visual/soldier/Rig/Skeleton3D/RifleMount")
-	if mount == null:
-		print("[screenshot] RifleMount NOT FOUND")
+	if vis == null:
+		print("[screenshot] Visual NOT FOUND")
 		return
-	var rifle: Node3D = mount.get_node_or_null("rifle")
-	# Read the Muzzle node the GLB ships rather than a copy of its coordinates:
-	# this was a hardcoded (0, 0.014, -0.455) that went stale the moment the
-	# barrel got longer, and then quietly reported the wrong tip forever after.
-	var muzzle_node := rifle.get_node_or_null("Muzzle") as Node3D
-	var muzzle: Vector3 = muzzle_node.global_position if muzzle_node \
-		else rifle.global_position
-	var barrel := -rifle.global_transform.basis.z.normalized()
-	print("[screenshot] mount(local to unit)=", unit.to_local(mount.global_position))
-	print("[screenshot] muzzle(local to unit)=", unit.to_local(muzzle))
-	print("[screenshot] barrel dir=", barrel, "  (want ~(0,~0,-1) = unit forward)")
+	print("[screenshot] variant=", vis.get("variant"), " layers=", vis.get("layers"))
+	for child in vis.get_children():
+		var sprite := child as AnimatedSprite3D
+		if sprite:
+			print("[screenshot]   %s: '%s' frame %d flip_h=%s visible=%s" % [
+				sprite.name, sprite.animation, sprite.frame, sprite.flip_h, sprite.visible])
 
 
 func _process(delta: float) -> bool:

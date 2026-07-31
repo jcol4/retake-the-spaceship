@@ -15,7 +15,20 @@ extends Node
 ## ignorant of the AI, and remains the only writer of light_value.
 signal lighting_changed
 
-const AMBIENT_FLOOR := 0.0  # tiles no source reaches are pitch dark (Sec 5.3)
+## What a tile no fixture or beam reaches is worth, so the rules agree with the
+## faint ambient the scene actually renders (main.tscn ambient_light_energy 0.2).
+## At the old 0.0 the screen showed a legible room while Combat.light_modifier
+## charged the full -30 for standing in it, which is exactly the divergence
+## aimed_light.gd exists to prevent.
+##
+## Moved up with that ambient rather than pinned: the two are a pair, and the
+## screen showing more than the rules admit is the failure this exists to avoid.
+##
+## EnemyUnit.sight_light_threshold (25.0) is the hard ceiling, not a guideline:
+## at or above it an unlit tile stops hiding anyone and the whole stealth design
+## goes with it. 12 keeps clear water under that. The cost is about 5 accuracy
+## points against the old floor — Combat.light_modifier's -30 becomes -25.2.
+const AMBIENT_FLOOR := 12.0
 const FLASHLIGHT_RANGE := 6.0  # tiles (Sec 5.2)
 const FLASHLIGHT_CONE_DEGREES := 90.0  # Sec 5.2
 const FLASHLIGHT_INTENSITY := 75.0  # 0-100 contribution at zero distance

@@ -24,7 +24,7 @@ A turn-based, squad-level tactics game in the spirit of *XCOM*, played in a full
 
 - **Platform:** PC (native build via Godot Engine)
 - **Engine:** Godot (4.x recommended for its Vulkan-based 3D renderer)
-- **Perspective:** Fully 3D environment, viewed via a free-moving camera defaulting to a bird's-eye angle (see Section 10.2 for camera spec)
+- **Perspective:** ⚠️ **SUPERSEDED** — see [docs/presentation-direction.md](docs/presentation-direction.md). The environment is still fully 3D, but it is viewed through a fixed orthographic isometric camera with four snapped yaws, and characters are hand-drawn 2D sprites composited into it. *(Was: fully 3D environment viewed via a free-moving camera defaulting to a bird's-eye angle, §10.2.)*
 - **Art style:** Stylized, low-poly
 - **Setting/tone:** Decrepit, derelict spaceships — dark corridors, failing power, *Dead Space*-inspired atmosphere
 
@@ -311,6 +311,11 @@ Final Accuracy % =
 
 ### 10.2 Camera System
 
+> ⚠️ **SUPERSEDED** by [docs/presentation-direction.md](docs/presentation-direction.md).
+> The camera is orthographic at a fixed 35.264° pitch with four snapped yaws, and has no
+> zoom at all. Left standing rather than rewritten: the free-orbit spec below is what the
+> game was built against, and the reasoning is worth being able to read.
+
 - **Type:** Free-moving camera — pan and rotate (orbit) around a focus point, with zoom.
 - **Default state:** Bird's-eye angle on load/scene start.
 - **Pitch clamp: 35°–75° from horizontal** — cannot reach a fully level or fully top-down angle. *(Tunable default.)*
@@ -343,6 +348,16 @@ Final Accuracy % =
 - Closed doors block both LOS raycasts (10.6) and sound propagation (5.4); open doors block neither.
 
 ### 10.6 Line of Sight & Rendering
+
+> ⚠️ **The rendering rule below is SUPERSEDED** by
+> [docs/presentation-direction.md](docs/presentation-direction.md) §4: unit sprites are
+> gated by **room**, not by a per-unit LOS raycast. A room is a piece of space the player
+> can reason about, where a per-unit ray gives a flickering set with no shape — and the
+> room rule also drives fast-forwarding unseen activations, which the raycast version had
+> nothing to say about.
+>
+> The **LOS calculation** itself (raycast, shared team vision, recompute on state change)
+> is unaffected and still current; only the render gating changed.
 
 - **Calculation method:** true raycast/line-trace per potential target.
 - **Sampling:** **multiple sample points per unit** (not just center-mass) for more accurate partial-cover detection, at the cost of more raycasts per check.

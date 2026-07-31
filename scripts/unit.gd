@@ -25,11 +25,10 @@ const BURST_STRAY_MAX := 2
 ## Metres per second while walking a path. Cosmetic ONLY — the tile budget and
 ## the AP economy know nothing about it, so no value here can affect balance.
 ##
-## Not a free choice: stride is fixed by whichever clip the unit's RUN stance
-## plays, so this is derived from the clip rather than picked (Sec 6.4 of
-## docs/mixamo-pipeline-plan.md). 4.5 is the soldier's, within 4% of its Mixamo
-## run's authored 4.34 m/s. Types whose clip disagrees override this in their
-## scene and take up the slack with UnitVisual.run_speed_scale.
+## 4.5 is the soldier's, carried over unchanged from the 3D rig it was measured
+## against. It is now the AUTHORING CONTRACT rather than a derived value: the
+## sprite run cycle is drawn to read correctly at 4.5 m/s, instead of the speed
+## being fitted to a clip that already existed. Slower types override it here.
 @export var move_speed: float = 4.5
 
 @onready var visual: UnitVisual = $Visual
@@ -72,7 +71,12 @@ var flashlight_on: bool = true
 
 # With no display there is nothing to animate, so walks and tracers resolve
 # instantly. Keeps the `--auto` headless smoke test fast.
-var _instant: bool = false
+var _headless: bool = false
+## Whether this unit's sprite is currently drawn. Written by MapBuilder from the
+## compartment graph: units are rendered only in rooms holding a player unit.
+## Deliberately coarser than a per-unit line-of-sight test — a room is a unit of
+## space the player can reason about, where a raycast result is not.
+var _rendered: bool = true
 
 # The shot the muzzle-flash frame is about to draw a tracer for.
 var _pending_shot: Combat.ShotResult = null
@@ -84,8 +88,32 @@ var _burst_strays: Array[int] = []
 var _name_label: Label3D = null
 
 
+## Whether this unit's actions should resolve with no time on the clock.
+##
+## Asked FRESH at each action rather than answered once at spawn, which is the
+## whole point: turn resolution awaits animations, so an unseen enemy's
+## activation would otherwise burn its full wall-clock time against a completely
+## static screen. Fast-forwarding it is the XCOM behaviour, and it comes out of
+## the path the headless smoke test already used rather than a new one.
+##
+## The combat log still narrates units resolved this way. That leak is accepted:
+## the log is slated for removal once the game runs smoothly, so suppressing it
+## would be work spent on something being deleted.
+func is_instant() -> bool:
+	return _headless or not _rendered
+
+
+## Called by MapBuilder when the revealed set changes. Hides the sprite, which
+## also stops it being awaited — see is_instant.
+func set_rendered(rendered: bool) -> void:
+	if rendered == _rendered:
+		return
+	_rendered = rendered
+	visual.visible = rendered
+
+
 func _ready() -> void:
-	_instant = DisplayServer.get_name() == "headless"
+	_headless = DisplayServer.get_name() == "headless"
 	if stats == null:
 		stats = UnitStats.new()
 	current_hp = stats.max_hp()
@@ -97,7 +125,7 @@ func _ready() -> void:
 	_name_label = get_node_or_null("NameLabel")
 	if _name_label:
 		_name_label.text = stats.display_name
-	visual.setup(_instant)
+	visual.setup()
 	visual.muzzle.connect(_on_muzzle)
 	visual.set_flashlight_enabled(has_flashlight and flashlight_on)
 
@@ -132,42 +160,27 @@ func move_along(path: Array[Vector3i]) -> void:
 		return
 	GridManager.set_occupant(grid_pos, null)
 	is_busy = true
-	# The deceleration clip strides out ground of its own, so it has to START
-	# that far from the destination rather than play on arrival — otherwise the
-	# feet walk out two paces the unit never covers. Zero when the character has
-	# no such clip, which collapses everything below back to a plain run.
-	var stop_span := visual.run_stop_travel()
-	var stop_rate := visual.run_stop_rate(move_speed)
-	var left := _distance_left(path)
-	var total := left[0] + global_position.distance_to(GridManager.grid_to_world(path[0]))
-	# A move with less ground than the deceleration needs cannot pay for it, and
-	# there is no honest way to shorten a stop: the clip's strides are its own
-	# length. Such a move walks instead — nothing to shed speed from, so nothing
-	# to stop out of — which is also what a soldier crossing one tile would do.
-	var walking := total < stop_span and visual.has_walk()
+	# A one-tile hop walks rather than runs, where the character has both gaits:
+	# a soldier crossing a single tile does not break into a sprint. Everything
+	# else the deceleration system used to decide here died with the 3D rig —
+	# a sprite has no stride to skate, so a tile is a tile.
+	var walking := path.size() == 1 and visual.has_walk()
 	var speed := UnitVisual.WALK_SPEED if walking else move_speed
-	if walking:
-		stop_span = 0.0  # keeps the deceleration out of every branch below
 	visual.set_stance(UnitVisual.WALK if walking else UnitVisual.RUN)
-	var stopping := false
-	for i in path.size():
-		var step := path[i]
-		var target := GridManager.grid_to_world(step)
-		var leg := global_position.distance_to(target)
-		# Whatever of this tile lies further out than the stop is still a run.
-		# Usually that is all of it or none of it; the split matters on the one
-		# tile the handover falls inside, which is rarely a tile boundary.
-		var run_span := clampf(leg + left[i] - stop_span, 0.0, leg)
-		if run_span > 0.001:
-			await _step_to(global_position.move_toward(target, run_span), speed)
-		if run_span < leg - 0.001:
-			# Metres of the clip's travel already behind us where this leg opens:
-			# zero on any path long enough to fit the whole deceleration, positive
-			# on a short hop, which skips into the clip rather than crawling it.
-			var covered := stop_span - left[i] - (leg - run_span)
-			if not stopping:
-				stopping = visual.begin_run_stop(covered, stop_rate)
-			await _decelerate_to(target, covered, stop_span - left[i], stop_rate)
+	var was_hidden := is_instant()
+	for step in path:
+		# Visibility is re-read per tile, which is what makes a unit that walks
+		# into the squad's line of sight animate the REST of its move instead of
+		# popping across the deck. The loop already does per-tile work for
+		# lighting and overwatch, so this drops in alongside it.
+		var hidden := is_instant()
+		if was_hidden and not hidden:
+			# Handover. Re-assert the stance from the top rather than trying to
+			# join a one-shot that has been running invisibly: a walk cycle can be
+			# picked up mid-stride, a reload cannot.
+			visual.set_stance(UnitVisual.WALK if walking else UnitVisual.RUN)
+		was_hidden = hidden
+		await _step_to(GridManager.grid_to_world(step), speed)
 		grid_pos = step
 		if is_downed:
 			break
@@ -181,43 +194,25 @@ func move_along(path: Array[Vector3i]) -> void:
 	is_busy = false
 	if is_downed:
 		return  # the collapse is already playing — don't stand it back up
-	# Grid state is settled BEFORE the settle plays out: the unit owns its
-	# destination tile from the moment it arrives, and what is left of the clip is
-	# purely cosmetic — nothing downstream waits on it to know where the unit is.
+	# Grid state is settled before the transition plays out: the unit owns its
+	# destination tile from the moment it arrives, and what is left is purely
+	# cosmetic — nothing downstream waits on it to know where the unit is.
 	GridManager.set_occupant(grid_pos, self)
 	global_position = GridManager.grid_to_world(grid_pos)
-	if stopping:
-		await visual.finish_run_stop()
-	elif walking:
-		# A walk is already at rest by the time it ends — there is nothing to
-		# decelerate out of, so it settles straight into idle.
+	if walking:
+		# A walk is already at rest by the time it ends, so it settles straight
+		# into idle rather than through a stop.
 		visual.set_stance(UnitVisual.IDLE)
 	else:
-		# No deceleration clip on this character: the old path, where the
-		# transition either plays in place or degrades to a hard cut.
 		await visual.play_stance_exit(UnitVisual.RUN_STOP, UnitVisual.IDLE)
 	moved.emit(self)
-
-
-## Metres of path still to cover once each step is reached, so move_along can
-## ask "is the stop's worth of ground left?" before committing to a tile.
-func _distance_left(path: Array[Vector3i]) -> PackedFloat32Array:
-	var out := PackedFloat32Array()
-	out.resize(path.size())
-	var acc := 0.0
-	for i in range(path.size() - 1, -1, -1):
-		out[i] = acc
-		if i > 0:
-			acc += GridManager.grid_to_world(path[i - 1]).distance_to(
-				GridManager.grid_to_world(path[i]))
-	return out
 
 
 func _step_to(target: Vector3, speed: float) -> void:
 	var dist := global_position.distance_to(target)
 	if dist < 0.001:
 		return
-	if _instant:
+	if is_instant():
 		global_position = target
 		return
 	var seconds := dist / speed
@@ -228,47 +223,10 @@ func _step_to(target: Vector3, speed: float) -> void:
 	await tween.finished
 
 
-## Covers the last stretch to `target` on the deceleration clip's own travel
-## curve — `from` and `to` are how far into that travel this leg starts and ends.
-## Position is driven from the clip rather than at a speed of its own, which is
-## the whole point: the feet are planting at the clip's pace, so the ground has
-## to move underneath them at exactly that pace or they skate.
-##
-## One known gap: an overwatch shot between two of these legs pauses the unit
-## while the clip keeps playing, so the rest of the stop runs out of sync. It
-## costs one leg of slide — the same artefact this replaced, at a fraction of the
-## length, and only on an interrupted move.
-func _decelerate_to(target: Vector3, from: float, to: float, rate: float) -> void:
-	var span := to - from
-	var seconds := (visual.run_stop_time_at(to) - visual.run_stop_time_at(from)) / rate
-	if _instant or span < 0.001 or seconds < 0.001:
-		global_position = target
-		return
-	var origin := global_position
-	var tween := create_tween()
-	tween.set_parallel(true)
-	tween.tween_method(_slide.bind(origin, target, from, span),
-		visual.run_stop_time_at(from), visual.run_stop_time_at(to), seconds)
-	_tween_yaw(tween, target, seconds)
-	await tween.finished
-	# The curve's last samples are flat to the millimetre, so the tween can land
-	# a hair short of the tile. Snapped rather than trusted.
-	global_position = target
-
-
-func _slide(clip_time: float, origin: Vector3, target: Vector3,
-		from: float, span: float) -> void:
-	var covered := visual.run_stop_travel_at(clip_time) - from
-	global_position = origin.lerp(target, clampf(covered / span, 0.0, 1.0))
-
-
 ## Adds the turn toward `target` to a parallel movement tween, `seconds` long.
 ##
 ## Both guards are about that parallel: `finished` waits for the LONGEST branch,
-## so a fixed 0.09s turn holds up any leg shorter than that — and the run now
-## ends on a leg deliberately cut short, the sliver between the last tile
-## boundary and where the deceleration takes over. Measured at 50 ms of the unit
-## standing still mid-sprint before the guards went in.
+## so a fixed 0.09s turn would hold up any leg shorter than that.
 func _tween_yaw(tween: Tween, target: Vector3, seconds: float) -> void:
 	var yaw := _yaw_toward(target)
 	if is_nan(yaw) or absf(yaw - rotation.y) < 0.001:
@@ -292,7 +250,7 @@ func face_toward(world_pos: Vector3) -> void:
 	var yaw := _yaw_toward(world_pos)
 	if is_nan(yaw):
 		return
-	if _instant:
+	if is_instant():
 		rotation.y = yaw
 	else:
 		is_busy = true
@@ -419,9 +377,9 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	# direction the last move left — and face_toward also swings the flashlight,
 	# which changes what is lit before the shot resolves.
 	await face_toward(target.global_position)
-	# face_toward only yaws the body — this tilts it so the barrel also points
-	# up/down at a target on a different floor or in a different stance.
-	visual.set_aim_pitch(target.global_position)
+	# No vertical aim. A sprite has no spine to tilt, so a shot at a target on
+	# another deck reads flatter than it did; if that comes back it will be
+	# per-pitch-band art on an arm layer, not a bone solve.
 	ammo -= 1
 	var result := Combat.resolve_shot(self, target, action, body_part)
 	is_busy = true
@@ -433,7 +391,6 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	await visual.play_burst(rounds)  # emits `muzzle` once per round
 	_pending_shot = null
 	_pending_target = null
-	visual.clear_aim_pitch()
 	if result.hit:
 		target.take_damage(result.damage)
 		if action == Combat.ShotAction.AIMED_SHOT and not target.is_downed:
@@ -467,7 +424,7 @@ func melee_at(target: Unit) -> Combat.ShotResult:
 	is_busy = true
 	await visual.play_action(UnitVisual.MELEE)
 	if result.hit:
-		if not _instant:
+		if not is_instant():
 			var vfx := get_tree().get_first_node_in_group("vfx")
 			if vfx:
 				vfx.impact(target.global_position, result.crit)
@@ -478,7 +435,7 @@ func melee_at(target: Unit) -> Combat.ShotResult:
 
 func _on_muzzle() -> void:
 	# One of these per round of the burst, fired by UnitVisual.play_burst.
-	if _instant or _pending_shot == null or _pending_target == null:
+	if is_instant() or _pending_shot == null or _pending_target == null:
 		return
 	var round_index := _burst_round
 	_burst_round += 1

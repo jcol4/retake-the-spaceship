@@ -10,9 +10,20 @@
 [sub_resource type="Environment" id="env"]
 ambient_light_source = 2
 ambient_light_color = Color(0.5, 0.52, 0.58, 1)
-; TESTING: global light at default energy. Dark-scene values were
-; ambient_light_energy = 0.015 and Sun light_energy = 0.02, shadow_enabled = false.
-ambient_light_energy = 1.0
+; Ambient governs ONLY whether architecture silhouettes read. Character
+; legibility does not depend on it: sprites are UNSHADED and modulated from
+; their tile's light_value instead, so they stay readable in a corridor this
+; value leaves nearly black. Not the pre-migration 0.015 either — at that value
+; an unlit corridor is literally black, which was survivable under free orbit
+; and is not under a camera the player cannot rotate to re-read the space with.
+; Paired with LightingManager.AMBIENT_FLOOR so the rules agree with the screen.
+;
+; Judged on screen against 0.1 and 0.25 once the ortho camera was in. 0.1 was
+; the plan's proposal and is too dark under it: bulkheads went black, and with
+; the camera no longer free to orbit there is no way left to re-read the space.
+; 0.25 reads as a lit room. 0.2 silhouettes structure while the flashlight
+; beams still carry the scene, which is the whole point of the lighting design.
+ambient_light_energy = 0.2
 volumetric_fog_enabled = true
 volumetric_fog_density = 0.01
 volumetric_fog_albedo = Color(1, 1, 1, 1)
@@ -47,7 +58,6 @@ script = ExtResource("6_vfx")
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("env")
 
-[node name="Sun" type="DirectionalLight3D" parent="."]
-transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 20, 0)
-light_energy = 1.0
-shadow_enabled = true
+; The Sun DirectionalLight3D is deliberately gone. There is no sun inside a
+; hull, and a directional shadow map over an interior costs real frame time for
+; a read that means nothing. Fixtures and flashlights are the only light now.

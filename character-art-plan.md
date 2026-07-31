@@ -66,6 +66,20 @@ Consequences:
 script that renders at a known resolution and counts the character's pixel height,
 so we tune against a real number.*
 
+> ✅ **DONE 2026-07-30 — and the caveat is closed with arithmetic rather than a script.**
+> Under the orthographic camera the number is exact, not measured: `Camera3D.size` is the
+> vertical world extent on screen, so a character's share of viewport height is simply
+> `height / size`, at any resolution. A 1.92 m sprite at `size = 12` is **16%** — inside
+> the 15–20% reference band.
+>
+> Pitch is fixed at 35.264° and there is no zoom control at all, so this framing cannot
+> drift out from under the art. That is the point of fixing it. See
+> [docs/presentation-direction.md](docs/presentation-direction.md).
+>
+> Note what item 3 above now means: the flat cartoon outline shader is not merely
+> unnecessary, it is inapplicable — the characters *are* hand-drawn, so whatever outline
+> they have is drawn, not shaded.
+
 ---
 
 ## 2. Budget

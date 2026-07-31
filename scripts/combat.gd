@@ -52,7 +52,13 @@ class ShotResult:
 	var hit: bool = false
 	var accuracy: int = 0
 	var damage: int = 0
+	# Which edge of the TARGET'S OWN tile defended the shot. Under edge cover the
+	# target stands on the covered tile, so `cover_tile` is always target_pos and
+	# `cover_side` is what actually identifies the prop.
 	var cover_tile: Vector3i
+	var cover_side: int = -1
+	var cover_type: int = MapData.Cover.NONE  # tier that applied, before this shot
+	var cover_broken: bool = false  # this shot knocked that tier down
 	var had_cover: bool = false
 	var flanked: bool = false
 	var crit: bool = false
@@ -64,26 +70,44 @@ class ShotResult:
 	var stunned: bool = false  # a torso crit stuns the target for its next activation
 
 
-static func find_defending_cover(shooter_pos: Vector3i, target_pos: Vector3i) -> Vector3i:
-	# Which adjacent cover tile (if any) protects target from this shooter?
-	# The cover must sit between them: the offset from target to cover must
-	# point toward the shooter. Returns target_pos itself if no cover applies.
-	var best := target_pos
-	var best_pen := 0
-	for cover_pos in GridManager.adjacent_cover_tiles(target_pos):
-		var cover_dir := Vector2(cover_pos.x - target_pos.x, cover_pos.z - target_pos.z)
-		var shot_dir := Vector2(shooter_pos.x - target_pos.x, shooter_pos.z - target_pos.z)
-		if shot_dir.length() == 0:
-			continue
-		# Coarse flank check (Sec 6.2): cover counts only if the shooter is
-		# within ~60 degrees of the cover's facing direction.
-		if cover_dir.normalized().dot(shot_dir.normalized()) > 0.5:
-			var t: GridTileData = GridManager.get_tile(cover_pos)
-			var pen := COVER_PENALTY_HEAVY if t.cover_type == GridTileData.CoverType.HEAVY else COVER_PENALTY_LIGHT
-			if pen > best_pen:
-				best_pen = pen
-				best = cover_pos
-	return best
+## Which edge of the target's tile, if any, this shot has to cross — as
+## [MapData.Cover tier, MapData.Side], or [NONE, -1] when the target is exposed.
+##
+## Replaces the old 60-degree dot-product flank heuristic (Sec 6.2). Cover
+## direction is discrete now, so this is a lookup rather than an estimate: take
+## the sign of the shooter's offset on each axis and read the edge it points at.
+##
+## A shot straight down an axis has one non-zero component and therefore tests
+## one edge. A DIAGONAL shot crosses a corner rather than an edge, so both
+## adjacent sides are tested and the stronger one applies — the XCOM rule, and
+## the generous reading: a unit tucked into a corner is genuinely harder to hit
+## from the diagonal than from either open side.
+static func defending_cover(shooter_pos: Vector3i, target_pos: Vector3i) -> Array:
+	var best_type := MapData.Cover.NONE
+	var best_side := -1
+	var dx := signi(shooter_pos.x - target_pos.x)
+	var dz := signi(shooter_pos.z - target_pos.z)
+	var sides: Array[int] = []
+	if dx != 0:
+		sides.append(MapData.Side.EAST if dx > 0 else MapData.Side.WEST)
+	if dz != 0:
+		sides.append(MapData.Side.SOUTH if dz > 0 else MapData.Side.NORTH)
+	for side in sides:
+		var t := GridManager.cover_type_on(target_pos, side)
+		# HEAVY sorts above LIGHT sorts above NONE in the enum, so the comparison
+		# is the tier comparison. Strictly greater, so on a tie the x edge wins
+		# and the result is deterministic.
+		if t > best_type:
+			best_type = t
+			best_side = side
+	return [best_type, best_side]
+
+
+static func cover_penalty(cover_type: int) -> int:
+	match cover_type:
+		MapData.Cover.HEAVY: return COVER_PENALTY_HEAVY
+		MapData.Cover.LIGHT: return COVER_PENALTY_LIGHT
+		_: return 0
 
 
 static func distance_penalty(dist: int) -> int:
@@ -123,10 +147,7 @@ static func compute_accuracy(shooter, target, action: ShotAction, body_part: int
 		acc += ZONE_ACCURACY_MOD.get(body_part, 0)
 	if shooter.grid_pos.y > target.grid_pos.y:
 		acc += HIGH_GROUND_BONUS
-	var cover_pos := find_defending_cover(shooter.grid_pos, target.grid_pos)
-	if cover_pos != target.grid_pos:
-		var t: GridTileData = GridManager.get_tile(cover_pos)
-		acc -= COVER_PENALTY_HEAVY if t.cover_type == GridTileData.CoverType.HEAVY else COVER_PENALTY_LIGHT
+	acc -= cover_penalty(defending_cover(shooter.grid_pos, target.grid_pos)[0])
 	if target.hunkered:
 		acc -= HUNKER_PENALTY
 	var dist := GridManager.chebyshev_dist(shooter.grid_pos, target.grid_pos)
@@ -179,11 +200,15 @@ static func resolve_shot(shooter, target, action: ShotAction, body_part: int = B
 				result.stunned = true
 
 	# Sec 6.1.1: every shot at a unit in cover damages the cover, hit or miss.
-	var cover_pos := find_defending_cover(shooter.grid_pos, target.grid_pos)
-	if cover_pos != target.grid_pos:
+	var defence := defending_cover(shooter.grid_pos, target.grid_pos)
+	if defence[0] != MapData.Cover.NONE:
 		result.had_cover = true
-		result.cover_tile = cover_pos
-		GridManager.damage_cover(cover_pos, shooter.stats.weapon_damage)
+		result.cover_tile = target.grid_pos
+		result.cover_side = defence[1]
+		result.cover_type = defence[0]
+		var left := GridManager.damage_cover_edge(
+			target.grid_pos, defence[1], shooter.stats.weapon_damage)
+		result.cover_broken = left != defence[0]
 	return result
 
 

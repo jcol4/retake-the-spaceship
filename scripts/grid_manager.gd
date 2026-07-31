@@ -9,7 +9,10 @@ var tiles: Dictionary = {}  # Vector3i -> GridTileData
 # Extra adjacency for stairs: Vector3i -> Array[Vector3i] (both directions added)
 var stair_links: Dictionary = {}
 
-signal cover_destroyed(pos: Vector3i)
+## Fired when an edge loses a tier, INCLUDING heavy dropping to light — the
+## listener that cares about "is there still cover here" has to re-ask either
+## way. `now` is the MapData.Cover value the edge has after the hit.
+signal cover_destroyed(pos: Vector3i, side: int, now: int)
 
 
 func clear() -> void:
@@ -204,27 +207,74 @@ func has_clear_line(from_node: Node3D, from: Vector3, to: Vector3) -> bool:
 	return hit.is_empty()
 
 
-func damage_cover(pos: Vector3i, amount: int) -> void:
-	# Sec 6.1.1: at 0 HP cover becomes impassable rubble, grants no bonus.
+# --- Edge cover (Sec 6.1, XCOM model) ---------------------------------------
+#
+# Cover sits on the boundary between two tiles rather than occupying a tile of
+# its own. Units stand ON covered tiles, so nothing here touches passability.
+
+
+## The side of the neighbouring tile that names the same edge.
+static func opposite_side(side: int) -> int:
+	return (side + 2) % 4
+
+
+## Registers one prop against both tiles it separates. The neighbour may not
+## exist (a crate bolted to a bulkhead), in which case only this side is written
+## — which is correct: there is nobody on the far side to protect.
+func add_cover_edge(pos: Vector3i, side: int, cover_type: int, node: Node3D) -> CoverEdge:
+	var edge := CoverEdge.new()
+	edge.type = cover_type
+	edge.hp = CoverEdge.hp_for(cover_type)
+	edge.node = node
+	var here: GridTileData = tiles.get(pos)
+	if here:
+		here.cover_edges[side] = edge
+	var there: GridTileData = tiles.get(pos + MapData.SIDE_STEP[side])
+	if there:
+		there.cover_edges[opposite_side(side)] = edge
+	return edge
+
+
+func cover_edge(pos: Vector3i, side: int) -> CoverEdge:
 	var t: GridTileData = tiles.get(pos)
-	if t == null or t.cover_type == GridTileData.CoverType.NONE:
-		return
-	t.cover_hp -= amount
-	if t.cover_hp <= 0:
-		t.cover_hp = 0
-		t.cover_type = GridTileData.CoverType.NONE
-		t.passable = false
-		if t.cover_node and t.cover_node.has_method("become_rubble"):
-			t.cover_node.become_rubble()
-		cover_destroyed.emit(pos)
+	return t.cover_edges.get(side) if t else null
 
 
-func adjacent_cover_tiles(unit_pos: Vector3i) -> Array[Vector3i]:
-	# Tiles orthogonally adjacent to the unit that hold intact cover.
-	var out: Array[Vector3i] = []
-	for offset in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
-		var n: Vector3i = unit_pos + offset
-		var t: GridTileData = tiles.get(n)
-		if t and t.cover_type != GridTileData.CoverType.NONE:
-			out.append(n)
+## MapData.Cover value protecting `pos` from `side`, or NONE.
+func cover_type_on(pos: Vector3i, side: int) -> int:
+	var edge := cover_edge(pos, side)
+	return edge.type if edge else MapData.Cover.NONE
+
+
+func covered_sides(pos: Vector3i) -> Array[int]:
+	var out: Array[int] = []
+	for side in [MapData.Side.EAST, MapData.Side.SOUTH, MapData.Side.WEST, MapData.Side.NORTH]:
+		if cover_type_on(pos, side) != MapData.Cover.NONE:
+			out.append(side)
 	return out
+
+
+## Sec 6.1.1: every shot at a covered unit chews at the cover. Returns the tier
+## the edge is left at.
+##
+## Heavy DEGRADES to light rather than disappearing: a blown-apart crate is still
+## something to crouch behind, and under the edge model there is no tile left to
+## turn into impassable rubble the way the old per-tile version did. Light is the
+## bottom tier and does go to nothing.
+func damage_cover_edge(pos: Vector3i, side: int, amount: int) -> int:
+	var edge := cover_edge(pos, side)
+	if edge == null or not edge.is_intact():
+		return MapData.Cover.NONE
+	edge.hp -= amount
+	if edge.hp > 0:
+		return edge.type
+	if edge.type == MapData.Cover.HEAVY:
+		edge.type = MapData.Cover.LIGHT
+		edge.hp = CoverEdge.hp_for(MapData.Cover.LIGHT)
+	else:
+		edge.type = MapData.Cover.NONE
+		edge.hp = 0
+	if edge.node and edge.node.has_method("set_tier"):
+		edge.node.set_tier(edge.type)
+	cover_destroyed.emit(pos, side, edge.type)
+	return edge.type

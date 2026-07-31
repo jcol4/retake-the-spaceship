@@ -1,7 +1,7 @@
 extends SceneTree
 ## Round-trip check for the map data model: text -> MapData -> text must come
-## back byte-identical, and the parsed data must expose the same spawns, stairs
-## and platform tiles the builder used to read straight off the ASCII.
+## back byte-identical, and the parsed data must expose the same spawns, stairs,
+## platform tiles, edge cover and compartment graph the builder reads off it.
 ##
 ##   godot --headless --path . --script res://tools/test_map_roundtrip.gd
 ##
@@ -19,14 +19,16 @@ func _initialize() -> void:
 	_check(not rows.is_empty(), "layout file loaded")
 	var data := MapAscii.parse(rows)
 
-	var encoded := MapAscii.encode(data)
-	_check(encoded.size() == rows.size(), "row count preserved (%d vs %d)" % [encoded.size(), rows.size()])
+	# The whole file, sections included — not just the grid block, or the
+	# [cover] section could drift without the test noticing.
+	var encoded := MapAscii.to_text(data).split("\n")
+	_check(encoded.size() == rows.size(), "line count preserved (%d vs %d)" % [encoded.size(), rows.size()])
 	var identical := true
 	for z in mini(encoded.size(), rows.size()):
 		if encoded[z] != rows[z]:
 			identical = false
-			print("  row %2d in : '%s'" % [z, rows[z]])
-			print("  row %2d out: '%s'" % [z, encoded[z]])
+			print("  line %2d in : '%s'" % [z, rows[z]])
+			print("  line %2d out: '%s'" % [z, encoded[z]])
 	_check(identical, "round-trip is byte-identical")
 
 	_check(data.size == Vector2i(20, 14), "deck size is 20x14 (got %s)" % data.size)
@@ -55,6 +57,9 @@ func _initialize() -> void:
 	_check(not walkable.has(Vector3i(15, 0, 10)), "platform base is not a walkable tile")
 	_check(walkable.has(Vector3i(15, 1, 10)), "platform top is a walkable tile")
 
+	_check_cover(data)
+	_check_rooms(data)
+
 	print("")
 	if _failures == 0:
 		print("map round-trip: ALL CHECKS PASSED")
@@ -62,6 +67,67 @@ func _initialize() -> void:
 	else:
 		print("map round-trip: %d CHECK(S) FAILED" % _failures)
 		quit(1)
+
+
+func _check_cover(data: MapData) -> void:
+	_check(data.cover_edges.size() == 3, "3 cover edges (got %d)" % data.cover_edges.size())
+	_check(data.cover_edge(Vector3i(8, 0, 4), MapData.Side.EAST) == MapData.Cover.LIGHT,
+		"light cover on the east edge of (8,4)")
+	_check(data.cover_edge(Vector3i(9, 0, 6), MapData.Side.SOUTH) == MapData.Cover.HEAVY,
+		"heavy cover on the south edge of (9,6)")
+
+	# The half of the model everything else depends on: an edge has two names and
+	# both must resolve to the same entry, or a crate would grant cover from one
+	# side and nothing from the other. (7,8)-east IS (8,8)-west.
+	_check(data.cover_edge(Vector3i(8, 0, 8), MapData.Side.WEST) == MapData.Cover.LIGHT,
+		"the same edge read from the neighbouring tile's west side")
+	_check(data.cover_edge(Vector3i(9, 0, 6), MapData.Side.SOUTH)
+		== data.cover_edge(Vector3i(9, 0, 7), MapData.Side.NORTH),
+		"north/south naming of one edge agrees")
+
+	# A tile is protected from the directions its covered edges face, and from
+	# nothing else.
+	var south_only: Array[int] = [MapData.Side.SOUTH]
+	_check(data.covered_sides(Vector3i(9, 0, 6)) == south_only,
+		"(9,6) is covered to the south only (got %s)" % [data.covered_sides(Vector3i(9, 0, 6))])
+	_check(data.covered_sides(Vector3i(1, 0, 1)).is_empty(), "an open tile has no covered sides")
+
+	# Cover no longer eats floor: units stand ON these tiles now.
+	_check(data.is_walkable(Vector3i(9, 0, 6)), "a covered tile is still walkable")
+
+
+func _check_rooms(data: MapData) -> void:
+	# Three compartments joined by two one-tile doorways: (5,7) through the left
+	# bulkhead and (14,12) through the right one. Each doorway is its own
+	# one-cell corridor region, which is why the count is 5 and not 3 — and why
+	# the graph is a chain, left - middle - right, with no direct left-right link.
+	_check(data.rooms.size() == 5, "5 regions (got %d)" % data.rooms.size())
+	_check(data.corridors.size() == 2, "2 of them are corridors (got %d)" % data.corridors.size())
+
+	var left := data.room_index_at(Vector3i(2, 0, 2))
+	var middle := data.room_index_at(Vector3i(9, 0, 6))
+	var right := data.room_index_at(Vector3i(17, 0, 2))
+	_check(left >= 0 and middle >= 0 and right >= 0, "the three squad rooms all resolve")
+	_check(left != middle and middle != right and left != right,
+		"the three rooms are distinct (%d, %d, %d)" % [left, middle, right])
+	_check(data.room_index_at(Vector3i(1, 0, 12)) == left,
+		"the far corner of the left room is the same room")
+
+	# A doorway belongs to neither room it joins — that separation is the whole
+	# reason a plain flood fill was not enough.
+	var door := data.room_index_at(Vector3i(5, 0, 7))
+	_check(door >= 0 and door != left and door != middle, "the (5,7) doorway is its own region")
+	_check(door in data.corridors, "and is flagged as a corridor")
+	_check(left in data.linked_rooms(door) and middle in data.linked_rooms(door),
+		"that doorway links the left and middle rooms")
+	_check(not (right in data.linked_rooms(door)),
+		"and does not reach the right room, two doorways away")
+
+	# Grid space vs cell space: the platform top is a grid key one deck up, and
+	# must still resolve to the room its base sits in.
+	_check(data.room_index_at(Vector3i(15, 1, 10)) == right,
+		"a platform top resolves to the room below it")
+	_check(data.room_index_at(Vector3i(0, 0, 0)) == -1, "a bulkhead belongs to no region")
 
 
 func _check(ok: bool, label: String) -> void:

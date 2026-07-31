@@ -1,60 +1,48 @@
 class_name UnitVisual
 extends Node3D
-## Owns a unit's model and its animation state. Unit code drives this by intent
-## ("play the shoot action"), never by clip name, so swapping the placeholder
-## capsule for a rigged model touches this file and the unit scenes only.
+## Owns a unit's sprite layers and their animation state. Unit code drives this
+## by intent ("play the shoot action"), never by clip name, which is what let the
+## rigged 3D characters be swapped out for hand-drawn sprites without `Unit`
+## changing at all.
 ##
-## Works with no AnimationPlayer assigned: stances become no-ops and actions
-## resolve on a timer of the length the clip will eventually be. That is the
-## path the capsule units take until the real model lands, and it keeps action
-## pacing identical across the swap.
+## Four `AnimatedSprite3D` layers by default — body, head, helmet, weapon — but
+## the set is data-driven (`layers`), because whether vertical aiming comes back
+## as an independently-posed arm layer is still open. Adding a fifth layer must
+## cost art and nothing else.
+##
+## Works with no authored art: `_build_placeholders` draws a readable stand-in
+## per layer and direction, and actions resolve on a timer of the length the
+## real animation will eventually take. That is the path every unit takes today,
+## and it keeps action pacing identical across the swap — the same guarantee the
+## no-AnimationPlayer fallback used to give.
 
-## Fired at the shot's muzzle-flash frame, from a method track on the shoot
-## clips. Drives the VFX tracer, so the beam leaves the barrel when the arm is
-## actually up rather than the instant the order was given.
+## Fired at the shot's muzzle-flash frame. Drives the VFX tracer, so the beam
+## leaves the barrel when the arm is up rather than the instant the order was
+## given.
 signal muzzle
 
 ## Fired as each boot lands during the run stance. Hook for footstep SFX and a
 ## camera shake — half of "heavy" is impact feedback, not joint angles.
 signal footstep
 
-# Frames where each boot first reaches the floor, measured at 0.10s and 0.433s
-# of the 0.667s run loop (tools/gen_soldier.py --traj run), so evenly spaced
-# half a cycle apart. Note the plant is NOT the contact key: the leg is still
-# reaching there and only loads three frames later.
-const FOOTSTEP_OFFSET := 0.10
-const FOOTSTEP_GAP := 0.333
-
-# Seconds of plain idle between attempts at an IDLE_FIDGET. Rolled fresh each
-# time rather than fixed, which matters most when several units are on screen:
-# a constant gap would have a nest of swarm units convulsing in lockstep, and
-# nothing reads as scripted faster than that.
-#
-# The range is set against the 6.13s clip for roughly a 1-in-5 duty cycle — often
-# enough that a watched nest is never still, rare enough that it stays an
-# event rather than the thing the unit does.
-const FIDGET_GAP_MIN := 12.0
-const FIDGET_GAP_MAX := 35.0
-
-# Stances persist until something changes them. Actions are one-shots that
-# hand back to the current stance when they finish.
+# Stances persist until something changes them. Actions are one-shots that hand
+# back to the current stance when they finish.
 const IDLE := &"idle"
 const RUN := &"run"
-## Short moves walk. See WALK_SPEED and Unit.move_along for when, and why it is
-## not simply the run played slower.
+## Short moves walk. See WALK_SPEED and Unit.move_along for when.
 const WALK := &"walk"
 const CROUCH := &"crouch_idle"
 const OVERWATCH := &"overwatch_hold"
 
-# Firing is two clips driven by play_burst rather than one clip per shot type:
-# the burst length is rolled per shot, and no fixed clip can match a count it
-# does not know. AIM_HOLD is the weapon up and steady, either side of the burst;
-# SHOOT_RECOIL is one round's kick, replayed from the start once per round.
+# Firing is two animations driven by play_burst rather than one per shot type:
+# the burst length is rolled per shot, and no fixed animation can match a count
+# it does not know. AIM_HOLD is the weapon up and steady either side of the
+# burst; SHOOT_RECOIL is one round's kick, replayed from the start once per round.
 const AIM_HOLD := &"aim_hold"
 const SHOOT_RECOIL := &"shoot_recoil"
-# Transitions. Not stances and not actions: each is a one-shot that bridges one
+# Transitions. Not stances and not actions: each is a one-shot bridging one
 # stance into another, played through play_stance_exit. All degrade to a hard
-# cut, at zero time cost, when the clip is absent.
+# cut, at zero time cost, when the art is absent.
 const RUN_STOP := &"run_stop"
 const STAND_TO_CROUCH := &"stand_to_crouch"
 const CROUCH_TO_STAND := &"crouch_to_stand"
@@ -64,28 +52,34 @@ const GRENADE := &"throw_grenade"
 const INTERACT := &"interact"
 const HIT_REACT := &"hit_react"
 const DOWNED := &"downed"
-# Alien-side only: played once when an alien wakes, by EnemyUnit's state machine
-# rather than by anything the player ordered. The player's squad has no
-# equivalent, and no soldier clip is mapped to it.
+## Alien-side only: played once when an alien wakes, by EnemyUnit's state machine
+## rather than by anything the player ordered.
 const ALERT_SCREAM := &"alert_scream"
-# Idle variation, played at random intervals while the IDLE stance holds. Not an
-# action and not a stance: it is a one-shot the unit slips into and out of on its
-# own, with nothing in the game waiting on it. See _fidget_loop for why that
-# distinction decides how it is played.
+## Idle variation, played at random intervals while IDLE holds. Not an action and
+## not a stance: a one-shot the unit slips into on its own, with nothing in the
+## game waiting on it. See _fidget_loop for why that decides how it is played.
 const IDLE_FIDGET := &"idle_fidget"
 
-# Stand-in durations for the no-model path, so action pacing is identical whether
-# or not an AnimationPlayer is attached. Only the capsule-bodied ranged alien
-# still takes this path; both rigged characters have real clips and ignore it.
-#
-# Two characters now supply these actions at different lengths — the soldier's
-# hit_react is 0.43s against the swarm's 2.00s. These are the SOLDIER's numbers,
-# because a unit with no model at all is a stand-in for a soldier. Update them if
-# the soldier's clip frame counts change.
+# Frames where each boot lands during the run cycle, evenly spaced half a cycle
+# apart. Carried over from the measured Mixamo run: the cadence is a property of
+# a soldier moving at 4.5 m/s, not of how the character is drawn, so the sprite
+# walk cycle is authored to match these rather than the other way round.
+const FOOTSTEP_OFFSET := 0.10
+const FOOTSTEP_GAP := 0.333
+
+# Seconds of plain idle between attempts at an IDLE_FIDGET. Rolled fresh each
+# time rather than fixed, which matters most with several units on screen: a
+# constant gap would have a nest of swarm units convulsing in lockstep, and
+# nothing reads as scripted faster than that.
+const FIDGET_GAP_MIN := 12.0
+const FIDGET_GAP_MAX := 35.0
+
+## Stand-in durations, so action pacing is identical with or without authored
+## art. These are the SOLDIER's measured clip lengths from the 3D pipeline that
+## preceded the sprites — kept because they are what the game's turn rhythm was
+## tuned against, and a sprite reload has no more reason to take a different
+## length than a mocap one did.
 const FALLBACK_TIME := {
-	# Measured off the swarm's trimmed Zombie Neck Bite. Melee is alien-side, and
-	# the swarm is the only thing in the game that owns a melee clip, so unlike
-	# its neighbours here this one is not a soldier length.
 	MELEE: 1.20,
 	RELOAD: 1.20,
 	GRENADE: 1.00,
@@ -97,132 +91,295 @@ const FALLBACK_TIME := {
 const DEFAULT_FALLBACK_TIME := 0.4
 
 # Burst timing. RAISE_TIME is the beat where the weapon comes up and steadies
-# before the first round — without it the shot reads as going off the instant
-# the order was given. CADENCE is the gap between rounds; SHOOT_RECOIL is 0.13s
-# long, so this leaves the kick just short of fully recovering before the next
-# one, which is what makes a burst look continuous rather than like separate
-# shots. SETTLE is the weapon held on target afterwards.
+# before the first round — without it the shot reads as going off the instant the
+# order was given. BURST_CADENCE is the gap between rounds, short enough that the
+# kick has not fully recovered when the next lands, which is what makes a burst
+# look continuous. SETTLE is the weapon held on target afterwards.
 const RAISE_TIME := 0.18
 const BURST_CADENCE := 0.11
 const SETTLE_TIME := 0.20
 
-# The ground RUN_STOP covers, and how it spends it. The clip is exported with its
-# root motion held (build_anims.py strip_mode "hold"), so the hips do not travel
-# and the STRIDES have to be paid for by moving the unit — which is what
-# Unit.move_along uses this table for. Playing the clip on arrival instead leaves
-# the feet walking out two more paces against ground that is not moving.
-#
-# Measured off the source, art_src/anims/Rifle Run To Stop.fbx: cumulative
-# horizontal Hips travel in metres, sampled every 2 of its 45 frames, so entry
-# i sits at i/(size-1) of the clip. Note the shape — it is NOT a smooth
-# deceleration. The first 60% of the clip is a near-constant 3.16 m/s run
-# covering 88% of the distance; everything after is the plant and the settle.
-# That is why this is a table and not an ease-out curve: no standard easing
-# spends its distance that way, and a wrong distribution IS foot skate.
-const RUN_STOP_CURVE := [
-	0.000, 0.211, 0.421, 0.610, 0.790, 0.987, 1.221, 1.455,
-	1.654, 1.814, 1.969, 2.121, 2.270, 2.418, 2.530, 2.606,
-	2.674, 2.736, 2.784, 2.814, 2.825, 2.826, 2.826,
-]
-
-## Playback rate for RUN_STOP, as a multiple of the clip's authored speed.
-##
-## The clip enters at 3.16 m/s (its first 2 frames of travel) while the soldier
-## runs at move_speed 4.5, so played as authored the unit would drop 30% of its
-## speed in one frame at the handoff — a visible lurch, at the exact moment the
-## eye is tracking the unit. Scaling by the ratio makes the entry continuous, and
-## it is not a fudge: a runner going 43% faster over the same 2.83 m genuinely
-## has to decelerate 43% harder. Time-scaling cannot introduce skate, because the
-## unit's position is driven from this same clip.
-##
-## Set to 1.0 to get the authored pacing back at the cost of that lurch.
-const RUN_STOP_ENTRY_SPEED := 3.16
-
 ## Metres per second for the WALK stance, replacing Unit.move_speed on the moves
-## that take it. Measured the same way as everything else here: Walking.fbx
-## travels 1.398 m over its 42 frames, so 1.02 m/s. Played at its authored rate
-## and moved at its authored speed, which is why it needs no correction of any
-## kind — unlike RUN, whose clip and move_speed were chosen independently.
+## that take it. Inherited from the measured Walking clip.
 const WALK_SPEED := 1.02
 
-# Stand-in barrel height for units with no rigged rifle, so their shots still
-# leave something shoulder-height rather than the floor.
-const FALLBACK_MUZZLE_HEIGHT := 1.4
+# --- Direction ---------------------------------------------------------------
+#
+# Sprite direction is the unit's yaw MINUS the camera's, quantised into eight
+# 45-degree buckets. Subtracting the camera is what makes this work under a rig
+# whose yaw snaps: a quarter turn moves every bucket by exactly two steps, so the
+# snap costs no additional art — but it DOES change every character's apparent
+# facing without any unit having turned, which is why _sync_direction is driven
+# off the rig's yaw_changed signal as well as off unit facing.
 
-const STANCE_BLEND := 0.15
-const ACTION_BLEND := 0.08
+## Screen-space directions, indexed by bucket. Bucket 0 is a unit facing directly
+## away from the camera, and the index rises with yaw — which, given Godot's -Z
+## forward and +X screen-right, runs anticlockwise on screen.
+const DIRECTIONS: Array[StringName] = [&"n", &"nw", &"w", &"sw", &"s", &"se", &"e", &"ne"]
 
-## Playback rate for the RUN stance, and only for it. A locomotion clip is
-## authored at a fixed ground speed while `Unit.move_speed` is chosen for turn
-## pacing, so the two have to be reconciled somewhere or the feet skate.
+## The 5-drawn + 3-mirrored rule. Only the five right-facing directions are
+## authored; the left-facing three are those flipped horizontally. Entries are
+## [source direction, flip_h].
 ##
-## The soldier needs no correction — its Mixamo run is authored at 4.34 m/s
-## against a move_speed of 4.5. The swarm does: Zombie Walk is authored at
-## 0.32 m/s (measured off the planted foot's backward sweep, since the clip is
-## In Place and has no root travel to read) against a move_speed of 1.5, which
-## is a 4.7x mismatch. Playing it at 2x halves that, and a 2.0s shamble cycle
-## still reads as a lurch rather than a sprint.
-@export var run_speed_scale: float = 1.0
+## A pose that is NOT symmetric — anything armed, where flipping moves the rifle
+## to the wrong shoulder — can be authored for all eight instead: if the sprite
+## set contains art for the mirrored direction itself, _sync_direction uses it
+## unflipped and this table never applies.
+const MIRROR := {
+	&"nw": [&"ne", true],
+	&"w": [&"e", true],
+	&"sw": [&"se", true],
+}
 
-# Exported as NodePaths and resolved in _ready rather than as exported Node
-# references: a NodePath written by hand into a .tscn does not get resolved into
-# a Node, which silently left every unit in the no-animation fallback path.
-@export var anim_path: NodePath = ^"soldier/AnimationPlayer"
-## Hidden when the unit goes down — capsule path only. A real model plays a
-## collapse and stays lying on the floor instead of vanishing.
-@export var fallback_mesh_path: NodePath
-## Empty on units with no rigged flashlight (the enemy capsule) — set_flashlight_enabled
-## is then a no-op rather than an error.
-@export var flashlight_path: NodePath = ^"soldier/Rig/Skeleton3D/RifleMount/rifle/Muzzle/Flashlight"
-## The barrel tip. Rides the rifle's BoneAttachment3D, so it tracks the weapon
-## through every clip — which is the whole point: shots have to leave the barrel
-## wherever the animation has put it, not the middle of the unit.
-@export var muzzle_path: NodePath = ^"soldier/Rig/Skeleton3D/RifleMount/rifle/Muzzle"
-## Empty on units with no rigged skeleton (the enemy capsule) — set_aim_pitch
-## is then a no-op rather than an error.
-@export var aim_pitch_path: NodePath = ^"soldier/Rig/Skeleton3D/AimPitch"
+## Layers, back to front. Data-driven rather than four hardcoded nodes so an arm
+## layer (or anything else) can be added in art alone.
+@export var layers: Array[StringName] = [&"body", &"head", &"helmet", &"weapon"]
 
-var anim: AnimationPlayer = null
-var fallback_mesh: Node3D = null
-var flashlight: Light3D = null
-var muzzle_point: Node3D = null
-var aim_pitch: AimPitch = null
+## Art variant, and the directory the `SpriteFrames` are looked up in. Gear swaps
+## are a reassignment of this — see `set_variant`.
+@export var variant: StringName = &"soldier"
+
+## Metres per source pixel. Shared by every layer, along with `offset`, because
+## the layers only stay registered with one another if they agree on both.
+@export var pixel_size: float = 0.03
+
+## Whether this character carries the rig-mounted light (Sec 5.2). Aliens do not.
+@export var has_light: bool = true
+
+# --- Placeholder art ---------------------------------------------------------
+
+## Source canvas, in pixels. Square so a rotation of the art never changes the
+## pivot, and 64 so pixel_size 0.03 puts a standing character at 1.92 m.
+const CANVAS := 64
+## Where the art's origin sits in the canvas: the FEET, not the centre. Every
+## layer shares it, which is what keeps a helmet on a head across a gear swap.
+const FOOT_ANCHOR := Vector2(0.5, 1.0)
+
+## Darkest a sprite is allowed to get. Sprites are UNSHADED and tinted from the
+## tile's light_value instead of being lit, so this is the floor of that tint:
+## far enough down to read as "in the dark", not so far the unit is lost.
+const MIN_TINT := 0.35
+
+## Where a shot leaves the weapon, relative to the unit: shoulder height, and
+## forward of the body so a tracer does not visibly start inside the chest.
+## Derived from unit yaw in world space rather than from a per-direction table,
+## because the muzzle is a world point and the camera must not move it.
+const MUZZLE_HEIGHT := 1.4
+const MUZZLE_REACH := 0.3
+## Height the rig light is mounted at. A fixed offset now: it used to ride a
+## helmet bone, and a sprite has no bones — but the light was never character
+## art, it is a detection mechanic (aimed_light.gd).
+const LIGHT_HEIGHT := 1.6
+
+var _sprites: Dictionary = {}  # layer StringName -> AnimatedSprite3D
+var _frames: Dictionary = {}  # layer StringName -> SpriteFrames
+var _light: SpotLight3D = null
+var _light_mount: Marker3D = null
+var _unit: Node3D = null
+## Cached: _sync_direction runs every frame per unit, and a group lookup there
+## would be the most-called line in the game for no reason.
+var _rig: Node3D = null
 
 var _stance: StringName = IDLE
 var _action: StringName = &""
-var _instant: bool = false
+var _direction := 0
+## True once real authored art is found. Decides whether an action's length comes
+## from the animation or from FALLBACK_TIME — see play_action.
+var _authored := false
 var _stepping: bool = false
 var _fidgeting: bool = false
 
 
 func _ready() -> void:
 	# Children are ready before their parent, so Unit._ready can rely on these.
-	anim = get_node_or_null(anim_path) as AnimationPlayer
-	fallback_mesh = get_node_or_null(fallback_mesh_path) as Node3D
-	flashlight = get_node_or_null(flashlight_path) as Light3D
-	muzzle_point = get_node_or_null(muzzle_path) as Node3D
-	aim_pitch = get_node_or_null(aim_pitch_path) as AimPitch
+	_unit = get_parent() as Node3D
+	_build_layers()
+	if has_light:
+		_build_light()
+	_rig = get_tree().get_first_node_in_group("camera_rig") as Node3D
+	if _rig:
+		_rig.yaw_changed.connect(_on_camera_yaw_changed)
+	if LightingManager:
+		LightingManager.lighting_changed.connect(_apply_tile_light)
+	_sync_direction()
 
 
-func setup(instant: bool) -> void:
-	_instant = instant
-	# has_animation guard for the same reason every other play site has one: a
-	# character whose idle clip failed to build would otherwise error here, once,
-	# at spawn — easy to miss in a log, and the unit then holds the rig's T-pose
-	# for the rest of the mission. (build_anims.py now refuses to export a GLB
-	# missing a stance clip, so this should be unreachable; it is cheap insurance
-	# against the model and the code disagreeing about a clip name.)
-	if anim and not _instant and anim.has_animation(IDLE):
-		anim.play(IDLE)
+## Whether playback should resolve with no time on the clock. Delegated to the
+## unit rather than cached, because the answer changes DURING a move: a unit that
+## walks into the squad's view stops being fast-forwarded partway through. One
+## authority for it, in Unit.is_instant, keeps the two halves from disagreeing.
+func _instant() -> bool:
+	return _unit.is_instant() if _unit and _unit.has_method("is_instant") else false
+
+
+func setup() -> void:
+	_play(IDLE)
+	_apply_tile_light()
 	# Started here as well as from set_stance so a unit fidgets from the moment it
-	# spawns. Aliens spend most of a mission UNAWARE at their nests, which is
+	# spawns. Aliens spend most of a mission asleep at their nests, which is
 	# precisely when the player is looking at one standing still.
 	_maybe_start_fidget()
 
 
+# --- Layer construction ------------------------------------------------------
+
+
+func _build_layers() -> void:
+	# Nothing to draw with no display, and the placeholder generator would paint
+	# 90 textures per layer per unit for a screen nobody is looking at. Every
+	# consumer already handles an empty layer set: _has_any returns false, which
+	# is the same answer a character with no art for a pose gives.
+	if DisplayServer.get_name() == "headless":
+		return
+	for layer in layers:
+		var frames := _load_frames(layer)
+		if frames == null:
+			frames = _placeholder_frames(layer)
+		else:
+			_authored = true
+		_frames[layer] = frames
+		var sprite := AnimatedSprite3D.new()
+		sprite.name = String(layer).capitalize()
+		sprite.sprite_frames = frames
+		sprite.pixel_size = pixel_size
+		# Every layer shares pixel_size and offset, which IS the pivot contract:
+		# reassigning one layer's frames can never shift it against the others.
+		sprite.offset = Vector2(0.0, CANVAS * FOOT_ANCHOR.y - CANVAS * 0.5)
+		# Always face the viewer, upright. Direction is carried by WHICH art is
+		# shown, never by turning the quad — that is the whole point of drawing
+		# eight of them.
+		sprite.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
+		# UNSHADED so hand-painted shading is not fought by the realtime lights;
+		# the tile's light_value drives `modulate` instead, which keeps the screen
+		# agreeing with the accuracy and detection rules.
+		sprite.shaded = false
+		sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
+		sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+		add_child(sprite)
+		_sprites[layer] = sprite
+
+
+## Authored art for one layer, or null while none exists. The naming convention is
+## `[part]_[variant]_[animation]_[direction]_[frame].png` under assets/sprites,
+## collected into one SpriteFrames per part+variant.
+func _load_frames(layer: StringName) -> SpriteFrames:
+	var path := "res://assets/sprites/%s_%s.tres" % [layer, variant]
+	if not ResourceLoader.exists(path):
+		return null
+	return load(path) as SpriteFrames
+
+
+## Reassigns every layer's art — a gear swap is exactly this and nothing else,
+## because the pivot contract above guarantees the new art lands where the old
+## art was.
+func set_variant(new_variant: StringName) -> void:
+	variant = new_variant
+	for layer in layers:
+		var frames := _load_frames(layer)
+		if frames == null:
+			frames = _placeholder_frames(layer)
+		else:
+			_authored = true
+		_frames[layer] = frames
+		(_sprites[layer] as AnimatedSprite3D).sprite_frames = frames
+	_play(_stance)
+
+
+func _build_light() -> void:
+	# A fixed offset on the unit, not a bone mount. Position follows this node and
+	# orientation follows the unit — see aimed_light.gd for why those must differ.
+	_light_mount = Marker3D.new()
+	_light_mount.name = "LightMount"
+	_light_mount.position = Vector3(0.0, LIGHT_HEIGHT, 0.0)
+	add_child(_light_mount)
+
+	_light = SpotLight3D.new()
+	_light.name = "Flashlight"
+	_light.set_script(load("res://scripts/aimed_light.gd"))
+	_light.set("origin_path", NodePath("../LightMount"))
+	# This node shares the unit's basis, so it is the facing source.
+	_light.set("facing_path", NodePath(".."))
+	_light.light_color = Color(0.94, 0.96, 1.0)
+	_light.light_energy = 7.0
+	_light.light_volumetric_fog_energy = 3.0
+	_light.shadow_enabled = true
+	_light.shadow_blur = 0.6
+	_light.spot_range = 9.0
+	# Matches LightingManager.FLASHLIGHT_CONE_DEGREES (90, so half-angle 45):
+	# what you see lit is what the unit can actually see by.
+	_light.spot_angle = 45.0
+	_light.spot_attenuation = 1.5
+	_light.spot_angle_attenuation = 2.5
+	add_child(_light)
+
+	var beam := MeshInstance3D.new()
+	beam.name = "Beam"
+	beam.set_script(load("res://scripts/flashlight_beam.gd"))
+	_light.add_child(beam)
+
+
 func set_flashlight_enabled(on: bool) -> void:
-	if flashlight:
-		flashlight.visible = on
+	if _light:
+		_light.visible = on
+
+
+# --- Direction ---------------------------------------------------------------
+
+
+func _on_camera_yaw_changed(_yaw: float) -> void:
+	_sync_direction()
+
+
+func _process(_delta: float) -> void:
+	# Unit facing is tweened rather than signalled, so it is polled. One float
+	# compare and a bucket calculation per unit per frame.
+	_sync_direction()
+
+
+## Re-buckets every layer in lockstep. Called on unit facing changes and on
+## camera yaw changes, because either one moves the direction the player sees.
+func _sync_direction() -> void:
+	if _unit == null:
+		return
+	var bucket := _bucket(_unit.rotation.y - _camera_yaw())
+	if bucket == _direction and not _sprites.is_empty():
+		return
+	_direction = bucket
+	_play(_action if _action != &"" else _stance)
+
+
+func _camera_yaw() -> float:
+	return _rig.rotation.y if _rig else 0.0
+
+
+## Static so the mapping can be checked without a scene — see
+## tools/test_sprite_direction.gd.
+static func direction_bucket(relative_yaw: float) -> int:
+	return wrapi(roundi(relative_yaw / (TAU / DIRECTIONS.size())), 0, DIRECTIONS.size())
+
+
+func _bucket(relative_yaw: float) -> int:
+	return direction_bucket(relative_yaw)
+
+
+## The animation name and flip for `base` in the current direction, resolving the
+## 5-drawn + 3-mirrored rule. Returns [name, flip_h].
+func _resolve(layer: StringName, base: StringName) -> Array:
+	var frames: SpriteFrames = _frames[layer]
+	var dir: StringName = DIRECTIONS[_direction]
+	var direct := &"%s_%s" % [base, dir]
+	# An asymmetric pose authored for all eight wins over the mirror table.
+	if frames.has_animation(direct):
+		return [direct, false]
+	if MIRROR.has(dir):
+		var m: Array = MIRROR[dir]
+		var mirrored := &"%s_%s" % [base, m[0]]
+		if frames.has_animation(mirrored):
+			return [mirrored, m[1]]
+	return [&"", false]
+
+
+# --- Playback ----------------------------------------------------------------
 
 
 func set_stance(stance: StringName) -> void:
@@ -231,198 +388,163 @@ func set_stance(stance: StringName) -> void:
 	_stance = stance
 	if _action != &"":
 		return
-	_play(stance, STANCE_BLEND)
-	if stance == RUN and not _stepping and not _instant:
+	_play(stance)
+	if stance == RUN and not _stepping and not _instant():
 		_footstep_loop()  # deliberately not awaited: runs until the stance ends
 	elif stance == IDLE:
 		_maybe_start_fidget()
 
 
 func play_action(action: StringName) -> void:
-	# Coroutine — callers MUST await, or the next game action resolves while
-	# this one is still on screen.
+	# Coroutine — callers MUST await, or the next game action resolves while this
+	# one is still on screen.
 	# Shooting does NOT come through here — see play_burst. This drives the
-	# one-shot clips that fire no rounds, so nothing here emits `muzzle`.
-	if _instant:
-		return
-	if anim == null or not anim.has_animation(action):
-		# No clip yet: hold for as long as the clip will, so timing-dependent
-		# code behaves the same before and after the model exists.
-		if action == DOWNED and fallback_mesh:
-			fallback_mesh.visible = false
-		await get_tree().create_timer(
-			FALLBACK_TIME.get(action, DEFAULT_FALLBACK_TIME)).timeout
+	# one-shots that fire no rounds, so nothing here emits `muzzle`.
+	if _instant():
 		return
 	_action = action
-	anim.play(action, ACTION_BLEND)
-	# Ignore finish signals from anything but the clip we just started.
-	while anim.is_playing() and anim.current_animation == action:
-		await anim.animation_finished
+	_play(action)
+	# With placeholder art an animation is a single held frame, so waiting on
+	# animation_finished would either return instantly or never. Holding for the
+	# length the authored animation will take is what keeps every timing-dependent
+	# caller behaving the same before and after the art exists.
+	if _authored and _has_any(action):
+		await _await_animation(action)
+	else:
+		await get_tree().create_timer(
+			FALLBACK_TIME.get(action, DEFAULT_FALLBACK_TIME)).timeout
 	_action = &""
 	# DOWNED holds its last frame; every other action returns to the stance.
 	if action != DOWNED:
-		_play(_stance, STANCE_BLEND)
+		_play(_stance)
 
 
 ## Plays a one-shot that bridges the current stance into `next`, then settles
 ## there. Coroutine — callers MUST await.
 ##
-## Unlike play_action, a missing clip costs NO time: it falls straight through to
-## the stance, which is exactly what the old behaviour was. That makes this safe
-## to call before the clip has been sourced, and means an absent clip degrades to
-## a hard cut rather than to a mysterious pause on every move.
+## Unlike play_action, missing art costs NO time: it falls straight through to
+## the stance. That makes this safe to call before the art has been drawn, and
+## means an absent transition degrades to a hard cut rather than to a mysterious
+## pause on every move.
 func play_stance_exit(action: StringName, next: StringName) -> void:
-	if _instant or anim == null or not anim.has_animation(action):
+	if _instant() or not _has_any(action):
 		set_stance(next)
 		return
 	# Assigned rather than passed to set_stance: writing the field directly
-	# records where to land WITHOUT playing it, so the exit clip is what shows
-	# on screen. play_action's tail then blends into whatever _stance has become.
+	# records where to land WITHOUT playing it, so the exit animation is what
+	# shows on screen. play_action's tail then settles into whatever _stance has
+	# become.
 	_stance = next
 	await play_action(action)
 
 
 ## Whether this character can walk a short move rather than run it. False for
-## anything with no walk clip (the swarm, the capsule alien), which keeps those
-## units on the single gait they have.
+## anything with no walk art, which keeps those units on the single gait they
+## have.
 func has_walk() -> bool:
-	return not _instant and anim != null and anim.has_animation(WALK)
-
-
-## Metres of ground the deceleration needs, so a mover knows how far from its
-## destination to hand over. Zero when this character has no RUN_STOP clip (and
-## on the headless path), which is what keeps every caller free of the question:
-## a zero-length stop is simply never entered, and the move ends as it used to.
-func run_stop_travel() -> float:
-	if _instant or anim == null or not anim.has_animation(RUN_STOP):
-		return 0.0
-	var last: float = RUN_STOP_CURVE[RUN_STOP_CURVE.size() - 1]
-	return last
-
-
-## Playback rate that makes the clip enter at `speed`. See RUN_STOP_ENTRY_SPEED.
-func run_stop_rate(speed: float) -> float:
-	return speed / RUN_STOP_ENTRY_SPEED
-
-
-## Clip time, in seconds, at which the deceleration has covered `metres`.
-func run_stop_time_at(metres: float) -> float:
-	var last := RUN_STOP_CURVE.size() - 1
-	var full: float = RUN_STOP_CURVE[last]
-	var target := clampf(metres, 0.0, full)
-	for i in last:
-		var to: float = RUN_STOP_CURVE[i + 1]
-		if target > to:
-			continue
-		var from: float = RUN_STOP_CURVE[i]
-		# Guard the flat tail, where several samples share a value and the
-		# fraction would be 0/0.
-		var frac := 0.0 if to == from else (target - from) / (to - from)
-		return (float(i) + frac) / float(last) * _run_stop_length()
-	return _run_stop_length()
-
-
-## The inverse: metres covered by clip time `seconds`.
-func run_stop_travel_at(seconds: float) -> float:
-	var last := RUN_STOP_CURVE.size() - 1
-	var length := _run_stop_length()
-	if length <= 0.0:
-		return 0.0
-	var x := clampf(seconds / length, 0.0, 1.0) * float(last)
-	var i := mini(int(x), last - 1)
-	var from: float = RUN_STOP_CURVE[i]
-	var to: float = RUN_STOP_CURVE[i + 1]
-	return lerpf(from, to, x - float(i))
-
-
-## Starts the deceleration `metres` into its own travel — non-zero only when the
-## path was too short to fit the whole clip, in which case the front of it is
-## skipped so the part that IS played still lands on the ground available.
-## Returns false when there is no clip, leaving the caller on the old path.
-func begin_run_stop(metres: float, rate: float) -> bool:
-	if _instant or anim == null or not anim.has_animation(RUN_STOP):
-		return false
-	# Set like play_action's, so nothing treats the unit as free mid-stop; unlike
-	# play_action this does NOT await, because the caller is driving the unit's
-	# position through the same clip and has to stay in control of the timing.
-	_action = RUN_STOP
-	anim.play(RUN_STOP, ACTION_BLEND, rate)
-	if metres > 0.0:
-		anim.seek(run_stop_time_at(metres), true)
-	return true
-
-
-## Holds until the settle at the tail of the clip — the part past the last of the
-## travel, which no movement pays for — finishes, then lands in IDLE.
-## Coroutine — callers MUST await.
-func finish_run_stop() -> void:
-	if _action == RUN_STOP:
-		while anim.is_playing() and anim.current_animation == RUN_STOP:
-			await anim.animation_finished
-		_action = &""
-		_play(IDLE, STANCE_BLEND)
-	# Written last, and unconditionally: if something else took the body during
-	# the move (a hit react on the way in), that one-shot's own tail hands back to
-	# whatever _stance has become — and a unit that has arrived is standing, not
-	# still running. Same reason play_stance_exit assigns the field directly.
-	_stance = IDLE
-
-
-func _run_stop_length() -> float:
-	return anim.get_animation(RUN_STOP).length if anim else 0.0
-
-
-## Where a shot leaves the weapon, in world space. Falls back to a point above
-## the unit for anything with no rigged rifle (the enemy capsule), so callers
-## never have to special-case it.
-func muzzle_origin() -> Vector3:
-	if muzzle_point:
-		return muzzle_point.global_position
-	return global_position + Vector3(0.0, FALLBACK_MUZZLE_HEIGHT, 0.0)
-
-
-## Tilts the upper body so the barrel points at a target above or below eye
-## level. No-op on units with no skeleton (the enemy capsule) — the raw
-## height difference then plays no part in whether the shot lands.
-func set_aim_pitch(world_pos: Vector3) -> void:
-	if aim_pitch:
-		aim_pitch.aim_at(world_pos)
-
-
-func clear_aim_pitch() -> void:
-	if aim_pitch:
-		aim_pitch.clear_aim()
+	return not _instant() and _has_any(WALK)
 
 
 func play_burst(rounds: int) -> void:
 	# Coroutine — callers MUST await. Weapon comes up, fires `rounds` rounds on a
 	# fixed cadence, holds, then hands back to the stance. One `muzzle` per round.
-	if _instant:
+	if _instant():
 		for _i in rounds:
 			muzzle.emit()
-		return
-	if anim == null or not anim.has_animation(SHOOT_RECOIL):
-		# No clips yet: hold for as long as the real burst will so shot pacing is
-		# the same before and after the model exists.
-		for _i in rounds:
-			muzzle.emit()
-			await get_tree().create_timer(BURST_CADENCE).timeout
-		await get_tree().create_timer(RAISE_TIME + SETTLE_TIME).timeout
 		return
 	_action = SHOOT_RECOIL
-	_play(AIM_HOLD, STANCE_BLEND)
+	_play(AIM_HOLD)
 	await get_tree().create_timer(RAISE_TIME).timeout
 	for _i in rounds:
-		# seek(0) rather than a plain play(): play() on the clip already running
-		# is a no-op, so every round after the first would silently skip its kick.
-		anim.play(SHOOT_RECOIL)
-		anim.seek(0.0, true)
+		# Restarted from frame 0 rather than merely played: play() on the
+		# animation already running is a no-op, so every round after the first
+		# would silently skip its kick.
+		_play(SHOOT_RECOIL, true)
 		muzzle.emit()
 		await get_tree().create_timer(BURST_CADENCE).timeout
-	_play(AIM_HOLD, ACTION_BLEND)
+	_play(AIM_HOLD)
 	await get_tree().create_timer(SETTLE_TIME).timeout
 	_action = &""
-	_play(_stance, STANCE_BLEND)
+	_play(_stance)
+
+
+## Where a shot leaves the weapon, in world space.
+##
+## Derived from the UNIT's yaw rather than from the sprite's screen direction, on
+## purpose: the muzzle is a point in the world that LOS and the tracer both read,
+## and rotating the camera must not move it. A per-direction table would be an
+## art refinement on top of this, not a replacement for it.
+func muzzle_origin() -> Vector3:
+	var yaw: float = _unit.rotation.y if _unit else 0.0
+	var forward := Vector3(-sin(yaw), 0.0, -cos(yaw))
+	return global_position + forward * MUZZLE_REACH + Vector3(0.0, MUZZLE_HEIGHT, 0.0)
+
+
+func _has_any(base: StringName) -> bool:
+	for layer in layers:
+		if _resolve(layer, base)[0] != &"":
+			return true
+	return false
+
+
+## Drives every layer from one call, which is what keeps them in lockstep: they
+## are started in the same frame with the same animation name and the same
+## restart flag, so no layer can drift a frame behind another.
+func _play(base: StringName, restart: bool = false) -> void:
+	if _instant():
+		return
+	for layer in layers:
+		var sprite: AnimatedSprite3D = _sprites.get(layer)
+		if sprite == null:
+			continue
+		var resolved := _resolve(layer, base)
+		var name: StringName = resolved[0]
+		if name == &"":
+			sprite.visible = false  # this layer has nothing to show for this pose
+			continue
+		sprite.visible = true
+		sprite.flip_h = resolved[1]
+		if restart or sprite.animation != name:
+			sprite.play(name)
+			if restart:
+				sprite.set_frame_and_progress(0, 0.0)
+
+
+func _await_animation(base: StringName) -> void:
+	# Waited on ONE layer — whichever has art for this pose. Every layer was
+	# started in the same frame with the same length, so one finishing is all of
+	# them finishing.
+	for layer in layers:
+		var name: StringName = _resolve(layer, base)[0]
+		if name == &"":
+			continue
+		var sprite: AnimatedSprite3D = _sprites[layer]
+		while sprite.is_playing() and sprite.animation == name:
+			await sprite.animation_finished
+		return
+
+
+# --- Lighting ----------------------------------------------------------------
+
+
+## Tints every layer by the light on the unit's own tile. This is the sprite
+## equivalent of being lit, and it is deliberately driven from the same
+## light_value that Combat.light_modifier and alien detection read: a unit that
+## looks dark must be one the rules also treat as dark.
+func _apply_tile_light() -> void:
+	if _unit == null:
+		return
+	var tile: GridTileData = GridManager.get_tile(_unit.get("grid_pos"))
+	var lit := clampf(tile.light_value / 100.0, 0.0, 1.0) if tile else 1.0
+	var level := lerpf(MIN_TINT, 1.0, lit)
+	var tint := Color(level, level, level)
+	for layer in layers:
+		var sprite: AnimatedSprite3D = _sprites.get(layer)
+		if sprite:
+			sprite.modulate = tint
+
+
+# --- Idle behaviour ----------------------------------------------------------
 
 
 func _footstep_loop() -> void:
@@ -435,10 +557,10 @@ func _footstep_loop() -> void:
 
 
 func _maybe_start_fidget() -> void:
-	# Silently does nothing for a character with no fidget clip, which is every
-	# character but the swarm. Same shape as every other clip in this file: the
-	# code is written once and the model decides whether it applies.
-	if _instant or _fidgeting or anim == null or not anim.has_animation(IDLE_FIDGET):
+	# Silently does nothing for a character with no fidget art. Same shape as
+	# everything else here: the code is written once and the art decides whether
+	# it applies.
+	if _instant() or _fidgeting or not _has_any(IDLE_FIDGET):
 		return
 	_fidget_loop()  # deliberately not awaited: runs until the stance leaves IDLE
 
@@ -447,14 +569,14 @@ func _fidget_loop() -> void:
 	## Slips an idle variation in at random intervals. Not awaited by anything —
 	## a fidget is scenery, and no game state may ever depend on one.
 	##
-	## Played through anim.play directly rather than through play_action, and that
-	## is the whole design. play_action sets `_action`, which makes set_stance
-	## record-but-not-play until the one-shot finishes — correct for a reload,
-	## disastrous here, because IDLE is the default stance and a 6-second fidget
-	## would routinely be in flight when a move order arrives. The unit would
-	## then slide to its destination still convulsing. Leaving `_action` empty
-	## means any real stance change cuts the fidget off mid-frame and wins, which
-	## is exactly the priority a decoration should have.
+	## Played directly rather than through play_action, and that is the whole
+	## design. play_action sets `_action`, which makes set_stance record-but-not-
+	## play until the one-shot finishes — correct for a reload, disastrous here,
+	## because IDLE is the default stance and a long fidget would routinely be in
+	## flight when a move order arrives. The unit would then slide to its
+	## destination still convulsing. Leaving `_action` empty means any real stance
+	## change cuts the fidget off mid-frame and wins, which is exactly the
+	## priority a decoration should have.
 	_fidgeting = true
 	while _stance == IDLE and is_inside_tree():
 		await get_tree().create_timer(
@@ -464,23 +586,105 @@ func _fidget_loop() -> void:
 			break
 		if _action != &"":
 			continue  # a real one-shot owns the body; try again after the next gap
-		anim.play(IDLE_FIDGET, STANCE_BLEND)
-		await get_tree().create_timer(
-			anim.get_animation(IDLE_FIDGET).length).timeout
-		# Hand back only if the fidget is still what is playing. Testing the clip
-		# rather than the stance is what makes the interruption safe: if anything
-		# took over during those seconds it already called play() itself, and this
-		# becomes a no-op instead of yanking the unit back to idle.
-		if is_inside_tree() and anim.current_animation == IDLE_FIDGET:
-			_play(IDLE, STANCE_BLEND)
+		_play(IDLE_FIDGET, true)
+		await _await_animation(IDLE_FIDGET)
+		if is_inside_tree() and _stance == IDLE and _action == &"":
+			_play(IDLE)
 	_fidgeting = false
 
 
-func _play(clip: StringName, blend: float) -> void:
-	if anim == null or _instant:
-		return
-	if anim.current_animation != clip and anim.has_animation(clip):
-		# RUN is the only rate-corrected clip. Every other one is a gesture whose
-		# authored timing IS the content, and the game already awaits its real
-		# length — scaling those would desynchronise animation from turn pacing.
-		anim.play(clip, blend, run_speed_scale if clip == RUN else 1.0)
+# --- Placeholder art ---------------------------------------------------------
+#
+# Drawn in code rather than shipped as PNGs, so there are no stand-in assets to
+# mistake for real ones later and nothing to delete when the art lands. Every
+# pose and direction the game asks for exists, which means the whole system —
+# layering, bucketing, mirroring, gear swap, lockstep playback — is exercisable
+# now, and dropping real SpriteFrames into assets/sprites/ replaces it silently.
+
+
+## Base colour per layer, so the four are told apart at a glance.
+const PLACEHOLDER_COLOR := {
+	&"body": Color(0.32, 0.36, 0.30),
+	&"head": Color(0.78, 0.62, 0.50),
+	&"helmet": Color(0.22, 0.25, 0.28),
+	&"weapon": Color(0.15, 0.15, 0.17),
+}
+## Poses the placeholder draws crouched rather than standing, so hunkering and
+## overwatch are visibly different from standing there.
+const PLACEHOLDER_CROUCHED := [CROUCH, STAND_TO_CROUCH, CROUCH_TO_STAND, OVERWATCH]
+## Every pose the placeholder generates art for — the full vocabulary above, so
+## no caller can ask for something that does not exist.
+const PLACEHOLDER_POSES := [
+	IDLE, RUN, WALK, CROUCH, OVERWATCH, AIM_HOLD, SHOOT_RECOIL, RUN_STOP,
+	STAND_TO_CROUCH, CROUCH_TO_STAND, MELEE, RELOAD, GRENADE, INTERACT,
+	HIT_REACT, DOWNED, ALERT_SCREAM, IDLE_FIDGET,
+]
+
+
+func _placeholder_frames(layer: StringName) -> SpriteFrames:
+	var frames := SpriteFrames.new()
+	frames.remove_animation(&"default")
+	for pose: StringName in PLACEHOLDER_POSES:
+		# Only the five authored directions, so the mirror table is genuinely
+		# exercised rather than bypassed by drawing all eight.
+		for dir: StringName in [&"n", &"ne", &"e", &"se", &"s"]:
+			var name := &"%s_%s" % [pose, dir]
+			frames.add_animation(name)
+			frames.set_animation_loop(name, pose in [IDLE, RUN, WALK, CROUCH, OVERWATCH, AIM_HOLD])
+			frames.add_frame(name, _placeholder_texture(layer, pose, dir))
+	return frames
+
+
+func _placeholder_texture(layer: StringName, pose: StringName, dir: StringName) -> ImageTexture:
+	var image := Image.create(CANVAS, CANVAS, false, Image.FORMAT_RGBA8)
+	image.fill(Color(0, 0, 0, 0))
+	var color: Color = PLACEHOLDER_COLOR.get(layer, Color(0.6, 0.6, 0.6))
+	var prone := pose == DOWNED
+	var crouched := pose in PLACEHOLDER_CROUCHED
+	# How far the art leans toward the viewer, so the eight buckets are told apart
+	# without reading a label: -1 is facing away, +1 is facing the camera.
+	var lean: float = {&"n": -1.0, &"ne": -0.5, &"e": 0.0, &"se": 0.5, &"s": 1.0}.get(dir, 0.0)
+	# Screen-right component, so a weapon sits on the correct side of the body.
+	var side: float = {&"n": 0.0, &"ne": 0.7, &"e": 1.0, &"se": 0.7, &"s": 0.0}.get(dir, 0.0)
+
+	var floor_y := CANVAS - 2
+	var height := 22 if crouched else 38
+	if prone:
+		# Flat on the deck: a downed unit must not read as a standing one.
+		_box(image, 14, floor_y - 8, 36, 7, color)
+		return ImageTexture.create_from_image(image)
+
+	match layer:
+		&"body":
+			_box(image, CANVAS / 2 - 8, floor_y - height, 16, height, color)
+			# A lighter front panel, offset toward the viewer: the fastest read of
+			# which way a featureless block is facing.
+			if lean > 0.0:
+				_box(image, CANVAS / 2 - 6, floor_y - height + 4, 12, 10,
+					color.lightened(0.35))
+		&"head":
+			_disc(image, CANVAS / 2 + int(side * 2.0), floor_y - height - 6, 6, color)
+		&"helmet":
+			_disc(image, CANVAS / 2 + int(side * 2.0), floor_y - height - 8, 7,
+				color.darkened(0.1))
+			# Visor, drawn only when the face is toward the camera.
+			if lean > 0.0:
+				_box(image, CANVAS / 2 - 4 + int(side * 2.0), floor_y - height - 7, 8, 3,
+					Color(0.85, 0.2, 0.18))
+		&"weapon":
+			var x := CANVAS / 2 + int(side * 9.0) - 2
+			_box(image, x, floor_y - height + 8, 4, 16, color)
+	return ImageTexture.create_from_image(image)
+
+
+func _box(image: Image, x: int, y: int, w: int, h: int, color: Color) -> void:
+	for py in range(maxi(y, 0), mini(y + h, CANVAS)):
+		for px in range(maxi(x, 0), mini(x + w, CANVAS)):
+			image.set_pixel(px, py, color)
+
+
+func _disc(image: Image, cx: int, cy: int, r: int, color: Color) -> void:
+	for py in range(maxi(cy - r, 0), mini(cy + r + 1, CANVAS)):
+		for px in range(maxi(cx - r, 0), mini(cx + r + 1, CANVAS)):
+			if Vector2(px - cx, py - cy).length() <= float(r):
+				image.set_pixel(px, py, color)
