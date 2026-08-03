@@ -39,6 +39,27 @@ exposure to it" problem.
   "front unit + support unit" building block that reads the same way across both factions even
   though the underlying mechanics differ.
 
+## Alpha implementation
+
+[`scripts/sagittarii_unit.gd`](../../../../../../scripts/sagittarii_unit.gd) +
+[`scenes/sagittarii_unit.tscn`](../../../../../../scenes/sagittarii_unit.tscn). Map glyph `M`.
+
+| | |
+|---|---|
+| HP / Armor | 65 / 8 |
+| Weapon | MKV Support Cannon — 30 accuracy, 16 damage, 5-round magazine |
+| Movement | 2 tiles per AP (`move_tiles_per_ap`), `move_speed` 1.8 |
+| Cover-ignoring | `light_cover_penalty_mult` 0.5 — half the Light Cover penalty, Heavy untouched |
+| Salvage | 4 |
+
+Armor 8 is what makes it the EMP target rather than a damage race, and the arithmetic is meant
+to be visible in the combat log: an Assault Rifle's 12 damage delivers **4** against the plate
+and **12** into a zeroed-armor window. Three magazines, or one grenade and one magazine.
+
+The cover reduction is asked of the *shooter* (`Unit.cover_penalty_for`) rather than read from
+a flat table, so the HUD's previewed hit chance and the shot that actually fires come from one
+code path and cannot disagree.
+
 ## Open items
 
 - Exact Armor value, the Light Cover penalty-reduction amount, and movement-per-turn numbers —

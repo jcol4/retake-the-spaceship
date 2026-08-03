@@ -37,9 +37,16 @@ script = ExtResource("1_script")
 ; rather than a scene edit.
 ;
 ; The sprite's pivot is its FEET, so no Y offset here.
+; TWO layers, not the four-layer default. The merc is drawn as one figure with
+; a separately-posed arm, so `head` and `helmet` are painted into `body` -- and
+; an empty layer would not stay empty, it would fall back to placeholder art and
+; paint a grey disc over the face. `arm` carries the rifle, which is why the
+; art is authored for all eight directions rather than five: mirroring would put
+; the weapon in the wrong hand. See tools/build_sprite_frames.gd.
 [node name="Visual" type="Node3D" parent="."]
 script = ExtResource("3_visual")
-variant = &"soldier"
+layers = Array[StringName]([&"body", &"arm"])
+variant = &"merc"
 has_light = true
 
 [node name="Body" type="StaticBody3D" parent="."]

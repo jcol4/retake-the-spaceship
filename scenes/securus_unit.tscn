@@ -1,0 +1,44 @@
+[gd_scene load_steps=4 format=3 uid="uid://csecurusunit01"]
+
+[ext_resource type="Script" path="res://scripts/securus_unit.gd" id="1_script"]
+[ext_resource type="Script" path="res://scripts/unit_visual.gd" id="2_visual"]
+
+[sub_resource type="CapsuleShape3D" id="capsule_shape"]
+radius = 0.55
+height = 2.3
+
+[node name="SecurusUnit" type="Node3D" groups=["enemy_units", "units"]]
+script = ExtResource("1_script")
+; Slow, but it walks the whole way. Faster than Sagittarii because arriving is
+; the entire threat.
+move_speed = 2.6
+; The thickest plate in either roster. With the head intact, the answer is EMP
+; or an Aimed Shot; with it broken, ordinary gunfire finally works.
+armor_value = 10
+move_tiles_per_ap = 3
+head_hp = 24
+broken_head_damage_mult = 1.75
+; Half the roster's EMP duration. The lever still works — it is just a narrower
+; window than the one that solves a Sagittarii, which is the elite tell.
+emp_stun_duration_mult = 0.5
+salvage_value = 8
+
+[node name="Visual" type="Node3D" parent="."]
+script = ExtResource("2_visual")
+layers = Array[StringName]([&"body", &"head", &"status"])
+variant = &"securus"
+placeholder_style = &"machine"
+has_light = false
+
+[node name="Body" type="StaticBody3D" parent="."]
+collision_layer = 2
+collision_mask = 0
+
+[node name="Collision" type="CollisionShape3D" parent="Body"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.15, 0)
+shape = SubResource("capsule_shape")
+
+[node name="NameLabel" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.8, 0)
+billboard = 1
+text = "Securus"

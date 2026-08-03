@@ -63,6 +63,32 @@ its melee range and Armor, then finish it off fast once the head breaks.
   premium rate given its elite billing — exact amount deferred alongside the rest of the faction's
   Salvage economy (GDD Section 12, item 7).
 
+## Alpha implementation
+
+[`scripts/securus_unit.gd`](../../../../../../scripts/securus_unit.gd) +
+[`scenes/securus_unit.tscn`](../../../../../../scenes/securus_unit.tscn). Map glyph `J`.
+
+| | |
+|---|---|
+| HP / Armor | 85 / 10 — the thickest plate in either roster |
+| Attack | Melee only: 60 accuracy, 18 damage. No ranged weapon at all |
+| Movement | 3 tiles per AP, `move_speed` 2.6 — slow, but it walks the whole way |
+| Head | `head_hp` 24; once broken, `broken_head_damage_mult` 1.75 on every subsequent hit |
+| EMP | `emp_stun_duration_mult` 0.5 — half the roster's window |
+| Salvage | 8 |
+
+**The head.** `apply_body_part_damage` is the hook, which `Unit.fire_at` calls for an Aimed
+Shot and nothing else — so a snap shot cannot touch the pool even on a crit, exactly as
+designed. It takes the **raw** damage roll: armor is subtracted for HP and not for the head,
+because a weak point covered by the unit's own plating is not a weak point. Two committed
+Aimed Shots break it at typical rifle damage; after that, ordinary gunfire finally works.
+
+**Breach** takes one tier off the cover between it and its target on the way in, reusing the
+existing degradation rule (`GridManager.damage_cover_edge`) rather than adding a second
+destruction path — so heavy goes to light and light goes to nothing. Stated against Sagittarii:
+that one shoots *through* light cover, this one removes cover outright. Hunkering behind a
+crate is an answer to one and an invitation to the other.
+
 ## Open items
 
 - Exact head-HP threshold, bonus-damage multiplier once broken, and EMP stun-duration reduction —

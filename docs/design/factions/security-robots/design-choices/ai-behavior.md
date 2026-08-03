@@ -1,5 +1,16 @@
 # AI Behavior
 
+> ⚙️ **Implemented 2026-07-31.** `CerberusUnit` extends `EnemyUnit`, so the state machine is
+> reused rather than reimplemented, exactly as this document asks. Standing Post is a real
+> behaviour and not just a rename: a robot that finds nothing walks back to the tile it spawned
+> on. The exported parameters below exist under the names used here, with two clarifications —
+> `preferred_engagement_range` landed as the pair `holds_position` + `post_leash` (which is what
+> the Auxilium's "will not be pulled off its post" actually needed), and `network_zone_ref` as
+> the integer `security_zone`, assigned from the deck's compartment graph at spawn. Utility
+> *scoring* is not implemented for either faction yet — the aliens' AI is the same
+> state-machine-without-scoring it has always been, so the weights below describe intent, not
+> code. See [`alpha-implementation.md`](alpha-implementation.md).
+
 ## Reusing the alien state-machine model, with one state swapped
 
 Cerberus units reuse the same **layered state machine + utility scoring** approach the aliens use

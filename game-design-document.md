@@ -36,7 +36,10 @@ A turn-based, squad-level tactics game in the spirit of *XCOM*, played in a full
 
 - **Square tile grid** underlying a fully 3D environment (reference: *XCOM*'s grid logic, presented in true 3D rather than fixed-angle 2.5D).
 - **Elevation matters** — the grid supports multiple height levels/floors (high ground, ledges, stairs), affecting line of sight and accuracy (Section 6.4).
-- **Diagonal movement costs the same as orthogonal movement** (1 tile), keeping movement math simple rather than modeling true distance.
+- **Movement is four-way — no diagonal steps at all.** A unit moves along the grid axes only, so reaching a diagonally adjacent tile costs 2 tiles rather than 1. This follows from the presentation rather than from tactics: characters are hand-drawn in four directions (`docs/presentation-direction.md`), and those four are exactly the world axes, so a diagonal step would face a unit at an angle no art exists for. It also makes cornering read as cornering — a unit turns at the corner instead of sliding through it.
+  - *Supersedes the original rule that diagonals cost the same as orthogonals.*
+  - **Range is still measured square (Chebyshev)** — weapon range, detection, EMP throw and alert propagation all count a diagonal as 1. Only feet are restricted to the axes; a shot or a sensor sweep crosses a corner perfectly happily. Anything that must be *walked* to asks `GridManager.is_melee_adjacent` instead.
+  - Move allowances were raised by half (base 4 → 6 tiles per AP) to hold effective reach roughly where it was. **These have not been playtested against four-way movement.**
 - **Elevation traversal has no extra cost** — moving between floors (stairs/ramps) is treated like any other tile move, no additional AP or tile penalty.
 - **Movement is predictive**: before committing, the player sees a highlighted set of reachable tiles for Run and Sprint, so positioning decisions are made with full information about where a soldier *can* end up — not just a raw tile-count number.
 - **The movement preview also shows light level per tile.** Since light is a continuous, tactically important value (Section 5), the reachable-tile overlay visually communicates which destination tiles are lit vs. dark, letting players route through darkness deliberately.
@@ -175,6 +178,7 @@ Line of sight is a core system — visibility is a **continuous, manageable reso
 - Accuracy scales with target visibility: shooting at a poorly-lit target incurs a penalty; a fully-lit target grants a bonus. Applies symmetrically to player and enemy units.
 - **Stacking math is additive**: all modifiers (cover, light, elevation, stats) add to/subtract from a base accuracy percentage rather than multiplying against each other (see Section 6.5 for the full formula).
 - **Light modifier formula:** linear between a **−30% penalty** at 0% light and a **+10% bonus** at 100% light. A tile no fixture or flashlight reaches defaults to 0% (pitch dark), not neutral — total darkness is a real tactical liability, not a wash. *(Tunable default.)*
+- **One faction is exempt.** The security robots (see the note in Section 11) neither read light nor are read by it, in either direction. That exemption is the second faction's whole reason to exist: this pillar was only ever tested from one side — darkness helps you hide — and an enemy that does not care about it is the missing case. See Section 6.5.
 
 ### 5.2 Flashlights
 
@@ -258,6 +262,7 @@ Final Accuracy % =
   − Distance Penalty (falloff by range, see below)
 ```
 
+- **Exception — the security robots (Section 11's note).** The Light Modifier term is treated as **0** for any roll where either side is a Cerberus unit, in both directions: their sensors do not read light, so a dark tile and a lit one are the same tile to them. Nothing else in this formula changes for them; Armor is a *damage* reduction applied after the roll succeeds, not an accuracy term, so it neither stacks with nor replaces Cover. See [`docs/design/factions/security-robots/design-choices/`](docs/design/factions/security-robots/design-choices/).
 - Perception/Reflexes (Section 4.6) are the shooter's own base accuracy contribution, applied before situational modifiers.
 - Luck (Section 4.6.4) is applied **after** this formula resolves — governing crit chance/severity on a hit, and reroll odds on a miss.
 
@@ -387,6 +392,19 @@ Final Accuracy % =
 ## 11. AI & Enemy Design
 
 *Theme: an alien infestation aboard the derelict ship. Current mission archetype: clear-out.*
+
+> ⚠️ **This section describes ONE of the game's two enemy factions.** A second — **Cerberus
+> Applied Sciences**, the ship's own security robots — was designed after this document was
+> written and now has an alpha implementation in code. It is deliberately the mechanical
+> inverse of the aliens on every axis below: sensor-driven rather than light-driven,
+> zone-alerted rather than locally alerted, armored, and destroyed outright rather than
+> injured. It reuses the state machine in 11.1 and the formula in 6.5 rather than replacing
+> either, with one flat exception noted in 6.5.
+>
+> It is **not folded into this document**; its source of truth is
+> [`docs/design/factions/security-robots/`](docs/design/factions/security-robots/). The design
+> intent in one line: *aliens are a lighting puzzle, security robots are a positioning-and-EMP
+> puzzle*, and a mission with both makes the player hold two mental models at once.
 
 ### 11.1 AI Decision Model
 

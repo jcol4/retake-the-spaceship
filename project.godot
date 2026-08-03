@@ -23,6 +23,7 @@ config/features=PackedStringArray("4.7", "Forward Plus")
 GridManager="*res://scripts/grid_manager.gd"
 LightingManager="*res://scripts/lighting_manager.gd"
 TurnManager="*res://scripts/turn_manager.gd"
+SecurityNetwork="*res://scripts/security_network.gd"
 
 [filesystem]
 

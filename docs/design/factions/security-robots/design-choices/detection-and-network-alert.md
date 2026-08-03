@@ -1,5 +1,12 @@
 # Detection & Network Alert
 
+> ⚙️ **Implemented 2026-07-31**, with one approximation: a **zone is currently one compartment
+> plus its doorways**, not the cluster of rooms this document asks for — the derived room graph
+> cannot express anything between "one room" and "the whole deck". Reasoning, and the authored-
+> zone escape hatch that closes it without code, are in
+> [`alpha-implementation.md`](alpha-implementation.md) §3. Everything else below — the light
+> exception, motion, sound, evidence scanning, the priority call-in, no-new-spawns — is in.
+
 This is the faction's central mechanical bet: aliens use the player's own light/sound system
 against them; Cerberus units are built to **ignore the light half of it entirely**, so the player
 has to fight a genuinely different problem, not a reskinned one.

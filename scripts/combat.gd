@@ -65,6 +65,10 @@ class ShotResult:
 	var severe_crit: bool = false  # headshot-only upgrade over a normal crit
 	var lucky_reroll: bool = false  # attacker's Luck saved an otherwise-missed shot
 	var lucky_dodge: bool = false  # defender's Luck saved an otherwise-landed shot
+	# Damage the target's Armor swallowed (security robots). `damage` above is
+	# what actually landed once this was taken off, so the two together are the
+	# whole story of one hit and the log never has to guess which it is holding.
+	var absorbed: int = 0
 	var body_part: int = -1  # Combat.BodyPart targeted, only set for AIMED_SHOT
 	var newly_injured: bool = false  # this hit just crossed the targeted part's injury threshold
 	var stunned: bool = false  # a torso crit stuns the target for its next activation
@@ -137,6 +141,26 @@ static func light_modifier(target_pos: Vector3i) -> int:
 	return roundi(lerp(-float(LIGHT_DARK_PENALTY), float(LIGHT_BRIGHT_BONUS), lit))
 
 
+## Whether the Sec 5.1 light term applies to a roll between these two at all.
+##
+## It does not when either side is a security robot: their sensors do not read
+## light, so a tile at 0% and a tile at 100% are the same tile to them, whether
+## they are the ones shooting or the ones being shot at. This is the faction's
+## central mechanical bet — killing the lights is the answer to the aliens and
+## buys nothing here — so it is a flat exception to the formula rather than a
+## modifier inside it.
+##
+## Duck-typed rather than checked against `CerberusUnit` on purpose: `Combat` is
+## loaded standalone by the headless tools, and naming a unit class here would
+## drag the whole scene-tree-dependent half of the project in with it.
+static func light_matters(shooter, target) -> bool:
+	return not _light_agnostic(shooter) and not _light_agnostic(target)
+
+
+static func _light_agnostic(unit) -> bool:
+	return unit != null and unit.has_method("light_agnostic") and unit.light_agnostic()
+
+
 static func compute_accuracy(shooter, target, action: ShotAction, body_part: int = BodyPart.TORSO) -> int:
 	var acc: int = shooter.stats.perception + shooter.stats.weapon_base_accuracy
 	if action == ShotAction.SHOOT or action == ShotAction.OVERWATCH:
@@ -147,13 +171,17 @@ static func compute_accuracy(shooter, target, action: ShotAction, body_part: int
 		acc += ZONE_ACCURACY_MOD.get(body_part, 0)
 	if shooter.grid_pos.y > target.grid_pos.y:
 		acc += HIGH_GROUND_BONUS
-	acc -= cover_penalty(defending_cover(shooter.grid_pos, target.grid_pos)[0])
+	# Asked of the SHOOTER rather than read from the flat table, so a weapon that
+	# partly ignores cover (Sagittarii's) affects the HUD's preview and the shot
+	# it fires through one code path instead of two that can disagree.
+	acc -= shooter.cover_penalty_for(defending_cover(shooter.grid_pos, target.grid_pos)[0])
 	if target.hunkered:
 		acc -= HUNKER_PENALTY
 	var dist := GridManager.chebyshev_dist(shooter.grid_pos, target.grid_pos)
 	acc -= distance_penalty(dist)
 	acc -= weapon_range_penalty(shooter.stats.weapon, dist)
-	acc += light_modifier(target.grid_pos)
+	if light_matters(shooter, target):
+		acc += light_modifier(target.grid_pos)
 	acc -= shooter.ranged_accuracy_penalty()  # Sec 4.2: an injured arm shakes every ranged shot, not just melee
 	return clampi(acc, 1, 99)
 
@@ -255,12 +283,17 @@ static func resolve_melee(attacker, target) -> ShotResult:
 
 
 static func describe(result: ShotResult) -> String:
+	# Armor is called out rather than folded silently into a smaller number: a
+	# player who cannot see the plate eating half the shot has no way to work out
+	# that the EMP grenade in their kit is the answer.
+	var armor := " (-%d armor)" % result.absorbed if result.absorbed > 0 else ""
 	if result.severe_crit:
-		return "SEVERE CRITICAL for %d dmg!!" % result.damage
+		return "SEVERE CRITICAL for %d dmg!!%s" % [result.damage, armor]
 	if result.crit:
-		return "CRITICAL HIT for %d dmg!" % result.damage
+		return "CRITICAL HIT for %d dmg!%s" % [result.damage, armor]
 	if result.hit:
-		return "LUCKY HIT for %d dmg" % result.damage if result.lucky_reroll else "HIT for %d dmg" % result.damage
+		var verb := "LUCKY HIT" if result.lucky_reroll else "HIT"
+		return "%s for %d dmg%s" % [verb, result.damage, armor]
 	if result.lucky_dodge:
 		return "LUCKY DODGE"
 	return "MISS"

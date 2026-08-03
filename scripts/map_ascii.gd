@@ -18,6 +18,11 @@ extends RefCounted
 ## Grid legend (one glyph per tile):
 ##   ' ' void      '.' floor     '#' wall      'R' raised platform
 ##   'P' player spawn          'E' enemy spawn         'S' swarm spawn
+##   Security robots, one glyph per model, taken from the first letter of the
+##   MODEL CODE rather than of the name — the names collide with glyphs that are
+##   already spoken for (S is the swarm, s is a stair), the codes do not:
+##   'Q' QRN-4 Auxilium        'M' MKV-9 Sagittarii
+##   'X' XVT-7 Proctor         'J' JXM-2 Securus
 ##   'o' overhead light        'm' monitor light       'f' flickering light
 ##   's' stair tile, LOWERCASE — links to the platform directly north of it,
 ##       and is a different thing entirely from an uppercase 'S'
@@ -47,6 +52,10 @@ const GLYPHS := {
 	"P": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.PLAYER, false],
 	"E": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.ENEMY, false],
 	"S": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.SWARM, false],
+	"Q": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.AUXILIUM, false],
+	"M": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.SAGITTARII, false],
+	"X": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.PROCTOR, false],
+	"J": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.SECURUS, false],
 	"o": [MapData.Terrain.FLOOR, MapData.Fixture.OVERHEAD, MapData.Spawn.NONE, false],
 	"m": [MapData.Terrain.FLOOR, MapData.Fixture.MONITOR, MapData.Spawn.NONE, false],
 	"f": [MapData.Terrain.FLOOR, MapData.Fixture.FLICKER, MapData.Spawn.NONE, false],
@@ -157,6 +166,10 @@ static func _glyph_for(cell: MapData.Cell) -> String:
 		MapData.Spawn.PLAYER: return "P"
 		MapData.Spawn.ENEMY: return "E"
 		MapData.Spawn.SWARM: return "S"
+		MapData.Spawn.AUXILIUM: return "Q"
+		MapData.Spawn.SAGITTARII: return "M"
+		MapData.Spawn.PROCTOR: return "X"
+		MapData.Spawn.SECURUS: return "J"
 	match cell.fixture:
 		MapData.Fixture.OVERHEAD: return "o"
 		MapData.Fixture.MONITOR: return "m"

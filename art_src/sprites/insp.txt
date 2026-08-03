@@ -1,0 +1,19 @@
+canvas 65x65  frames=10
+tag 'run_sw' 1-10
+layer ref_background     vis=false op=255 cels=10
+layer ref_body_outline   vis=false op= 94 cels=10
+layer ref_arms_outline   vis=false op=102 cels=10
+layer body               vis=true  op=255 cels=10
+layer arm                vis=true  op=255 cels=10
+
+per-frame body+arm metrics (x centre of ink, lowest ink row, foot spans on bottom rows):
+f0  ink x 17..55 cx= 36.0  lowest_row=63  contact x 28..33 mid= 30.5
+f1  ink x 17..55 cx= 36.0  lowest_row=64  contact x 20..26 mid= 23.0
+f2  ink x 18..56 cx= 37.0  lowest_row=64  contact x 20..26 mid= 23.0
+f3  ink x 16..60 cx= 38.0  lowest_row=64  contact x 45..52 mid= 48.5
+f4  ink x 16..60 cx= 38.0  lowest_row=64  contact x 35..42 mid= 38.5
+f5  ink x 20..58 cx= 39.0  lowest_row=64  contact x 35..41 mid= 38.0
+f6  ink x 22..60 cx= 41.0  lowest_row=63  contact x 32..39 mid= 35.5
+f7  ink x 22..60 cx= 41.0  lowest_row=64  contact x 29..43 mid= 36.0
+f8  ink x 22..60 cx= 41.0  lowest_row=61  contact x 43..50 mid= 46.5
+f9  ink x 20..58 cx= 39.0  lowest_row=64  contact x 32..39 mid= 35.5

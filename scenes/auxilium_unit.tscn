@@ -1,0 +1,41 @@
+[gd_scene load_steps=4 format=3 uid="uid://cauxiliumunit01"]
+
+[ext_resource type="Script" path="res://scripts/auxilium_unit.gd" id="1_script"]
+[ext_resource type="Script" path="res://scripts/unit_visual.gd" id="2_visual"]
+
+[sub_resource type="CapsuleShape3D" id="capsule_shape"]
+radius = 0.38
+height = 1.6
+
+[node name="AuxiliumUnit" type="Node3D" groups=["enemy_units", "units"]]
+script = ExtResource("1_script")
+; Slower than a soldier and slower than an alien: it repositions, it does not
+; travel. The number is cosmetic (Unit.move_speed) — the tile budget is what the
+; AP economy reads — but it is what sells "this thing holds ground".
+move_speed = 2.2
+armor_value = 4
+holds_position = true
+post_leash = 3
+salvage_value = 2
+
+; Four layers: chassis, sensor housing, mounted weapon, and the status light that
+; replaces the body language a player would read off an alien.
+[node name="Visual" type="Node3D" parent="."]
+script = ExtResource("2_visual")
+layers = Array[StringName]([&"body", &"head", &"weapon", &"status"])
+variant = &"auxilium"
+placeholder_style = &"machine"
+has_light = false
+
+[node name="Body" type="StaticBody3D" parent="."]
+collision_layer = 2
+collision_mask = 0
+
+[node name="Collision" type="CollisionShape3D" parent="Body"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.8, 0)
+shape = SubResource("capsule_shape")
+
+[node name="NameLabel" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.2, 0)
+billboard = 1
+text = "Auxilium"

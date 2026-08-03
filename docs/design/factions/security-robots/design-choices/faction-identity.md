@@ -34,7 +34,27 @@ This is deliberately the *only* piece of lore load-bearing enough to matter for 
 - `QRN-4 Auxilium` is a placeholder picked to fit this scheme — not yet confirmed, unlike
   `XVT-7 Proctor`, `JXM-2 Securus`, and `MKV-9 Sagittarii`, which are locked in.
 
-## Visual/audio direction (proposal, not yet built)
+## Visual/audio direction
+
+*Placeholder art built 2026-07-31; no authored art for this faction or any other yet. See
+[`alpha-implementation.md`](alpha-implementation.md) §5 for what the stand-in draws.*
+
+**What the presentation imposes.** The game is isometric — 2D sprites over 3D levels, at a fixed
+35.264° pitch, in four direction buckets, with a character occupying about 16% of viewport
+height, usually in a dark corridor (see
+[`../../../../presentation-direction.md`](../../../../presentation-direction.md)). Three consequences
+for this faction specifically:
+
+- **Silhouette does the work, not detail.** At that size a robot is a shape and two or three
+  colours. Each model therefore owns a *proportion* — squat post, wide platform, small hovering
+  drone, tall elite — rather than being distinguished by panel lines nobody will resolve.
+- **Four buckets, two drawn.** The 2-drawn + 2-mirrored rule applies here as everywhere.
+  Anything asymmetric — a shoulder-mounted weapon — must either be authored for all four or be
+  designed symmetric. A machine is the easiest thing in the game to design symmetric, and that
+  is worth taking. Halving the buckets doubles the value of that: a symmetric robot now needs
+  two drawn directions per pose where the merc needs four.
+- **The status light is not decoration, it is the HUD.** See below; it is also why it is the one
+  sprite layer exempt from the tile-light tint.
 
 Kept intentionally distinct from both the aliens (organic, biological silhouettes) and the
 contractors (`character-art-plan.md`'s worn tactical-gear read) so a player can tell factions
@@ -51,4 +71,6 @@ most:
 - **Audio:** servo/hydraulic movement sounds, distinct from alien vocalizations, and — important
   for the sound-detection channel (GDD Section 5.4) — a **audible network chirp** when a robot
   broadcasts an alert, giving the player a sound cue that a zone-wide alert just triggered, not
-  just a UI popup.
+  just a UI popup. *Not built: the game has no audio at all yet. The broadcast is announced in
+  the combat log instead, and `SecurityNetwork.alert_broadcast` is the signal an audio bus would
+  hang off when there is one.*

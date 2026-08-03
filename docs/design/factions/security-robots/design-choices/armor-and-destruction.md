@@ -1,5 +1,12 @@
 # Armor, EMP, and Destruction (no injury state)
 
+> ⚙️ **Implemented 2026-07-31**, including the EMP grenade as a real player action (1 AP,
+> range 6, 3×3, one charge per soldier, armed from the HUD). Two rules the design left implicit
+> were decided during the build and are argued in
+> [`alpha-implementation.md`](alpha-implementation.md) §2: **a floor of 1 damage** gets through
+> any plate, and **Armor does not protect a component pool** — Securus's head takes the raw
+> roll. Salvage accrues; what it buys is still open, as below.
+
 ## Armor as a distinct layer from Cover
 
 Cerberus units carry a personal **Armor** value in addition to normal HP, layered *underneath*

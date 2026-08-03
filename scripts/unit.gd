@@ -45,6 +45,10 @@ var hunkered: bool = false
 var on_overwatch: bool = false
 var stunned: bool = false  # set by an incoming torso crit; burns this unit's next activation
 var is_busy: bool = false  # animating a move or a shot — reject new orders
+## Turn number this unit last walked on, for motion-based detection (the security
+## robots' sensors read movement where the aliens read light). -1 so a unit that
+## has never moved is never mistaken for one that just did.
+var last_moved_turn: int = -1
 
 # VATS-style body-part injury tracking (Sec 4.2/6.5). Each part accumulates the
 # raw damage Aimed Shots land on it; crossing its threshold flags it injured for
@@ -159,6 +163,7 @@ func move_along(path: Array[Vector3i]) -> void:
 	if path.is_empty():
 		return
 	GridManager.set_occupant(grid_pos, null)
+	last_moved_turn = TurnManager.turn_number
 	is_busy = true
 	# A one-tile hop walks rather than runs, where the character has both gaits:
 	# a soldier crossing a single tile does not break into a sprint. Everything
@@ -237,10 +242,18 @@ func _tween_yaw(tween: Tween, target: Vector3, seconds: float) -> void:
 func _yaw_toward(world_pos: Vector3) -> float:
 	# Godot forward is -Z. Returns the short way round rather than unwinding
 	# through a full turn, or NAN when the point is directly underfoot.
+	#
+	# QUANTISED to the four grid axes, and that is a hard requirement rather than
+	# a tidiness one: a character is drawn in four directions
+	# (UnitVisual.DIRECTIONS), so a unit holding a yaw between two of them has no
+	# art to show and the sprite layer hides itself. Movement already produces
+	# axis-aligned yaws — GridManager.STEPS sees to that — but `face_toward` is
+	# driven by a raw mouse click, and that is the case this catches.
 	var delta := world_pos - global_position
 	if absf(delta.x) <= 0.001 and absf(delta.z) <= 0.001:
 		return NAN
-	return rotation.y + wrapf(atan2(-delta.x, -delta.z) - rotation.y, -PI, PI)
+	var target := snappedf(atan2(-delta.x, -delta.z), PI / 2.0)
+	return rotation.y + wrapf(target - rotation.y, -PI, PI)
 
 
 func face_toward(world_pos: Vector3) -> void:
@@ -264,7 +277,33 @@ func face_toward(world_pos: Vector3) -> void:
 		LightingManager.recompute_dynamic()
 
 
-func take_damage(amount: int) -> void:
+## What actually gets through this unit's plating, given a raw damage roll. The
+## armor hook (security robots: `CerberusUnit.damage_taken`), sited here so it
+## applies to every damage source rather than only to gunfire, and so the
+## unarmored default costs one function call and no branching.
+func damage_taken(amount: int) -> int:
+	return amount
+
+
+## Whether the light on this unit's tile is a term in accuracy rolls it takes
+## part in. False only for the security robots, whose sensors do not read light
+## at all — see CerberusUnit.light_agnostic and Combat.compute_accuracy.
+func light_agnostic() -> bool:
+	return false
+
+
+## The cover penalty THIS unit's weapon respects, as a shooter. Overridden by a
+## unit whose weapon partly ignores cover (Sagittarii); read by
+## Combat.compute_accuracy so the HUD's preview and the shot itself agree.
+func cover_penalty_for(cover_type: int) -> int:
+	return Combat.cover_penalty(cover_type)
+
+
+## Returns the damage that actually landed, after `damage_taken` — callers use it
+## to report what happened rather than what was rolled, so an armored target's
+## log line does not claim 12 damage when 4 got through.
+func take_damage(amount: int) -> int:
+	amount = damage_taken(amount)
 	current_hp = maxi(current_hp - amount, 0)
 	hp_changed.emit(self)
 	if current_hp == 0 and not is_downed:
@@ -278,9 +317,15 @@ func take_damage(amount: int) -> void:
 		# HP hits zero, and the shooter's own activation shouldn't stall on the
 		# collapse playing out. (ActiveMarker self-hides off is_downed.)
 		visual.play_action(UnitVisual.DOWNED)
+		# A body is evidence a Proctor can find long after the fight that made it
+		# (security-robots/design-choices/detection-and-network-alert.md). Reported
+		# for every unit, robots included: a wrecked machine is as much a sign
+		# something came through here as a corpse is.
+		SecurityNetwork.report_evidence(grid_pos, SecurityNetwork.Evidence.CORPSE)
 		downed.emit(self)
 	elif not is_downed:
 		visual.play_action(UnitVisual.HIT_REACT)
+	return amount
 
 
 func can_shoot() -> bool:
@@ -392,11 +437,23 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	_pending_shot = null
 	_pending_target = null
 	if result.hit:
-		target.take_damage(result.damage)
+		# The raw roll is kept because two different consumers want two different
+		# numbers: HP takes what got through the target's armor, while a component
+		# pool (Securus's head) takes the roll itself — a weak point the unit's own
+		# plating covers would not be one. `result.damage` ends up holding what
+		# actually landed, so every log line reports the real figure.
+		var raw := result.damage
+		result.damage = target.take_damage(raw)
+		result.absorbed = raw - result.damage
 		if action == Combat.ShotAction.AIMED_SHOT and not target.is_downed:
-			result.newly_injured = target.apply_body_part_damage(body_part, result.damage)
+			result.newly_injured = target.apply_body_part_damage(body_part, raw)
 			if result.stunned:
 				target.stunned = true
+	# Sec 5.4: gunfire is loud, and it leaves brass. The first is what the robot
+	# faction shares with the (deferred) alien sound channel; the second is what
+	# only a Proctor ever reads, turns later.
+	SecurityNetwork.report_noise(grid_pos, self)
+	SecurityNetwork.report_evidence(grid_pos, SecurityNetwork.Evidence.BRASS)
 	is_busy = false
 	return result
 
@@ -428,7 +485,9 @@ func melee_at(target: Unit) -> Combat.ShotResult:
 			var vfx := get_tree().get_first_node_in_group("vfx")
 			if vfx:
 				vfx.impact(target.global_position, result.crit)
-		target.take_damage(result.damage)
+		var raw := result.damage
+		result.damage = target.take_damage(raw)
+		result.absorbed = raw - result.damage
 	is_busy = false
 	return result
 

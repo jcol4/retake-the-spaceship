@@ -14,11 +14,14 @@ script = ExtResource("1_script")
 ; number was never fitted to a clip: the shamble cycle is drawn to read at 1.5.
 move_speed = 1.5
 
-; Body and head only. No weapon layer — the swarm has no ranged attack at all
-; (Sec 11.4), and no helmet, for the obvious reason.
+; ONE layer. No weapon layer — the swarm has no ranged attack at all (Sec 11.4)
+; — and no helmet, for the obvious reason. The head is not split out either: the
+; swarm is drawn as a single figure, and an empty `head` layer would not stay
+; empty, it would fall back to placeholder art and paint a disc over the face.
+; Splitting the head back out is an art decision, and costs a layer name here.
 [node name="Visual" type="Node3D" parent="."]
 script = ExtResource("2_visual")
-layers = Array[StringName]([&"body", &"head"])
+layers = Array[StringName]([&"body"])
 variant = &"swarm"
 has_light = false
 

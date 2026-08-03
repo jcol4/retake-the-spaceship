@@ -60,11 +60,19 @@ const ALERT_SCREAM := &"alert_scream"
 ## game waiting on it. See _fidget_loop for why that decides how it is played.
 const IDLE_FIDGET := &"idle_fidget"
 
-# Frames where each boot lands during the run cycle, evenly spaced half a cycle
-# apart. Carried over from the measured Mixamo run: the cadence is a property of
-# a soldier moving at 4.5 m/s, not of how the character is drawn, so the sprite
-# walk cycle is authored to match these rather than the other way round.
-const FOOTSTEP_OFFSET := 0.10
+# When each boot lands during the run cycle, evenly spaced half a cycle apart.
+# The GAP is a property of a soldier moving at 4.5 m/s rather than of how the
+# character is drawn, so the run cycle is authored to match it and not the other
+# way round: two steps per cycle at 0.333 s makes the cycle 0.666 s, which at
+# build_sprite_frames.gd's 12 fps is the eight frames a cycle is drawn in.
+#
+# The OFFSET is the authoring contract that follows from that: zero, meaning
+# FRAME 0 IS A CONTACT and so is frame 4. It was 0.10 while the run was a Mixamo
+# clip, which recorded nothing about a soldier — only where that take's frame 0
+# happened to fall relative to the first footplant. A drawn cycle starts on a
+# contact, so the offset that made sense for the mocap is now just a 1.2-frame
+# error between the boot landing and the sound.
+const FOOTSTEP_OFFSET := 0.0
 const FOOTSTEP_GAP := 0.333
 
 # Seconds of plain idle between attempts at an IDLE_FIDGET. Rolled fresh each
@@ -105,31 +113,43 @@ const WALK_SPEED := 1.02
 
 # --- Direction ---------------------------------------------------------------
 #
-# Sprite direction is the unit's yaw MINUS the camera's, quantised into eight
-# 45-degree buckets. Subtracting the camera is what makes this work under a rig
-# whose yaw snaps: a quarter turn moves every bucket by exactly two steps, so the
+# Sprite direction is the unit's yaw MINUS the camera's, quantised into four
+# 90-degree buckets. Subtracting the camera is what makes this work under a rig
+# whose yaw snaps: a quarter turn moves every bucket by exactly one step, so the
 # snap costs no additional art — but it DOES change every character's apparent
 # facing without any unit having turned, which is why _sync_direction is driven
 # off the rig's yaw_changed signal as well as off unit facing.
 
-## Screen-space directions, indexed by bucket. Bucket 0 is a unit facing directly
-## away from the camera, and the index rises with yaw — which, given Godot's -Z
-## forward and +X screen-right, runs anticlockwise on screen.
-const DIRECTIONS: Array[StringName] = [&"n", &"nw", &"w", &"sw", &"s", &"se", &"e", &"ne"]
+## Screen-space directions, indexed by bucket. FOUR, and specifically the four
+## screen DIAGONALS, because those are what the four world grid axes project to:
+## the rig sits at a 45-degree yaw (camera_rig.gd START_YAW), so a unit facing
+## world -Z reads as up-and-right on screen, not straight up. Units can only step
+## along those axes (GridManager.STEPS) and only face along them
+## (Unit._yaw_toward), so no other bucket is reachable.
+##
+## Bucket 0 is up-right; the index rises with yaw, which — given Godot's -Z
+## forward and +X screen-right — runs anticlockwise on screen.
+const DIRECTIONS: Array[StringName] = [&"ne", &"nw", &"sw", &"se"]
 
-## The 5-drawn + 3-mirrored rule. Only the five right-facing directions are
-## authored; the left-facing three are those flipped horizontally. Entries are
+## Half the buckets are the other half flipped. Only the two right-facing
+## directions need authoring; the left-facing two are those mirrored. Entries are
 ## [source direction, flip_h].
 ##
 ## A pose that is NOT symmetric — anything armed, where flipping moves the rifle
-## to the wrong shoulder — can be authored for all eight instead: if the sprite
+## to the wrong shoulder — can be authored for all four instead: if the sprite
 ## set contains art for the mirrored direction itself, _sync_direction uses it
-## unflipped and this table never applies.
+## unflipped and this table never applies. That is the path the merc takes; see
+## tools/build_sprite_frames.gd.
 const MIRROR := {
 	&"nw": [&"ne", true],
-	&"w": [&"e", true],
 	&"sw": [&"se", true],
 }
+
+## Rotates the bucket window so each bucket is CENTRED on a screen diagonal
+## rather than straddling two. Without it a unit facing a world axis would sit
+## exactly on the boundary between two buckets and flicker between them under
+## floating-point noise.
+const BUCKET_OFFSET := PI / 4.0
 
 ## Layers, back to front. Data-driven rather than four hardcoded nodes so an arm
 ## layer (or anything else) can be added in art alone.
@@ -139,17 +159,33 @@ const MIRROR := {
 ## are a reassignment of this — see `set_variant`.
 @export var variant: StringName = &"soldier"
 
-## Metres per source pixel. Shared by every layer, along with `offset`, because
-## the layers only stay registered with one another if they agree on both.
-@export var pixel_size: float = 0.03
+## World height of a layer's full canvas, in metres. Replaces a shared
+## `pixel_size`: each layer derives its own as `canvas_height / texture_height`,
+## so layers drawn at DIFFERENT resolutions still register with one another and
+## still land on the same pivot. That is what lets 256-px authored art composite
+## against the 64-px code placeholder without either being rescaled by hand.
+##
+## 1.92 is what the old `CANVAS` 64 x `pixel_size` 0.03 came to, so the
+## placeholder's on-screen size is unchanged.
+@export var canvas_height: float = 1.92
 
 ## Whether this character carries the rig-mounted light (Sec 5.2). Aliens do not.
 @export var has_light: bool = true
 
+## Which family of shapes the placeholder generator draws for this character.
+## `organic` is the standing biped everything started as; `machine` is the
+## hard-edged, geometric read the security robots are specified with
+## (security-robots/design-choices/faction-identity.md) — the point being that a
+## player can tell the factions apart by silhouette alone in a dark corridor,
+## which is where most fights happen. Has no effect once authored art exists.
+@export var placeholder_style: StringName = &"organic"
+
 # --- Placeholder art ---------------------------------------------------------
 
-## Source canvas, in pixels. Square so a rotation of the art never changes the
-## pivot, and 64 so pixel_size 0.03 puts a standing character at 1.92 m.
+## The PLACEHOLDER's source canvas, in pixels — not a constraint on authored art,
+## which may be any square size (see _apply_frame_scale). Square so a rotation of
+## the art never changes the pivot. `_placeholder_texture` draws in these
+## coordinates, so changing it means redrawing every stand-in.
 const CANVAS := 64
 ## Where the art's origin sits in the canvas: the FEET, not the centre. Every
 ## layer shares it, which is what keeps a helmet on a head across a gear swap.
@@ -159,6 +195,12 @@ const FOOT_ANCHOR := Vector2(0.5, 1.0)
 ## tile's light_value instead of being lit, so this is the floor of that tint:
 ## far enough down to read as "in the dark", not so far the unit is lost.
 const MIN_TINT := 0.35
+
+## Layers the tile-light tint is NOT applied to. A status light is a light — it
+## is the thing emitting, not the thing being lit — and dimming it in a dark room
+## would put out the one readability aid the security robots have in exactly the
+## conditions it exists for.
+const SELF_LIT_LAYERS: Array[StringName] = [&"status"]
 
 ## Where a shot leaves the weapon, relative to the unit: shoulder height, and
 ## forward of the body so a tracer does not visibly start inside the chest.
@@ -188,6 +230,9 @@ var _direction := 0
 var _authored := false
 var _stepping: bool = false
 var _fidgeting: bool = false
+## Tint for the self-lit `status` layer, if this character has one. White until
+## a unit says otherwise — see CerberusUnit._refresh_status_light.
+var _status_color := Color.WHITE
 
 
 func _ready() -> void:
@@ -241,10 +286,11 @@ func _build_layers() -> void:
 		var sprite := AnimatedSprite3D.new()
 		sprite.name = String(layer).capitalize()
 		sprite.sprite_frames = frames
-		sprite.pixel_size = pixel_size
-		# Every layer shares pixel_size and offset, which IS the pivot contract:
-		# reassigning one layer's frames can never shift it against the others.
-		sprite.offset = Vector2(0.0, CANVAS * FOOT_ANCHOR.y - CANVAS * 0.5)
+		# Scale and pivot both derive from this layer's own texture size, which IS
+		# the pivot contract: every layer resolves to the same world height with
+		# its origin on FOOT_ANCHOR, so reassigning one layer's frames can never
+		# shift it against the others no matter what resolution it was drawn at.
+		_apply_frame_scale(sprite, frames)
 		# Always face the viewer, upright. Direction is carried by WHICH art is
 		# shown, never by turning the quad — that is the whole point of drawing
 		# eight of them.
@@ -269,6 +315,33 @@ func _load_frames(layer: StringName) -> SpriteFrames:
 	return load(path) as SpriteFrames
 
 
+## Sizes one layer from its own art, so resolution is a property of the PNG
+## rather than a number that has to be kept in sync by hand. A 64-px placeholder
+## and a 256-px authored sheet both come out `canvas_height` metres tall with
+## their origin at the feet.
+##
+## Reads the first frame it can find: a set whose frames disagree on size would
+## need a per-frame pivot, which is a problem no art has posed yet.
+func _apply_frame_scale(sprite: AnimatedSprite3D, frames: SpriteFrames) -> void:
+	var size := _frame_size(frames)
+	sprite.pixel_size = canvas_height / size.y
+	sprite.offset = Vector2(
+		size.x * (0.5 - FOOT_ANCHOR.x),
+		size.y * (FOOT_ANCHOR.y - 0.5))
+
+
+## Pixel size of the art in `frames`, falling back to the placeholder canvas when
+## there are no frames to measure.
+func _frame_size(frames: SpriteFrames) -> Vector2:
+	for name in frames.get_animation_names():
+		if frames.get_frame_count(name) == 0:
+			continue
+		var tex := frames.get_frame_texture(name, 0)
+		if tex:
+			return tex.get_size()
+	return Vector2(CANVAS, CANVAS)
+
+
 ## Reassigns every layer's art — a gear swap is exactly this and nothing else,
 ## because the pivot contract above guarantees the new art lands where the old
 ## art was.
@@ -281,7 +354,11 @@ func set_variant(new_variant: StringName) -> void:
 		else:
 			_authored = true
 		_frames[layer] = frames
-		(_sprites[layer] as AnimatedSprite3D).sprite_frames = frames
+		var sprite := _sprites[layer] as AnimatedSprite3D
+		sprite.sprite_frames = frames
+		# Re-derived, not carried over: the incoming art may be a different
+		# resolution from what this layer was showing.
+		_apply_frame_scale(sprite, frames)
 	_play(_stance)
 
 
@@ -355,7 +432,8 @@ func _camera_yaw() -> float:
 ## Static so the mapping can be checked without a scene — see
 ## tools/test_sprite_direction.gd.
 static func direction_bucket(relative_yaw: float) -> int:
-	return wrapi(roundi(relative_yaw / (TAU / DIRECTIONS.size())), 0, DIRECTIONS.size())
+	return wrapi(roundi((relative_yaw + BUCKET_OFFSET) / (TAU / DIRECTIONS.size())),
+		0, DIRECTIONS.size())
 
 
 func _bucket(relative_yaw: float) -> int:
@@ -541,7 +619,18 @@ func _apply_tile_light() -> void:
 	for layer in layers:
 		var sprite: AnimatedSprite3D = _sprites.get(layer)
 		if sprite:
-			sprite.modulate = tint
+			sprite.modulate = _status_color if layer in SELF_LIT_LAYERS else tint
+
+
+## Recolours the self-lit `status` layer. The security robots' one concession to
+## readability: a machine's posture cannot be read off its body language the way
+## an alien's can, so the state is a colour instead. A no-op for a character with
+## no status layer, which is every character that is not a robot.
+func set_status_color(color: Color) -> void:
+	_status_color = color
+	var sprite: AnimatedSprite3D = _sprites.get(&"status")
+	if sprite:
+		sprite.modulate = color
 
 
 # --- Idle behaviour ----------------------------------------------------------
@@ -608,7 +697,34 @@ const PLACEHOLDER_COLOR := {
 	&"head": Color(0.78, 0.62, 0.50),
 	&"helmet": Color(0.22, 0.25, 0.28),
 	&"weapon": Color(0.15, 0.15, 0.17),
+	&"status": Color(1.0, 1.0, 1.0),  # tinted per alert state; see set_status_color
 }
+
+## Machine-style overrides. Cold greys against the organic set's warmer, dirtier
+## palette, so faction reads off colour as well as off shape.
+const PLACEHOLDER_MACHINE_COLOR := {
+	&"body": Color(0.40, 0.44, 0.50),
+	&"head": Color(0.20, 0.22, 0.26),
+	&"weapon": Color(0.14, 0.15, 0.18),
+}
+
+## Per-variant silhouette for the machine style, in canvas pixels. Four robots
+## that differ only in colour would be four of the same unit as far as a player
+## glancing at a dark corridor is concerned, so each gets a proportion it owns:
+## a squat armored post, a wide heavy weapons platform, a small hovering drone,
+## and something a head taller than a soldier.
+##
+##   width/height — chassis box
+##   hover        — pixels of clear air under it, so the drone reads as flying
+##   head         — sensor housing edge; 0 draws none
+##   shoulder     — width of the plate that swings with facing, 0 draws none
+const PLACEHOLDER_MACHINE_SPEC := {
+	&"auxilium": {"width": 20, "height": 26, "hover": 0, "head": 9, "shoulder": 5},
+	&"sagittarii": {"width": 28, "height": 30, "hover": 0, "head": 8, "shoulder": 8},
+	&"proctor": {"width": 14, "height": 14, "hover": 20, "head": 6, "shoulder": 0},
+	&"securus": {"width": 24, "height": 42, "hover": 0, "head": 12, "shoulder": 7},
+}
+const PLACEHOLDER_MACHINE_DEFAULT := {"width": 20, "height": 28, "hover": 0, "head": 9, "shoulder": 5}
 ## Poses the placeholder draws crouched rather than standing, so hunkering and
 ## overwatch are visibly different from standing there.
 const PLACEHOLDER_CROUCHED := [CROUCH, STAND_TO_CROUCH, CROUCH_TO_STAND, OVERWATCH]
@@ -625,9 +741,9 @@ func _placeholder_frames(layer: StringName) -> SpriteFrames:
 	var frames := SpriteFrames.new()
 	frames.remove_animation(&"default")
 	for pose: StringName in PLACEHOLDER_POSES:
-		# Only the five authored directions, so the mirror table is genuinely
-		# exercised rather than bypassed by drawing all eight.
-		for dir: StringName in [&"n", &"ne", &"e", &"se", &"s"]:
+		# Only the two right-facing directions, so the mirror table is genuinely
+		# exercised rather than bypassed by drawing all four.
+		for dir: StringName in [&"ne", &"se"]:
 			var name := &"%s_%s" % [pose, dir]
 			frames.add_animation(name)
 			frames.set_animation_loop(name, pose in [IDLE, RUN, WALK, CROUCH, OVERWATCH, AIM_HOLD])
@@ -646,6 +762,10 @@ func _placeholder_texture(layer: StringName, pose: StringName, dir: StringName) 
 	var lean: float = {&"n": -1.0, &"ne": -0.5, &"e": 0.0, &"se": 0.5, &"s": 1.0}.get(dir, 0.0)
 	# Screen-right component, so a weapon sits on the correct side of the body.
 	var side: float = {&"n": 0.0, &"ne": 0.7, &"e": 1.0, &"se": 0.7, &"s": 0.0}.get(dir, 0.0)
+
+	if placeholder_style == &"machine":
+		_draw_machine(image, layer, prone, crouched, lean, side)
+		return ImageTexture.create_from_image(image)
 
 	var floor_y := CANVAS - 2
 	var height := 22 if crouched else 38
@@ -675,6 +795,71 @@ func _placeholder_texture(layer: StringName, pose: StringName, dir: StringName) 
 			var x := CANVAS / 2 + int(side * 9.0) - 2
 			_box(image, x, floor_y - height + 8, 4, 16, color)
 	return ImageTexture.create_from_image(image)
+
+
+## The machine silhouette. Everything here is a rectangle, and that is the point:
+## the faction is specified as "built, not grown", so the stand-in has no discs,
+## no taper and no rounded anything, and reads as the opposite of the alien
+## placeholder even at the size a character occupies on screen.
+func _draw_machine(image: Image, layer: StringName, prone: bool, crouched: bool,
+		lean: float, side: float) -> void:
+	var color: Color = PLACEHOLDER_MACHINE_COLOR.get(layer, PLACEHOLDER_COLOR.get(layer, Color(0.6, 0.6, 0.6)))
+	var spec: Dictionary = PLACEHOLDER_MACHINE_SPEC.get(variant, PLACEHOLDER_MACHINE_DEFAULT)
+	var floor_y := CANVAS - 2
+	var width: int = spec["width"]
+	var height: int = spec["height"]
+	var hover: int = spec["hover"]
+
+	if prone:
+		# A wreck, not a body: wider than it is tall and flat on the deck, with no
+		# hover left in whatever used to be flying.
+		if layer == &"body":
+			_box(image, CANVAS / 2 - width / 2 - 4, floor_y - 8, width + 8, 8, color.darkened(0.35))
+		return
+
+	# Crouching is a machine lowering itself onto its mounts rather than a body
+	# folding, so it loses height and keeps its width.
+	if crouched:
+		height = maxi(10, height - 10)
+	var top := floor_y - hover - height
+	var cx := CANVAS / 2
+
+	match layer:
+		&"body":
+			_box(image, cx - width / 2, top, width, height, color)
+			# Plate that swings with facing — the fastest read of which way a box
+			# is pointing, and the machine equivalent of the organic front panel.
+			var shoulder: int = spec["shoulder"]
+			if shoulder > 0:
+				_box(image, cx - shoulder / 2 + int(side * (width / 2.0 - shoulder / 2.0)),
+					top + 2, shoulder, height - 4, color.darkened(0.3))
+			if lean > 0.0:
+				_box(image, cx - width / 2 + 3, top + 3, width - 6, 6, color.lightened(0.25))
+			if hover > 0:
+				# Thruster wash under a hovering chassis, so it does not read as a
+				# box someone left floating by mistake.
+				_box(image, cx - 3, floor_y - hover + 2, 6, 3, color.darkened(0.5))
+		&"head":
+			var head: int = spec["head"]
+			if head <= 0:
+				return
+			_box(image, cx - head / 2 + int(side * 2.0), top - head, head, head, color)
+			# Sensor band, only when the face is toward the camera.
+			if lean > 0.0:
+				_box(image, cx - head / 2 + 1 + int(side * 2.0), top - head + 2, head - 2, 2,
+					Color(0.9, 0.25, 0.2))
+		&"weapon":
+			# A barrel on the swinging side, longer and thinner than the soldier's
+			# rifle block so it reads as mounted hardware rather than carried.
+			var x := cx + int(side * (width / 2.0 + 1.0)) - 2
+			_box(image, x, top + 4, 4, 18, color)
+		&"status":
+			# White here and tinted by set_status_color, so one drawn frame serves
+			# every alert state. Two pips: one on the chest and one on the spine,
+			# because a robot's state has to be readable from behind as well.
+			_box(image, cx - 2 + int(side * 3.0), top + (4 if lean > 0.0 else 6), 4, 4, color)
+			if lean <= 0.0:
+				_box(image, cx - 1, top - 2, 3, 3, color)
 
 
 func _box(image: Image, x: int, y: int, w: int, h: int, color: Color) -> void:

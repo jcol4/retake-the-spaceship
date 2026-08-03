@@ -32,6 +32,10 @@ var data: MapData
 var player_spawns: Array[Vector3i] = []
 var enemy_spawns: Array[Vector3i] = []
 var swarm_spawns: Array[Vector3i] = []
+## MapData.Spawn kind -> Array[Vector3i], for the four security-robot types. One
+## dictionary rather than four named arrays because the roster is expected to
+## change and the spawner iterates it either way.
+var cerberus_spawns: Dictionary = {}
 
 ## Cell position -> that wall's MeshInstance3D. Only the mesh is kept, because
 ## only the mesh is ever hidden — see _apply_wall_occlusion.
@@ -83,6 +87,9 @@ func build(map_data: MapData) -> void:
 	player_spawns = data.spawns(MapData.Spawn.PLAYER)
 	enemy_spawns = data.spawns(MapData.Spawn.ENEMY)
 	swarm_spawns = data.spawns(MapData.Spawn.SWARM)
+	cerberus_spawns.clear()
+	for kind: int in MapData.CERBERUS_SPAWNS:
+		cerberus_spawns[kind] = data.spawns(kind)
 	build_ground_collision()
 	LightingManager.recompute_base()
 
@@ -329,6 +336,38 @@ func _revealed_regions() -> Dictionary:
 			if linked in data.corridors:
 				out[linked] = true
 	return out
+
+
+## Which SecurityZone a tile belongs to (security-robots/design-choices/
+## detection-and-network-alert.md). A zone is the unit an alert broadcasts across,
+## and it is meant to be COARSER than a room — "everything behind one checkpoint".
+##
+## The alpha derives it as one compartment plus the doorways touching it, which is
+## the coarsest partition the derived room graph actually supports: every room on
+## a deck connects to every other through corridors, so unioning across them
+## collapses the whole level into one zone and a single tripped sentry alerts the
+## map. A doorway resolves to the lowest-indexed compartment it joins, so a robot
+## standing in one still answers to a real place rather than to a one-tile region
+## of its own.
+##
+## Authored zones are the intended follow-up and need no code here:
+## `CerberusUnit.security_zone` is exported, so a hand-placed level can already
+## overwrite whatever this returns.
+func zone_at(grid_pos: Vector3i) -> int:
+	if data == null:
+		return SecurityNetwork.NO_ZONE
+	var index := data.room_index_at(grid_pos)
+	if index < 0:
+		return SecurityNetwork.NO_ZONE
+	if not (index in data.corridors):
+		return index
+	var best := SecurityNetwork.NO_ZONE
+	for linked in data.linked_rooms(index):
+		if linked == index or linked in data.corridors:
+			continue
+		if best == SecurityNetwork.NO_ZONE or linked < best:
+			best = linked
+	return best
 
 
 ## The grid step leading away from the camera: the camera's look direction,

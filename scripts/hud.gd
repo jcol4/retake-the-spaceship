@@ -6,7 +6,7 @@ extends CanvasLayer
 @onready var banner: Label = $Banner
 @onready var buttons := {
 	"move": $Actions/Move,
-	"shoot": $Actions/Shoot, "aimed_shot": $Actions/AimedShot,
+	"shoot": $Actions/Shoot, "aimed_shot": $Actions/AimedShot, "emp": $Actions/Emp,
 	"hunker": $Actions/Hunker, "overwatch": $Actions/Overwatch,
 	"reload": $Actions/Reload, "face": $Actions/Face,
 	"flashlight": $Actions/Flashlight, "end_turn": $Actions/EndTurn,
@@ -32,6 +32,7 @@ func _ready() -> void:
 	buttons["move"].pressed.connect(_set_mode.bind(PlayerUnit.Mode.MOVE))
 	buttons["shoot"].pressed.connect(_set_mode.bind(PlayerUnit.Mode.SHOOT))
 	buttons["aimed_shot"].pressed.connect(_set_mode.bind(PlayerUnit.Mode.AIMED_SHOT))
+	buttons["emp"].pressed.connect(_set_mode.bind(PlayerUnit.Mode.EMP))
 	for part in body_part_buttons:
 		body_part_buttons[part].pressed.connect(_on_menu_pick.bind(part))
 	aimed_shot_cancel.pressed.connect(_on_aimed_shot_cancel)
@@ -98,6 +99,11 @@ func _refresh(unit: Unit) -> void:
 	buttons["move"].disabled = not is_player or player.ap < 1
 	buttons["shoot"].disabled = not is_player or player.ap < 1 or (is_player and not player.can_shoot())
 	buttons["aimed_shot"].disabled = not is_player or player.ap < 2 or (is_player and not player.can_shoot())
+	# Charges are per soldier, so the label has to say how many are left — an
+	# always-on "EMP (1)" reads as the AP cost and hides the real constraint.
+	if is_player:
+		buttons["emp"].text = "EMP (1)  x%d" % player.emp_charges
+	buttons["emp"].disabled = not is_player or player.ap < PlayerUnit.EMP_AP_COST or player.emp_charges <= 0
 	buttons["hunker"].disabled = not is_player or player.ap < 1
 	buttons["overwatch"].disabled = not is_player or player.ap < 1 or (is_player and not player.can_shoot())
 	buttons["reload"].disabled = not is_player or player.ap < 1 or (is_player and not player.can_reload())

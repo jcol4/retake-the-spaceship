@@ -67,36 +67,36 @@ func set_occupant(pos: Vector3i, unit: Node3D) -> void:
 		t.occupant = unit
 
 
+## The four grid axes a unit may step along. FOUR-way, not eight: a character is
+## drawn in four directions, and those four are exactly the world axes (see
+## unit_visual.gd's DIRECTIONS). Allowing a diagonal step would face a unit at a
+## yaw no art exists for.
+##
+## This is the single source of movement adjacency — get_reachable_tiles,
+## find_path and is_melee_adjacent all derive from it, so nothing can disagree
+## with it about what "adjacent" means.
+const STEPS: Array[Vector3i] = [
+	Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1),
+]
+
+
 func neighbors(pos: Vector3i) -> Array[Vector3i]:
-	# 8-way same-floor neighbors (diagonal cost == orthogonal, Sec 4.0)
-	# plus any pre-authored stair links (elevation traversal free, Sec 4.0).
+	# Four-way same-floor neighbors (Sec 4.0) plus any pre-authored stair links
+	# (elevation traversal free, Sec 4.0).
+	#
+	# The corner-cutting guard that used to live here is gone with the diagonals
+	# it policed: a unit can no longer slip around a corner that
+	# has_line_of_sight treats as solid, because it can no longer move around a
+	# corner in one step at all.
 	var out: Array[Vector3i] = []
-	for dx in [-1, 0, 1]:
-		for dz in [-1, 0, 1]:
-			if dx == 0 and dz == 0:
-				continue
-			var n := pos + Vector3i(dx, 0, dz)
-			if not tiles.has(n):
-				continue
-			# No cutting wall corners: a diagonal needs both orthogonal tiles
-			# flanking it to be open. Otherwise a unit could slip around a
-			# corner that has_line_of_sight still treats as solid, and end up
-			# adjacent to an enemy it cannot see.
-			if dx != 0 and dz != 0:
-				if not _is_open(pos + Vector3i(dx, 0, 0)) or not _is_open(pos + Vector3i(0, 0, dz)):
-					continue
+	for step in STEPS:
+		var n := pos + step
+		if tiles.has(n):
 			out.append(n)
 	if stair_links.has(pos):
 		for n: Vector3i in stair_links[pos]:
 			out.append(n)
 	return out
-
-
-func _is_open(pos: Vector3i) -> bool:
-	# Static geometry only. Occupants deliberately don't block a corner: they
-	# don't block line of sight either, so including them would desync the two.
-	var t: GridTileData = tiles.get(pos)
-	return t != null and t.passable
 
 
 func get_reachable_tiles(from: Vector3i, max_tiles: int) -> Array[Vector3i]:
@@ -123,15 +123,25 @@ func find_path(from: Vector3i, to: Vector3i, max_tiles: int, allow_occupied_goal
 	# unreachable. With allow_occupied_goal the goal tile itself may be
 	# occupied (used to path *toward* another unit).
 	#
-	# Diagonals cost the same tile as orthogonals (Sec 4.0), so many routes tie
-	# on length. Among those, prefer the one taking the fewest diagonal steps —
-	# units walk straight lines instead of zig-zagging — but never trade a
-	# diagonal for an extra tile, since tiles are what AP and range measure.
+	# On a four-way grid every route to a tile off both axes ties on length --
+	# any interleaving of the same horizontal and vertical steps costs the same.
+	# Among those, prefer the one that CHANGES DIRECTION fewest times, but never
+	# trade a turn for an extra tile, since tiles are what AP and range measure.
+	#
+	# This tiebreak is load-bearing rather than cosmetic. Plain BFS returns
+	# whichever interleaving it happened to expand first, which is typically a
+	# staircase -- and a unit walking a staircase turns 90 degrees on every
+	# single tile. With facing quantised to four directions that is not a subtle
+	# wobble, it is the sprite flipping between two drawn poses per step.
 	if from == to:
 		return []
 	var parent := {from: from}
 	var depth := {from: 0}
-	var diagonals := {from: 0}
+	var turns := {from: 0}
+	# Which way the unit was already travelling when it arrived. ZERO at the
+	# start, which is what makes the first step of a path free of a turn charge
+	# whichever way it goes.
+	var heading := {from: Vector3i.ZERO}
 	var goal_depth := -1
 	var frontier: Array[Vector3i] = [from]
 	while not frontier.is_empty():
@@ -146,18 +156,26 @@ func find_path(from: Vector3i, to: Vector3i, max_tiles: int, allow_occupied_goal
 		for n in neighbors(cur):
 			if not is_free(n) and not (allow_occupied_goal and n == to):
 				continue
-			var turns: int = diagonals[cur] + (1 if _is_diagonal(cur, n) else 0)
+			var step: Vector3i = n - cur
+			# A stair link is neither a turn nor a heading: it changes floor, so
+			# the step vector is not one of STEPS and carrying it forward would
+			# charge a phantom turn to whatever comes next.
+			var straight: bool = step.y != 0 \
+				or heading[cur] == Vector3i.ZERO or heading[cur] == step
+			var cost: int = turns[cur] + (0 if straight else 1)
 			if not depth.has(n):
 				depth[n] = cur_depth + 1
-				diagonals[n] = turns
+				turns[n] = cost
+				heading[n] = Vector3i.ZERO if step.y != 0 else step
 				parent[n] = cur
 				if n == to:
 					goal_depth = cur_depth + 1
 				frontier.append(n)
-			elif depth[n] == cur_depth + 1 and turns < diagonals[n]:
+			elif depth[n] == cur_depth + 1 and cost < turns[n]:
 				# Same-length route into `n`, but a straighter one. Rerouting is
-				# safe: `cur`'s own diagonal count is already final.
-				diagonals[n] = turns
+				# safe: `cur`'s own turn count is already final.
+				turns[n] = cost
+				heading[n] = Vector3i.ZERO if step.y != 0 else step
 				parent[n] = cur
 	if not parent.has(to):
 		return []
@@ -169,13 +187,15 @@ func find_path(from: Vector3i, to: Vector3i, max_tiles: int, allow_occupied_goal
 	return path
 
 
-func _is_diagonal(a: Vector3i, b: Vector3i) -> bool:
-	# Stair links change floor and are never treated as diagonal.
-	return a.y == b.y and absi(a.x - b.x) == 1 and absi(a.z - b.z) == 1
-
-
 func chebyshev_dist(a: Vector3i, b: Vector3i) -> int:
-	# Matches movement cost: diagonals count 1. Floors ignored for range checks.
+	# RANGE, not movement cost — the two deliberately stopped agreeing when
+	# movement went four-way. A shot, a sensor sweep and a thrown grenade all
+	# cross a corner perfectly happily; only feet are restricted to the axes. So
+	# range stays square (diagonals count 1) while a diagonal STEP costs two, and
+	# `is_melee_adjacent` rather than `chebyshev_dist(..) <= 1` is the test for
+	# anything that has to be walked to.
+	#
+	# Floors ignored, as before.
 	return maxi(absi(a.x - b.x), absi(a.z - b.z))
 
 

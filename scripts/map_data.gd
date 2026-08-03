@@ -21,7 +21,18 @@ enum Terrain {
 }
 enum Cover { NONE, LIGHT, HEAVY }
 enum Fixture { NONE, OVERHEAD, MONITOR, FLICKER }
-enum Spawn { NONE, PLAYER, ENEMY, SWARM }
+## Spawn markers. The four Cerberus entries are per-TYPE rather than one shared
+## ROBOT kind, unlike the aliens' ENEMY/SWARM split: a security roster is placed
+## deliberately — this doorway gets a sentry, that hall gets the heavy — where an
+## infestation is placed in bulk. Encoding the type in the map is what lets a
+## level author express that at all.
+enum Spawn { NONE, PLAYER, ENEMY, SWARM, AUXILIUM, SAGITTARII, PROCTOR, SECURUS }
+
+## The Cerberus half of `Spawn`, in roster order. Iterated by MapBuilder and by
+## the spawner in main.gd so adding a fifth robot is one entry here plus a glyph.
+const CERBERUS_SPAWNS: Array[int] = [
+	Spawn.AUXILIUM, Spawn.SAGITTARII, Spawn.PROCTOR, Spawn.SECURUS,
+]
 
 ## Which boundary of a tile an edge is. Cover lives on these rather than on the
 ## tile itself (see `cover_edges`), so a unit stands ON a tile and is protected

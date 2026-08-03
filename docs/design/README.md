@@ -5,15 +5,25 @@ at the repo root. Everything under [`factions/`](factions/) is that document reo
 expanded **per faction**, so each side of a fight has one place that describes who they are,
 what units they field, and why they were designed that way.
 
+How any of it is *drawn* is a separate question with a separate answer:
+[`../presentation-direction.md`](../presentation-direction.md). The game is presented
+isometrically — 2D sprite characters over real 3D levels — and that doc supersedes the GDD's
+camera and rendering sections. It matters here because it constrains faction art directly: a
+unit is read at a fixed 35.264° pitch, in four direction buckets, at roughly 16% of viewport
+height, usually in the dark. Silhouette and palette carry the whole read.
+
 ## Factions
 
 - [`aliens/`](factions/aliens/) — the current alien infestation roster (Fodder, Agile Hunter,
   Spitter). Content sourced from the GDD, Section 11.
-- [`security-robots/`](factions/security-robots/) — **new faction**, not yet in the GDD or the
-  codebase. Designed from scratch in this pass to fit the existing systems (initiative pool,
-  light/sound detection, cover/elevation) while giving the player a mechanically distinct kind
-  of enemy: armored, sensor-driven, network-alerted, immune to the light-based detection lever
-  that aliens are built around.
+- [`security-robots/`](factions/security-robots/) — the second faction: armored, sensor-driven,
+  network-alerted, and immune to the light-based detection lever the aliens are built around.
+  Designed to fit the existing systems (initiative pool, light/sound detection, cover/elevation)
+  rather than to require new core mechanics. **All four roster models now have an alpha
+  implementation in code** — see that folder's
+  [`design-choices/alpha-implementation.md`](factions/security-robots/design-choices/alpha-implementation.md)
+  for what shipped, what was approximated and what is still on paper. Not yet folded into the
+  GDD, which still describes a single enemy faction in Section 11.
 - [`contractors/`](factions/contractors/) — the player squad. "Contractors" is a documentation
   naming choice (the GDD just calls them "soldiers"); it matches the mercenary/PMC read of the
   reference art in `character-art-plan.md` (no national or corporate insignia, worn tactical

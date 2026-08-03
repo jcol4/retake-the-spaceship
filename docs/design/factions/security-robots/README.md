@@ -1,10 +1,29 @@
 # Faction: Security Robots
 
-*Status: **new faction, designed in this pass** — not in `game-design-document.md` and not yet
-implemented in code. Everything in this folder is a proposal, written to slot into the existing
-systems (initiative pool, additive accuracy formula, light/sound detection, cover/elevation)
-without requiring new core mechanics. Treat numeric values here the same way the GDD treats its
-own defaults: tunable, not final.*
+> ## ⚙️ ALPHA IMPLEMENTED 2026-07-31
+>
+> **All four roster models are in code and playable.** The faction was designed on paper first
+> (everything below), then built; where the build had to choose, the choices and their reasons
+> are recorded in
+> [`design-choices/alpha-implementation.md`](design-choices/alpha-implementation.md), which is
+> also the design → file map.
+>
+> | In code | Still on paper |
+> |---|---|
+> | All four units, their AI, the light exception, motion + sound detection, evidence scanning, zone-wide network alert, Armor, the EMP grenade, Securus's head weak point, Salvage on destruction | Hostility toward the aliens (robots currently engage the squad only — see [Open items](#open-items)), authored multi-room zones, silent takedowns, what Salvage buys |
+>
+> Numbers live in [`scripts/cerberus_presets.gd`](../../../../scripts/cerberus_presets.gd) and
+> on the unit scenes, and are alpha values in exactly the sense this document already meant:
+> tunable, not final. `tools/test_cerberus.gd` pins the *rules* rather than the numbers, so
+> retuning a stat does not break a test.
+>
+> The faction is **not yet folded into `game-design-document.md`**, which still describes a
+> single enemy faction in Section 11. This folder remains the source of truth for it.
+
+*Everything in this folder was written to slot into the existing systems (initiative pool,
+additive accuracy formula, light/sound detection, cover/elevation) without requiring new core
+mechanics. Treat numeric values here the same way the GDD treats its own defaults: tunable, not
+final.*
 
 ## Identity
 
@@ -73,6 +92,9 @@ pillar into a second axis instead of just adding a reskinned enemy.
 - [`design-choices/ai-behavior.md`](design-choices/ai-behavior.md) — how the state machine model
   from the alien faction is reused, and where it diverges (no Unaware/patrol-and-forget state;
   robots default to a standing post instead).
+- [`design-choices/alpha-implementation.md`](design-choices/alpha-implementation.md) — what the
+  alpha build actually does, which design → which file, the two places the implementation
+  approximates a rule rather than honouring it, and how to put robots on a deck.
 
 ## Open items
 
@@ -81,6 +103,10 @@ pillar into a second axis instead of just adding a reskinned enemy.
 - Whether Cerberus units should ever treat aliens as allies-of-convenience (e.g. ignore them
   entirely) rather than hostile — current proposal is "hostile to everyone," which is simpler to
   implement and avoids needing three-way faction relationship logic in `TurnManager`.
+  **Not in the alpha**, and deliberately so: robots acquire player units only. Making them
+  shoot aliens is a two-line change to target acquisition, but the aliens have no way to shoot
+  *back* at a robot, so a three-way deck would resolve as robots farming an inert faction while
+  the player watched. The prerequisite is alien-side hostility, not this side of it.
 - Whether missions can be "robots only" as a distinct mission type, or robots are always layered
   onto an existing alien clear-out. Leaning toward supporting both, but no mission-type work has
   been scoped for this yet.

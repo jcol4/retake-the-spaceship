@@ -35,6 +35,11 @@ func _initialize() -> void:
 	_check(data.spawns(MapData.Spawn.PLAYER).size() == 3, "3 player spawns")
 	_check(data.spawns(MapData.Spawn.ENEMY).size() == 2, "2 enemy spawns")
 	_check(data.spawns(MapData.Spawn.SWARM).size() == 3, "3 swarm spawns")
+	# One of each security-robot model, so the four glyphs are exercised by the
+	# deck the game ships with rather than only by a fixture.
+	for kind: int in MapData.CERBERUS_SPAWNS:
+		_check(data.spawns(kind).size() == 1,
+			"1 spawn of Spawn kind %d (got %d)" % [kind, data.spawns(kind).size()])
 
 	# The platform's walkable tiles sit one deck up, and the stair links onto one
 	# of them — the two places where cell space and grid space differ.

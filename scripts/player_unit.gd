@@ -3,7 +3,19 @@ extends Unit
 ## Input handling while this unit is the active (pool-drawn) unit.
 ## The HUD sets `pending_action`; clicks in the world resolve it.
 
-enum Mode { NONE, MOVE, SHOOT, AIMED_SHOT, FACE }
+enum Mode { NONE, MOVE, SHOOT, AIMED_SHOT, FACE, EMP }
+
+# EMP grenade (security-robots/design-choices/armor-and-destruction.md). The
+# faction's counter-lever, and the reason a robot-heavy mission rewards a
+# different loadout than an alien-heavy one: it does no damage at all, but it
+# takes a machine's Armor off for a window and burns its next activation.
+#
+# Implemented as a throw rather than as an equipped weapon because it is neither
+# — it is the Throw Grenade action of Sec 4.2, the first item to actually use it.
+const EMP_AP_COST := 1
+const EMP_THROW_RANGE := 6  # tiles, Chebyshev
+const EMP_BLAST_RADIUS := 1  # 3x3, centred on the tile clicked
+const EMP_STUN_TURNS := 2  # roster default; each unit's own resistance scales it
 
 signal action_logged(text: String)
 # Fired instead of firing immediately when a valid target is clicked while
@@ -20,11 +32,21 @@ const NO_TILE := Vector3i(0, -9999, 0)
 const _SIDE_WORD := ["east", "south", "west", "north"]
 
 var mode: Mode = Mode.NONE
+## Grenades this soldier deployed with. One each in the alpha: enough that the
+## squad can open a window on the fight's hardest target, not enough to answer
+## every armored unit on a deck — which is what keeps positioning the primary
+## plan and EMP the thing that rescues it.
+var emp_charges: int = 1
 # Move is one action whose cost depends on how far the destination is: the
 # inner band is a 1 AP run, the outer band a 2 AP sprint (Sec 4.2).
 var _run_tiles: Array[Vector3i] = []
 var _sprint_tiles: Array[Vector3i] = []
 var _hover_tile: Vector3i = NO_TILE
+## Cached while EMP is armed. Each entry costs a raycast, and the set cannot
+## change while the mode is up — a unit cannot move without disarming first — so
+## recomputing it per frame would be ~170 rays a frame for an answer that is
+## already known.
+var _throw_tiles: Array[Vector3i] = []
 var _preview_path: Array[Vector3i] = []
 var _preview_cost: int = 0
 
@@ -47,6 +69,7 @@ func set_mode(new_mode: Mode) -> void:
 	_preview_cost = 0
 	_run_tiles = []
 	_sprint_tiles = []
+	_throw_tiles = []
 	var highlights := get_tree().get_first_node_in_group("highlights")
 	if highlights:
 		highlights.clear_highlights()
@@ -62,6 +85,10 @@ func set_mode(new_mode: Mode) -> void:
 		Mode.SHOOT, Mode.AIMED_SHOT:
 			if highlights:
 				_show_targets(highlights)
+		Mode.EMP:
+			_throw_tiles = _throwable_tiles()
+			if highlights:
+				highlights.show_throw_range(_throw_tiles)
 	set_process(mode != Mode.NONE)
 
 
@@ -122,6 +149,8 @@ func _process(_delta: float) -> void:
 			_update_path_preview(highlights)
 		Mode.SHOOT, Mode.AIMED_SHOT:
 			_update_target_hover(highlights)
+		Mode.EMP:
+			_update_blast_preview(highlights)
 
 
 func _update_path_preview(highlights: Node) -> void:
@@ -149,6 +178,93 @@ func _update_target_hover(highlights: Node) -> void:
 	highlights.set_hovered_target(tile)
 
 
+## Tiles this soldier can put a grenade on: in range, on the grid, and in line of
+## sight, so a throw cannot be lobbed through a bulkhead into the next
+## compartment. Unlike a move, the tile may be OCCUPIED — the whole point is to
+## land it on the machine standing there.
+func _throwable_tiles() -> Array[Vector3i]:
+	var out: Array[Vector3i] = []
+	for dz in range(-EMP_THROW_RANGE, EMP_THROW_RANGE + 1):
+		for dx in range(-EMP_THROW_RANGE, EMP_THROW_RANGE + 1):
+			var tile := grid_pos + Vector3i(dx, 0, dz)
+			if not GridManager.has_tile(tile):
+				continue
+			if not GridManager.has_clear_line(self,
+					global_position + Vector3(0, 1.4, 0),
+					GridManager.grid_to_world(tile) + Vector3(0, 0.9, 0)):
+				continue
+			out.append(tile)
+	return out
+
+
+func _blast_tiles(centre: Vector3i) -> Array[Vector3i]:
+	var out: Array[Vector3i] = []
+	for dz in range(-EMP_BLAST_RADIUS, EMP_BLAST_RADIUS + 1):
+		for dx in range(-EMP_BLAST_RADIUS, EMP_BLAST_RADIUS + 1):
+			var tile := centre + Vector3i(dx, 0, dz)
+			if GridManager.has_tile(tile):
+				out.append(tile)
+	return out
+
+
+func _update_blast_preview(highlights: Node) -> void:
+	var tile := _tile_under_mouse_any()
+	if tile == _hover_tile:
+		return
+	_hover_tile = tile
+	var blast: Array[Vector3i] = []
+	if tile != NO_TILE and tile in _throw_tiles:
+		blast = _blast_tiles(tile)
+	highlights.show_throw_range(_throw_tiles, blast)
+
+
+## Like `_tile_under_mouse`, but a unit standing on the tile does not disqualify
+## it — a grenade is aimed AT things, where a move is aimed at empty deck.
+func _tile_under_mouse_any() -> Vector3i:
+	var hit := _raycast_mouse()
+	if hit.is_empty():
+		return NO_TILE
+	var unit := _unit_from_collider(hit["collider"])
+	return unit.grid_pos if unit else GridManager.world_to_grid(hit["position"])
+
+
+func _try_throw_emp(target: Vector3i) -> void:
+	if ap < EMP_AP_COST or emp_charges <= 0 or is_busy:
+		return
+	# Re-validated against the same cached set the overlay was drawn from, so what
+	# the player clicked and what they were shown can never disagree.
+	if not (target in _throw_tiles):
+		action_logged.emit("%s: no throwing line to %s" % [stats.display_name, target])
+		return
+	emp_charges -= 1
+	spend_ap(EMP_AP_COST)
+	set_mode(Mode.NONE)
+	await face_toward(GridManager.grid_to_world(target))
+	await visual.play_action(UnitVisual.GRENADE)
+	var vfx := get_tree().get_first_node_in_group("vfx")
+	if vfx and not is_instant():
+		vfx.impact(GridManager.grid_to_world(target) + Vector3(0, 0.9, 0), true)
+	action_logged.emit("%s throws an EMP grenade at %s" % [stats.display_name, target])
+	# An explosion is loud, and the robots' sound channel is the one thing about
+	# them a grenade does NOT bypass: throwing it announces where you are.
+	SecurityNetwork.report_noise(target, self)
+	var caught := 0
+	for tile in _blast_tiles(target):
+		var t: GridTileData = GridManager.get_tile(tile)
+		if t == null:
+			continue
+		var robot := t.occupant as CerberusUnit
+		if robot == null or robot.is_downed:
+			continue
+		robot.apply_emp(EMP_STUN_TURNS)
+		caught += 1
+	if caught == 0:
+		# Deliberately not refunded. The charge is spent on the throw, not on the
+		# outcome, which is what makes range and timing a real decision.
+		action_logged.emit("The EMP burst catches nothing")
+	_check_activation_end()
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if not _accepting_input():
 		return
@@ -156,6 +272,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	var hit := _raycast_mouse()
 	if hit.is_empty():
+		return
+	if mode == Mode.EMP:
+		# Ahead of the unit lookup, like FACE: landing it on the machine itself is
+		# the normal way to use this.
+		_try_throw_emp(_tile_under_mouse_any())
 		return
 	if mode == Mode.FACE:
 		# Deliberately ahead of the unit lookup: aiming the beam *at* something is

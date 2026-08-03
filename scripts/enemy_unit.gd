@@ -144,7 +144,10 @@ func _choose_aimed_part(quarry: Unit) -> int:
 	var head_acc := Combat.compute_accuracy(self, quarry, Combat.ShotAction.AIMED_SHOT, Combat.BodyPart.HEAD)
 	if head_acc >= HEADSHOT_ACCURACY_THRESHOLD and randf() < HEADSHOT_CHANCE:
 		return Combat.BodyPart.HEAD
-	var not_adjacent := GridManager.chebyshev_dist(grid_pos, quarry.grid_pos) > 1
+	# is_melee_adjacent, not chebyshev_dist <= 1: with four-way movement a quarry
+	# standing diagonally is two steps away, so it CAN still disengage and the
+	# leg shot is still worth taking.
+	var not_adjacent := not GridManager.is_melee_adjacent(grid_pos, quarry.grid_pos)
 	var legs_intact := not (quarry.is_part_injured(Combat.BodyPart.LEG_L) and quarry.is_part_injured(Combat.BodyPart.LEG_R))
 	if not_adjacent and legs_intact and randf() < LEG_TARGET_CHANCE:
 		return Combat.BodyPart.LEG_L if randf() < 0.5 else Combat.BodyPart.LEG_R

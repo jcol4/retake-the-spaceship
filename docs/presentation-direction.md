@@ -26,7 +26,7 @@ it is free.
 | Projection | Orthographic | `scenes/camera_rig.tscn` |
 | Pitch | `atan(1/√2)` ≈ 35.264°, fixed, no input | `camera_rig.gd` `PITCH` |
 | Yaw | 45° / 135° / 225° / 315°, Q and E step between them | `camera_rig.gd` `SNAP_STEP` |
-| Zoom | **None.** One fixed `Camera3D.size` of 16 | `camera_rig.tscn` |
+| Zoom | **None.** One fixed `Camera3D.size` of 12 — a 1.92 m character is 16% of viewport height, inside `character-art-plan.md`'s 15–20% reference band | `camera_rig.tscn` |
 | Pan | WASD, camera-relative, unchanged from before | `camera_rig.gd` `_process` |
 
 **Why 35.264° specifically.** At that pitch a world-space square projects to a 2:1
@@ -36,7 +36,15 @@ against that proportion, so changing the pitch invalidates the character art.
 **Why the yaw snaps rather than being fixed.** A fixed camera makes every room corner
 permanently unviewable. Four yaws give the player a way to look behind something without
 reintroducing free orbit — and it costs no additional art, because a quarter turn moves
-the eight sprite direction buckets by exactly two whole steps.
+the four sprite direction buckets by exactly one whole step.
+
+**Why the start yaw is 45° and not 0°.** This is the load-bearing number for the whole
+direction system, and it is easy to mistake for an aesthetic choice. At 45° the four
+*world* grid axes project to the four *screen* diagonals — a unit facing world −Z reads
+as up-and-right, not straight up. Since units may only move and face along those axes,
+the four drawn directions are exactly the four reachable ones, and the set is closed
+under a camera snap. At a start yaw of 0° the same four axes would read as screen
+up/down/left/right instead, which is a different art set and a flatter read.
 
 **Why zoom went entirely.** Under orthographic projection, camera distance no longer
 changes apparent scale, so zoom would have had to become `Camera3D.size`. One scale is
@@ -63,21 +71,46 @@ alien has three layers and the swarm two, and if vertical aiming returns as
 independently-posed arm layers it must cost art and nothing else. That question is still
 open; the exported array is what keeps it cheap to answer either way.
 
+The security robots are the first character to take that promise up, and it cost exactly what
+it was supposed to: they carry a `status` layer nothing else has — the diegetic alert-state
+light from their
+[faction identity](design/factions/security-robots/design-choices/faction-identity.md), since a
+player cannot read a machine's posture off its body language the way they can an alien's.
+`CerberusUnit` recolours it per state; `UnitVisual.set_status_color` is the whole interface.
+
+That layer is also the one exception to the lighting rule below. `SELF_LIT_LAYERS` is exempt
+from the tile-light tint, because a status light is the thing *emitting* — dimming it in a dark
+room would put out the one readability aid the faction has in exactly the conditions it exists
+for.
+
 ### Direction
 
-Sprite direction is **unit yaw minus camera yaw**, quantised into eight 45° buckets.
+Sprite direction is **unit yaw minus camera yaw**, quantised into four 90° buckets,
+offset so each bucket is *centred* on a screen diagonal rather than straddling two.
 Subtracting the camera is what makes the snap work, and it adds one requirement: a snap
 changes every character's apparent facing without any unit having turned, so
 `_sync_direction` is driven by the rig's `yaw_changed` signal as well as by unit facing.
 
-Bucket 0 is a unit facing directly away from the viewer, and the index rises
-anticlockwise on screen. `tools/test_sprite_direction.gd` pins that mapping down; it is
-exactly the kind of thing that looks plausible in a screenshot and is obvious in a table.
+**The four directions are `ne, nw, sw, se` — the screen diagonals**, because those are
+what the four world grid axes project to under the 45° rig. Bucket 0 is up-right and the
+index rises anticlockwise on screen. `tools/test_sprite_direction.gd` pins that mapping
+down; it is exactly the kind of thing that looks plausible in a screenshot and is obvious
+in a table.
 
-**5 drawn + 3 mirrored.** Only `n, ne, e, se, s` are authored. `nw, w, sw` are those
-flipped horizontally. A pose where flipping is wrong — anything armed, where the rifle
-would end up on the wrong shoulder — may be authored for all eight instead: art for a
-mirrored direction wins over the mirror table automatically.
+**Two invariants keep this honest, and both are enforced in code:**
+
+1. Movement is four-way — `GridManager.STEPS` offers no diagonal, so a walked path always
+   produces an axis-aligned yaw.
+2. Facing is quantised — `Unit._yaw_toward` snaps to 90°, because the Face action is
+   driven by a raw mouse click and would otherwise hold a yaw between two drawn
+   directions. A unit in that state has **no art at all** and the sprite layer hides
+   itself, which is why this is a hard requirement and not a polish item.
+
+**2 drawn + 2 mirrored.** Only `ne, se` are authored. `nw, sw` are those flipped
+horizontally. A pose where flipping is wrong — anything armed, where the rifle would end
+up on the wrong shoulder — may be authored for all four instead: art for a mirrored
+direction wins over the mirror table automatically. That is the path the merc takes, so
+its sets are 4 directions × 18 poses = 72 animations per layer.
 
 ### The pivot contract
 
@@ -100,6 +133,13 @@ scene lights. Two reasons, and the second is the important one:
 `UnitVisual` draws its own placeholder per layer, pose and direction — readable enough to
 judge direction, layering and lockstep by eye. Dropping real `SpriteFrames` into
 `assets/sprites/[part]_[variant].tres` replaces it silently.
+
+Two **styles** of placeholder, selected by `placeholder_style`: `organic`, the standing biped
+everything started as, and `machine` for the security robots — rectangles only, no discs, no
+taper, in cold greys against the organic set's warmer palette. The point is not that the
+stand-in looks good; it is that faction reads off silhouette and colour at 16% of viewport
+height in a dark corridor, which is the condition the real art has to survive too. Testing that
+against a placeholder that ignores it would be testing nothing.
 
 Action *timing* does not change when that happens. Without authored art, actions resolve
 on `FALLBACK_TIME` — the measured clip lengths from the 3D pipeline that preceded this,
@@ -201,6 +241,12 @@ Cover has no glyph because a per-tile grid cannot name a boundary. Only the cano
 sides `E` and `S` may be written: every edge has two names, and accepting both would let
 one edge be authored twice with two different values.
 
+Spawns *do* get glyphs: `P` player, `E` alien, `S` swarm, and one per security-robot model —
+`Q` Auxilium, `M` Sagittarii, `X` Proctor, `J` Securus. The robots are per-type where the
+aliens are per-kind because a security roster is placed deliberately (this doorway gets a
+sentry, that hall gets the heavy) where an infestation is placed in bulk. Letters come from the
+model codes rather than the names, since the names collide with glyphs already taken.
+
 **Rooms are not stored.** They are derived from the layout by `MapData.compute_rooms`, so
 they cannot drift out of sync with it. The rule is the one a ship deck is actually built
 to: find the **bulkhead lines** (rows and columns that are mostly wall), then flood-fill
@@ -258,6 +304,7 @@ helmet bone.
 | `tools/test_edge_cover.gd` | cover direction, diagonals, degradation, passability |
 | `tools/test_sprite_direction.gd` | bucket mapping, mirror rule, snap re-bucketing |
 | `tools/test_room_visibility.gd` | render gating, fast-forward, overwatch survives it |
+| `tools/test_cerberus.gd` | the security-robot faction's rules, against the built deck |
 | `tools/_debug_occlusion.gd` | prints hidden walls as ASCII at all four yaws |
 
 All but `test_room_visibility.gd` run headless; that one needs a window, because headless

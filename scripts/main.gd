@@ -57,6 +57,8 @@ func _ready() -> void:
 		swarm.action_logged.connect(_on_unit_log)
 		swarm_index += 1
 
+	_spawn_security_robots()
+
 	if not map.player_spawns.is_empty():
 		camera_rig.focus_on(GridManager.grid_to_world(map.player_spawns[0]))
 
@@ -74,6 +76,27 @@ func _ready() -> void:
 	add_child(loadout)
 	loadout.setup(player_units)
 	loadout.deployed.connect(func() -> void: TurnManager.start_mission.call_deferred())
+
+
+func _spawn_security_robots() -> void:
+	# One pass over the roster rather than a block per type: the deck says which
+	# models it wants and where, and CerberusPresets says what each one is.
+	#
+	# The zone assignment is the only thing that cannot come from either — it is a
+	# property of the DECK's compartment graph, so the builder derives it (see
+	# MapBuilder.zone_at). A robot spawned outside any room gets NO_ZONE and
+	# simply broadcasts to nobody, which is the right answer rather than an error.
+	for kind: int in MapData.CERBERUS_SPAWNS:
+		var spawns: Array = map.cerberus_spawns.get(kind, [])
+		var index := 1
+		for spawn: Vector3i in spawns:
+			var robot: CerberusUnit = CerberusPresets.scene_for(kind).instantiate()
+			robot.stats = CerberusPresets.make_stats(kind, index if spawns.size() > 1 else 1)
+			robot.security_zone = map.zone_at(spawn)
+			robot.position = GridManager.grid_to_world(spawn)
+			add_child(robot)
+			robot.action_logged.connect(_on_unit_log)
+			index += 1
 
 
 func _auto_play(unit: Unit) -> void:

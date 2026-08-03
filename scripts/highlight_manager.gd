@@ -9,6 +9,11 @@ const SPRINT_COLOR := Color(1.0, 0.78, 0.1, 0.38)
 const PATH_COLOR := Color(1.0, 1.0, 1.0, 0.8)
 const DEST_COLOR := Color(1.0, 1.0, 1.0, 0.9)
 const TARGET_COLOR := Color(1.0, 0.25, 0.2, 0.6)
+# Grenade throw: a green band for reach, a brighter core for the burst footprint.
+# Deliberately nothing like the move bands — the two are armed from adjacent
+# buttons and a player must never mistake one overlay for the other.
+const THROW_COLOR := Color(0.3, 0.9, 0.5, 0.30)
+const BLAST_COLOR := Color(0.55, 1.0, 0.75, 0.65)
 const TARGET_TEXT_COLOR := Color(1.0, 0.55, 0.45)
 const RUN_TEXT_COLOR := Color(0.55, 0.85, 1.0)
 const SPRINT_TEXT_COLOR := Color(1.0, 0.85, 0.3)
@@ -91,6 +96,34 @@ func show_path(path: Array[Vector3i], ap_cost: int) -> void:
 		_cost_label.modulate = RUN_TEXT_COLOR if ap_cost == 1 else SPRINT_TEXT_COLOR
 		_cost_label.global_position = dest + Vector3(0, COST_LABEL_Y, 0)
 		_cost_label.visible = true
+
+
+## Where a grenade can land, and what the burst would cover if thrown at the tile
+## under the cursor.
+##
+## Reuses the two move-range pools rather than adding a third and fourth: only
+## one mode is ever armed at a time, so the pools are free, and the colours are
+## set per call anyway (see `_tint_by_light`, which already rewrites albedo on
+## every reuse). Green rather than the move bands' blue/yellow, because "I can
+## throw here" and "I can walk here" must never be confused at a glance.
+func show_throw_range(tiles: Array[Vector3i], blast: Array[Vector3i] = []) -> void:
+	_hide_all(_run_pool)
+	_hide_all(_sprint_pool)
+	for i in tiles.size():
+		var quad := _at(_run_pool, i, THROW_COLOR, RANGE_SIZE)
+		quad.global_position = GridManager.grid_to_world(tiles[i]) + Vector3(0, RANGE_Y, 0)
+		_recolor(quad, THROW_COLOR)
+		quad.visible = true
+	for i in blast.size():
+		var quad := _at(_sprint_pool, i, BLAST_COLOR, RANGE_SIZE)
+		# Above the range band, so the burst footprint reads on top of it.
+		quad.global_position = GridManager.grid_to_world(blast[i]) + Vector3(0, PATH_Y, 0)
+		_recolor(quad, BLAST_COLOR)
+		quad.visible = true
+
+
+func _recolor(quad: MeshInstance3D, color: Color) -> void:
+	(quad.material_override as StandardMaterial3D).albedo_color = color
 
 
 func show_targets(tiles: Array[Vector3i], accuracies: Array[int]) -> void:

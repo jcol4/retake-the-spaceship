@@ -40,6 +40,27 @@ dangerous in numbers."
   if it detects the player and isn't dealt with quickly — the "trip an Auxilium, alert the zone"
   loop is the faction's core early-warning threat.
 
+## Alpha implementation
+
+[`scripts/auxilium_unit.gd`](../../../../../../scripts/auxilium_unit.gd) +
+[`scenes/auxilium_unit.tscn`](../../../../../../scenes/auxilium_unit.tscn). Map glyph `Q`.
+
+| | |
+|---|---|
+| HP / Armor | 45 / 4 |
+| Weapon | QRN Sentry Gun — 25 accuracy, 10 damage, 8-round magazine |
+| Movement | Fitness-derived, `move_speed` 2.2 — it repositions, it does not travel |
+| Post | `holds_position` true, `post_leash` 3 tiles |
+| Salvage | 2 |
+
+Its combat behaviour needed no new code — it is the base ranged loop with a leash. The unit's
+own contribution is what it does with a *quiet* activation: `_hold_post` spends 1 AP on the
+existing Overwatch action rather than idling, so a bypassed Auxilium is never free to walk past
+twice. Both halves are checked in `tools/test_cerberus.gd`.
+
+Armor 4 against the Assault Rifle's 12 damage is the "rarely drops one outright" line above,
+stated as a number: two clean snap shots, or one flank, or a 2 AP Aimed Shot.
+
 ## Open items
 
 - Exact HP/Armor numbers deferred to playtesting, consistent with the rest of the roster.

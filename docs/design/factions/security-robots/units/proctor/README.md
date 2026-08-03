@@ -54,6 +54,32 @@ happen.
   deal with the detector before it turns a manageable fight into one with an elite unit converging
   on their position.
 
+## Alpha implementation
+
+[`scripts/proctor_unit.gd`](../../../../../../scripts/proctor_unit.gd) +
+[`scenes/proctor_unit.tscn`](../../../../../../scenes/proctor_unit.tscn). Map glyph `X`.
+
+| | |
+|---|---|
+| HP / Armor | 20 / 0 |
+| Weapon | None. `weapon` is null, so `can_shoot()` is false forever — the same way the alien swarm is unarmed |
+| Movement | `move_speed` 5.0 — the only unit in the faction that outruns a soldier |
+| Scan | `evidence_scan_radius` 4, once per activation, no line of sight required |
+| Salvage | 3 |
+
+Its combat loop is a *retreat*: `_combat_turn` is overridden to report and then move to the
+reachable tile furthest from the threat, every activation, until cornered. It never fires,
+never closes and never trades, because the value it protects is its own continued existence.
+
+`_propagate_alert` sends the **priority** broadcast rather than the standard one. That flag is
+the whole of the call-in: it spawns nothing, it routes already-placed heavy units, and a zone
+with no Securus in it has nothing for a Proctor to call — which is the lever level authoring
+actually has over how dangerous one is.
+
+`ignores_terrain_move_cost` is declared and currently inert: no terrain costs more than one
+tile yet, so hovering changes nothing today. It is on the unit that owns the behaviour so that
+adding hazard tiles later is a change to the pathfinder rather than to the roster.
+
 ## Open items
 
 - Exact evidence-flag radius and scan frequency — deferred to playtesting, same posture as the

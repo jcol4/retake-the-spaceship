@@ -99,6 +99,10 @@ text = "Shoot (1)"
 layout_mode = 2
 text = "Aimed Shot (2)"
 
+[node name="Emp" type="Button" parent="Actions"]
+layout_mode = 2
+text = "EMP (1)"
+
 [node name="Hunker" type="Button" parent="Actions"]
 layout_mode = 2
 text = "Hunker (1)"
