@@ -26,15 +26,16 @@ const POSES := [
 	"alert_scream", "idle_fidget",
 ]
 
-## All FOUR, not the two-plus-mirror set. A character carrying a rifle cannot be
-## mirrored -- unit_visual.gd's MIRROR table would put the weapon in the wrong
+## All EIGHT, not the five-plus-mirror set. A character carrying a rifle cannot
+## be mirrored -- unit_visual.gd's MIRROR table would put the weapon in the wrong
 ## hand -- so the asymmetric path in `_resolve` (art for the mirrored direction
 ## wins over the mirror table) is the one taken here.
 ##
-## These are the four screen diagonals and nothing else, because they are what
-## the four world grid axes project to under the 45-degree rig. See
-## unit_visual.gd's DIRECTIONS.
-const DIRECTIONS := ["ne", "nw", "sw", "se"]
+## Order is irrelevant here (this only ever emits names), but it is kept
+## identical to unit_visual.gd's DIRECTIONS so the two lists can be diffed by
+## eye. The screen diagonals are the four world grid axes; the screen cardinals
+## are the four world diagonals.
+const DIRECTIONS := ["ne", "n", "nw", "w", "sw", "s", "se", "e"]
 
 const LOOPING := ["idle", "run", "walk", "crouch_idle", "overwatch_hold", "aim_hold"]
 

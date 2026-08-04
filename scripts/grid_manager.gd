@@ -67,32 +67,52 @@ func set_occupant(pos: Vector3i, unit: Node3D) -> void:
 		t.occupant = unit
 
 
-## The four grid axes a unit may step along. FOUR-way, not eight: a character is
-## drawn in four directions, and those four are exactly the world axes (see
-## unit_visual.gd's DIRECTIONS). Allowing a diagonal step would face a unit at a
-## yaw no art exists for.
+## The eight grid directions a unit may step along, in the order the four
+## cardinals then the four diagonals. EIGHT-way: a character is drawn in eight
+## directions (unit_visual.gd's DIRECTIONS), so every one of these has art to
+## show, and a diagonal costs the same one tile a cardinal does — see
+## `get_reachable_tiles` for why that keeps the BFS uniform-cost.
 ##
 ## This is the single source of movement adjacency — get_reachable_tiles,
 ## find_path and is_melee_adjacent all derive from it, so nothing can disagree
 ## with it about what "adjacent" means.
 const STEPS: Array[Vector3i] = [
 	Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1),
+	Vector3i(1, 0, 1), Vector3i(1, 0, -1), Vector3i(-1, 0, 1), Vector3i(-1, 0, -1),
 ]
 
 
+## Whether a tile is open enough to count as a corner a diagonal may be taken
+## around. Deliberately reads only the MAP — a tile with somebody standing on it
+## is still a tile with no wall on it, and a squadmate should not be able to
+## block a corner simply by standing beside it. `is_free` is the test for
+## whether the destination itself can be entered; this is only about the two
+## tiles a diagonal squeezes between.
+func _corner_is_open(pos: Vector3i) -> bool:
+	var t: GridTileData = tiles.get(pos)
+	return t != null and t.passable
+
+
 func neighbors(pos: Vector3i) -> Array[Vector3i]:
-	# Four-way same-floor neighbors (Sec 4.0) plus any pre-authored stair links
+	# Eight-way same-floor neighbors (Sec 4.0) plus any pre-authored stair links
 	# (elevation traversal free, Sec 4.0).
 	#
-	# The corner-cutting guard that used to live here is gone with the diagonals
-	# it policed: a unit can no longer slip around a corner that
-	# has_line_of_sight treats as solid, because it can no longer move around a
-	# corner in one step at all.
+	# Diagonals carry a corner-cutting guard, and it is the loose form: a
+	# diagonal is blocked only when BOTH tiles it passes between are walls. So a
+	# unit may slip around a single wall corner — which is what makes eight-way
+	# movement feel like movement rather than like a grid — but cannot thread the
+	# zero-width gap where two walls meet at a point, which is the case that
+	# reads on screen as walking through solid geometry.
 	var out: Array[Vector3i] = []
 	for step in STEPS:
 		var n := pos + step
-		if tiles.has(n):
-			out.append(n)
+		if not tiles.has(n):
+			continue
+		if step.x != 0 and step.z != 0 \
+				and not _corner_is_open(pos + Vector3i(step.x, 0, 0)) \
+				and not _corner_is_open(pos + Vector3i(0, 0, step.z)):
+			continue
+		out.append(n)
 	if stair_links.has(pos):
 		for n: Vector3i in stair_links[pos]:
 			out.append(n)
@@ -101,6 +121,14 @@ func neighbors(pos: Vector3i) -> Array[Vector3i]:
 
 func get_reachable_tiles(from: Vector3i, max_tiles: int) -> Array[Vector3i]:
 	# BFS, uniform cost 1, excluding impassable/occupied tiles. Sec 4.0.
+	#
+	# A diagonal costs the same one tile a cardinal does, which is what keeps
+	# this a BFS rather than a Dijkstra: the moment a diagonal costs 1.5 the
+	# frontier stops popping in non-decreasing depth and every caller that treats
+	# `max_tiles` as a whole number of AP-worth of movement needs rewriting too.
+	# The price is the familiar one — N tiles reaches a SQUARE of side 2N+1, so
+	# the diagonals reach ~1.41x further in world distance than the cardinals.
+	# `UnitStats.move_run` is sized against that square.
 	var reached: Array[Vector3i] = []
 	var visited := {from: 0}
 	var frontier: Array[Vector3i] = [from]
@@ -123,16 +151,21 @@ func find_path(from: Vector3i, to: Vector3i, max_tiles: int, allow_occupied_goal
 	# unreachable. With allow_occupied_goal the goal tile itself may be
 	# occupied (used to path *toward* another unit).
 	#
-	# On a four-way grid every route to a tile off both axes ties on length --
-	# any interleaving of the same horizontal and vertical steps costs the same.
-	# Among those, prefer the one that CHANGES DIRECTION fewest times, but never
-	# trade a turn for an extra tile, since tiles are what AP and range measure.
+	# On an eight-way grid with uniform cost, a tile off both axes is reached in
+	# max(dx, dz) steps by MANY routes -- the diagonal steps may be taken in any
+	# order relative to the straight ones. Among those, prefer the one that
+	# CHANGES DIRECTION fewest times, but never trade a turn for an extra tile,
+	# since tiles are what AP and range measure.
 	#
 	# This tiebreak is load-bearing rather than cosmetic. Plain BFS returns
 	# whichever interleaving it happened to expand first, which is typically a
-	# staircase -- and a unit walking a staircase turns 90 degrees on every
-	# single tile. With facing quantised to four directions that is not a subtle
-	# wobble, it is the sprite flipping between two drawn poses per step.
+	# zigzag alternating diagonal and cardinal steps -- and a unit walking that
+	# turns 45 degrees on every single tile. With facing quantised to eight
+	# directions that is not a subtle wobble, it is the sprite flipping between
+	# two drawn poses per step. Eight-way makes this MORE valuable than four-way
+	# did, not less: the tiebreak now collapses those routes into "go diagonally
+	# until you are on the axis, then go straight", which is one turn for the
+	# whole path.
 	if from == to:
 		return []
 	var parent := {from: from}
@@ -188,14 +221,14 @@ func find_path(from: Vector3i, to: Vector3i, max_tiles: int, allow_occupied_goal
 
 
 func chebyshev_dist(a: Vector3i, b: Vector3i) -> int:
-	# RANGE, not movement cost — the two deliberately stopped agreeing when
-	# movement went four-way. A shot, a sensor sweep and a thrown grenade all
-	# cross a corner perfectly happily; only feet are restricted to the axes. So
-	# range stays square (diagonals count 1) while a diagonal STEP costs two, and
-	# `is_melee_adjacent` rather than `chebyshev_dist(..) <= 1` is the test for
-	# anything that has to be walked to.
-	#
-	# Floors ignored, as before.
+	# RANGE, not movement cost — and with eight-way movement at uniform cost the
+	# two agree again on open ground: a diagonal counts 1 here and costs 1 to
+	# walk. They still are not interchangeable, for two reasons that survive the
+	# change. This ignores FLOORS, so it calls a unit under a platform distance 0
+	# from one standing on it; and it ignores WALLS, which is correct for a shot
+	# or a sensor sweep and wrong for feet. `is_melee_adjacent` rather than
+	# `chebyshev_dist(..) <= 1` therefore remains the test for anything that has
+	# to be walked to.
 	return maxi(absi(a.x - b.x), absi(a.z - b.z))
 
 
@@ -204,8 +237,8 @@ func is_melee_adjacent(a: Vector3i, b: Vector3i) -> bool:
 	# so a unit can only reach what it could have stepped onto. `chebyshev_dist`
 	# is the wrong test here: it ignores floors, and would call a unit standing
 	# under the platform distance 0 from one standing on top of it. Reusing
-	# `neighbors` also inherits the no-corner-cutting rule, so nothing swings
-	# diagonally around a wall it can't see past.
+	# `neighbors` also inherits the corner-cutting guard, so nothing swings
+	# diagonally through the point where two bulkheads meet.
 	return b in neighbors(a)
 
 

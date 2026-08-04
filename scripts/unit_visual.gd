@@ -113,42 +113,55 @@ const WALK_SPEED := 1.02
 
 # --- Direction ---------------------------------------------------------------
 #
-# Sprite direction is the unit's yaw MINUS the camera's, quantised into four
-# 90-degree buckets. Subtracting the camera is what makes this work under a rig
-# whose yaw snaps: a quarter turn moves every bucket by exactly one step, so the
+# Sprite direction is the unit's yaw MINUS the camera's, quantised into eight
+# 45-degree buckets. Subtracting the camera is what makes this work under a rig
+# whose yaw snaps: a quarter turn moves every bucket by exactly two steps, so the
 # snap costs no additional art — but it DOES change every character's apparent
 # facing without any unit having turned, which is why _sync_direction is driven
 # off the rig's yaw_changed signal as well as off unit facing.
 
-## Screen-space directions, indexed by bucket. FOUR, and specifically the four
-## screen DIAGONALS, because those are what the four world grid axes project to:
-## the rig sits at a 45-degree yaw (camera_rig.gd START_YAW), so a unit facing
-## world -Z reads as up-and-right on screen, not straight up. Units can only step
-## along those axes (GridManager.STEPS) and only face along them
-## (Unit._yaw_toward), so no other bucket is reachable.
+## Screen-space directions, indexed by bucket. EIGHT, matching the eight
+## directions a unit may step and face (GridManager.STEPS, Unit._yaw_toward), so
+## no reachable facing is without art.
+##
+## They are named for where they point ON SCREEN, not in the world, and the two
+## differ by the rig's 45-degree yaw (camera_rig.gd START_YAW): the four world
+## grid AXES project to the four screen DIAGONALS, and the four world diagonals
+## project to the screen cardinals. So a unit facing world -Z reads as `ne`,
+## up-and-right, rather than straight up.
 ##
 ## Bucket 0 is up-right; the index rises with yaw, which — given Godot's -Z
-## forward and +X screen-right — runs anticlockwise on screen.
-const DIRECTIONS: Array[StringName] = [&"ne", &"nw", &"sw", &"se"]
+## forward and +X screen-right — runs anticlockwise on screen. This is the same
+## order, and must stay the same order, as render_sprites.py's DIRECTIONS, which
+## is the index-to-Blender-angle table the PNGs are rendered from.
+const DIRECTIONS: Array[StringName] = [
+	&"ne", &"n", &"nw", &"w", &"sw", &"s", &"se", &"e",
+]
 
-## Half the buckets are the other half flipped. Only the two right-facing
-## directions need authoring; the left-facing two are those mirrored. Entries are
-## [source direction, flip_h].
+## Three of the eight buckets are another bucket flipped. Only the five that face
+## screen-right or straight up/down need authoring; the three left-facing ones
+## are those mirrored. Entries are [source direction, flip_h].
 ##
 ## A pose that is NOT symmetric — anything armed, where flipping moves the rifle
-## to the wrong shoulder — can be authored for all four instead: if the sprite
-## set contains art for the mirrored direction itself, _sync_direction uses it
-## unflipped and this table never applies. That is the path the merc takes; see
+## to the wrong shoulder — can be authored for all eight instead: if the sprite
+## set contains art for the mirrored direction itself, _resolve uses it unflipped
+## and this table never applies. That is the path the merc takes; see
 ## tools/build_sprite_frames.gd.
 const MIRROR := {
 	&"nw": [&"ne", true],
+	&"w": [&"e", true],
 	&"sw": [&"se", true],
 }
 
-## Rotates the bucket window so each bucket is CENTRED on a screen diagonal
+## Rotates the bucket window so each bucket is CENTRED on a drawn direction
 ## rather than straddling two. Without it a unit facing a world axis would sit
 ## exactly on the boundary between two buckets and flicker between them under
 ## floating-point noise.
+##
+## Still PI/4 at eight buckets, and not by coincidence: the reachable relative
+## yaws are the rig's -45 degrees plus any multiple of the 45-degree bucket
+## width, so the same offset that centred four 90-degree buckets centres eight
+## 45-degree ones.
 const BUCKET_OFFSET := PI / 4.0
 
 ## Layers, back to front. Data-driven rather than four hardcoded nodes so an arm
@@ -169,6 +182,21 @@ const BUCKET_OFFSET := PI / 4.0
 ## placeholder's on-screen size is unchanged.
 @export var canvas_height: float = 1.92
 
+## Where the art's origin sits in the canvas, as a fraction: the FEET, not the
+## centre. Every layer shares it, which is what keeps a helmet on a head across a
+## gear swap.
+##
+## Exported rather than a constant because it is a property of the CANVAS, like
+## `canvas_height` beside it, and the placeholder and the authored art no longer
+## agree on it. The placeholder is drawn with the feet flush to the bottom edge,
+## so 1.0 is right for it and is the default. Rendered art cannot be: the sprite
+## camera is tilted, so the floor projects to a DIAGONAL through the world origin
+## rather than to a horizontal line under the boots, and a foot planted toward
+## the camera falls below the frame. `render_sprites.py` answers that with
+## FLOOR_MARGIN metres of floor below the origin, which moves the anchor up off
+## the bottom edge by exactly that fraction -- see that file for the arithmetic.
+@export var foot_anchor: Vector2 = Vector2(0.5, 1.0)
+
 ## Whether this character carries the rig-mounted light (Sec 5.2). Aliens do not.
 @export var has_light: bool = true
 
@@ -187,9 +215,6 @@ const BUCKET_OFFSET := PI / 4.0
 ## the art never changes the pivot. `_placeholder_texture` draws in these
 ## coordinates, so changing it means redrawing every stand-in.
 const CANVAS := 64
-## Where the art's origin sits in the canvas: the FEET, not the centre. Every
-## layer shares it, which is what keeps a helmet on a head across a gear swap.
-const FOOT_ANCHOR := Vector2(0.5, 1.0)
 
 ## Darkest a sprite is allowed to get. Sprites are UNSHADED and tinted from the
 ## tile's light_value instead of being lit, so this is the floor of that tint:
@@ -288,7 +313,7 @@ func _build_layers() -> void:
 		sprite.sprite_frames = frames
 		# Scale and pivot both derive from this layer's own texture size, which IS
 		# the pivot contract: every layer resolves to the same world height with
-		# its origin on FOOT_ANCHOR, so reassigning one layer's frames can never
+		# its origin on `foot_anchor`, so reassigning one layer's frames can never
 		# shift it against the others no matter what resolution it was drawn at.
 		_apply_frame_scale(sprite, frames)
 		# Always face the viewer, upright. Direction is carried by WHICH art is
@@ -326,8 +351,8 @@ func _apply_frame_scale(sprite: AnimatedSprite3D, frames: SpriteFrames) -> void:
 	var size := _frame_size(frames)
 	sprite.pixel_size = canvas_height / size.y
 	sprite.offset = Vector2(
-		size.x * (0.5 - FOOT_ANCHOR.x),
-		size.y * (FOOT_ANCHOR.y - 0.5))
+		size.x * (0.5 - foot_anchor.x),
+		size.y * (foot_anchor.y - 0.5))
 
 
 ## Pixel size of the art in `frames`, falling back to the placeholder canvas when
@@ -741,9 +766,10 @@ func _placeholder_frames(layer: StringName) -> SpriteFrames:
 	var frames := SpriteFrames.new()
 	frames.remove_animation(&"default")
 	for pose: StringName in PLACEHOLDER_POSES:
-		# Only the two right-facing directions, so the mirror table is genuinely
-		# exercised rather than bypassed by drawing all four.
-		for dir: StringName in [&"ne", &"se"]:
+		# Only the five DRAWN directions — the mirror table supplies nw, w and sw
+		# — so that table is genuinely exercised rather than bypassed by
+		# generating all eight.
+		for dir: StringName in [&"n", &"ne", &"e", &"se", &"s"]:
 			var name := &"%s_%s" % [pose, dir]
 			frames.add_animation(name)
 			frames.set_animation_loop(name, pose in [IDLE, RUN, WALK, CROUCH, OVERWATCH, AIM_HOLD])

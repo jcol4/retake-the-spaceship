@@ -36,15 +36,17 @@ against that proportion, so changing the pitch invalidates the character art.
 **Why the yaw snaps rather than being fixed.** A fixed camera makes every room corner
 permanently unviewable. Four yaws give the player a way to look behind something without
 reintroducing free orbit — and it costs no additional art, because a quarter turn moves
-the four sprite direction buckets by exactly one whole step.
+the eight sprite direction buckets by exactly two whole steps. A *whole number* of steps
+is the property that matters; the count follows from 90° ÷ 45°.
 
 **Why the start yaw is 45° and not 0°.** This is the load-bearing number for the whole
 direction system, and it is easy to mistake for an aesthetic choice. At 45° the four
 *world* grid axes project to the four *screen* diagonals — a unit facing world −Z reads
-as up-and-right, not straight up. Since units may only move and face along those axes,
-the four drawn directions are exactly the four reachable ones, and the set is closed
-under a camera snap. At a start yaw of 0° the same four axes would read as screen
-up/down/left/right instead, which is a different art set and a flatter read.
+as up-and-right, not straight up — and the four world diagonals fill in the screen
+cardinals. Units may move and face along all eight, so the eight drawn directions are
+exactly the eight reachable ones, and the set is closed under a camera snap. At a start
+yaw of 0° the same eight directions would land rotated 45°, which is a different art set
+and a flatter read.
 
 **Why zoom went entirely.** Under orthographic projection, camera distance no longer
 changes apparent scale, so zoom would have had to become `Camera3D.size`. One scale is
@@ -85,32 +87,35 @@ for.
 
 ### Direction
 
-Sprite direction is **unit yaw minus camera yaw**, quantised into four 90° buckets,
-offset so each bucket is *centred* on a screen diagonal rather than straddling two.
+Sprite direction is **unit yaw minus camera yaw**, quantised into eight 45° buckets,
+offset so each bucket is *centred* on a drawn direction rather than straddling two.
 Subtracting the camera is what makes the snap work, and it adds one requirement: a snap
 changes every character's apparent facing without any unit having turned, so
 `_sync_direction` is driven by the rig's `yaw_changed` signal as well as by unit facing.
 
-**The four directions are `ne, nw, sw, se` — the screen diagonals**, because those are
-what the four world grid axes project to under the 45° rig. Bucket 0 is up-right and the
-index rises anticlockwise on screen. `tools/test_sprite_direction.gd` pins that mapping
-down; it is exactly the kind of thing that looks plausible in a screenshot and is obvious
-in a table.
+**The eight directions are `ne, n, nw, w, sw, s, se, e`.** They are named for where they
+point *on screen*, and the 45° rig inverts what you would expect: the four **world grid
+axes** project to the four **screen diagonals**, and the four world diagonals project to
+the screen cardinals. So a unit facing world −Z reads as `ne`. Bucket 0 is up-right and
+the index rises anticlockwise on screen. `tools/test_sprite_direction.gd` pins that
+mapping down; it is exactly the kind of thing that looks plausible in a screenshot and is
+obvious in a table.
 
 **Two invariants keep this honest, and both are enforced in code:**
 
-1. Movement is four-way — `GridManager.STEPS` offers no diagonal, so a walked path always
-   produces an axis-aligned yaw.
-2. Facing is quantised — `Unit._yaw_toward` snaps to 90°, because the Face action is
+1. Movement is eight-way — `GridManager.STEPS` has exactly eight entries, matching the
+   eight drawn directions one-for-one, so a walked path can never produce a yaw with no
+   art behind it.
+2. Facing is quantised — `Unit._yaw_toward` snaps to 45°, because the Face action is
    driven by a raw mouse click and would otherwise hold a yaw between two drawn
    directions. A unit in that state has **no art at all** and the sprite layer hides
    itself, which is why this is a hard requirement and not a polish item.
 
-**2 drawn + 2 mirrored.** Only `ne, se` are authored. `nw, sw` are those flipped
-horizontally. A pose where flipping is wrong — anything armed, where the rifle would end
-up on the wrong shoulder — may be authored for all four instead: art for a mirrored
-direction wins over the mirror table automatically. That is the path the merc takes, so
-its sets are 4 directions × 18 poses = 72 animations per layer.
+**5 drawn + 3 mirrored.** Only `n, ne, e, se, s` are authored. `nw, w, sw` are those
+flipped horizontally. A pose where flipping is wrong — anything armed, where the rifle
+would end up on the wrong shoulder — may be authored for all eight instead: art for a
+mirrored direction wins over the mirror table automatically. That is the path the merc
+takes, so its sets are 8 directions × 18 poses = 144 animations per layer.
 
 ### The pivot contract
 
@@ -303,6 +308,7 @@ helmet bone.
 | `tools/test_iso_picking.gd` | mouse picking at all four yaws, pan basis follows the snap |
 | `tools/test_edge_cover.gd` | cover direction, diagonals, degradation, passability |
 | `tools/test_sprite_direction.gd` | bucket mapping, mirror rule, snap re-bucketing |
+| `tools/test_movement.gd` | 8-way adjacency, uniform diagonal cost, the corner-cutting guard |
 | `tools/test_room_visibility.gd` | render gating, fast-forward, overwatch survives it |
 | `tools/test_cerberus.gd` | the security-robot faction's rules, against the built deck |
 | `tools/_debug_occlusion.gd` | prints hidden walls as ASCII at all four yaws |

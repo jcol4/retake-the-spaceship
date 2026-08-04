@@ -1,5 +1,5 @@
 extends SceneTree
-## The four-direction sprite bucketing, the mirror rule, and the thing the snap
+## The eight-direction sprite bucketing, the mirror rule, and the thing the snap
 ## camera makes necessary — that a camera yaw change re-buckets every character
 ## even though nothing turned.
 ##
@@ -19,28 +19,38 @@ extends SceneTree
 ## faces -X, which is screen-LEFT. The index therefore runs anticlockwise, and
 ## these cases are what pins that down.
 ##
-## The four EXACT cases are the only ones a running game produces: the rig sits
-## at 45 degrees and units may only face a world axis, so every real relative yaw
-## is an odd multiple of 45. The rest of the table pins down the boundaries
-## anyway — a bucket that silently rounded the wrong way would still show the
-## wrong art the moment either of those two invariants was relaxed.
+## The eight EXACT cases are the only ones a running game produces: the rig sits
+## at 45 degrees and units may only face one of the eight grid directions, so
+## every real relative yaw is -45 plus a multiple of 45. The two off-axis cases
+## pin down the boundaries anyway — a bucket that silently rounded the wrong way
+## would still show the wrong art the moment either invariant was relaxed.
+##
+## Note which half is which: the four WORLD AXES land on the screen DIAGONALS,
+## because the rig is yawed 45 and not 0, and the four world diagonals land on
+## the screen cardinals. That inversion is the single easiest thing to get
+## backwards here, so every case below names the world direction it came from.
 const CASES := [
-	[-45.0, &"ne"],   # facing world -Z: away from the camera and to the RIGHT,
-	                  # because the rig is yawed 45 and not 0
+	[-45.0, &"ne"],   # world -Z: away from the camera and to the RIGHT
+	[0.0, &"n"],      # world -Z-X diagonal: straight away from the camera
 	[45.0, &"nw"],    # world -X
+	[90.0, &"w"],     # world +Z-X diagonal
 	[135.0, &"sw"],   # world +Z, toward the camera and left
+	[180.0, &"s"],    # world +Z+X diagonal: straight toward the camera
 	[225.0, &"se"],   # world +X
+	[270.0, &"e"],    # world -Z+X diagonal
 	[315.0, &"ne"],   # a full turn from -45 is where it started
 	[-135.0, &"se"],  # negative yaws wrap rather than clamping
-	[89.0, &"nw"],    # just short of the nw/sw boundary at 90
-	[91.0, &"sw"],    # and just past it
+	[44.0, &"nw"],    # just short of the nw/w boundary at 67.5
+	[68.0, &"w"],     # and just past it
 ]
 
 ## Bucket boundaries, in relative degrees. A unit can never hold one of these —
 ## they sit halfway between two drawn directions — but which way they round has
 ## to be DECIDED rather than left to floating-point noise, because a yaw tween
 ## passes through them on every turn.
-const BOUNDARIES := [0.0, 90.0, 180.0, 270.0]
+const BOUNDARIES := [
+	-22.5, 22.5, 67.5, 112.5, 157.5, 202.5, 247.5, 292.5,
+]
 
 var _failures := 0
 var _visual
@@ -83,10 +93,11 @@ func _check_boundaries() -> void:
 
 
 func _check_mirror() -> void:
-	# Two drawn + two mirrored. Every mirror entry must point at a direction that
-	# IS drawn — one aiming at another mirror entry would resolve to nothing.
+	# Five drawn + three mirrored. Every mirror entry must point at a direction
+	# that IS drawn — one aiming at another mirror entry would resolve to
+	# nothing.
 	var mirror: Dictionary = _visual.MIRROR
-	_check(mirror.size() == 2, "2 directions are mirrored (got %d)" % mirror.size())
+	_check(mirror.size() == 3, "3 directions are mirrored (got %d)" % mirror.size())
 	for dir: StringName in mirror:
 		var entry: Array = mirror[dir]
 		_check(not mirror.has(entry[0]), "%s mirrors %s, which is drawn" % [dir, entry[0]])
@@ -95,15 +106,16 @@ func _check_mirror() -> void:
 	for dir: StringName in _visual.DIRECTIONS:
 		if not mirror.has(dir):
 			drawn += 1
-	_check(drawn == 2, "2 directions are drawn (got %d)" % drawn)
+	_check(drawn == 5, "5 directions are drawn (got %d)" % drawn)
 
 
 func _check_camera_relative() -> void:
 	# The requirement the snap camera adds: sprite direction is unit yaw MINUS
 	# camera yaw, so a quarter turn of the camera moves every bucket by exactly
-	# ONE step without any unit having turned. That is also what makes the snap
-	# free in art terms — a whole step, never a fraction of one, so the four
-	# drawn directions cover all four camera positions.
+	# TWO steps without any unit having turned — the rig snaps 90 degrees and a
+	# bucket is 45. That is also what makes the snap free in art terms: a whole
+	# number of steps, never a fraction of one, so the eight drawn directions
+	# cover all four camera positions.
 	var rig = load("res://scenes/camera_rig.tscn").instantiate()
 	root.add_child(rig)
 	await process_frame
@@ -116,12 +128,13 @@ func _check_camera_relative() -> void:
 	rig.snap_by(1)  # instant with no display
 	await process_frame
 	var after: int = _visual.direction_bucket(unit_yaw - rig.rotation.y)
-	# BACKWARDS one step, not forwards: the camera turning one way is the world
-	# appearing to turn the other, and direction subtracts the camera yaw. 3 is
-	# -1 modulo the four buckets. The sign is cosmetic; that it is a WHOLE step
-	# is not, because that is what makes the snap cost no additional art.
+	# BACKWARDS two steps, not forwards: the camera turning one way is the world
+	# appearing to turn the other, and direction subtracts the camera yaw. 6 is
+	# -2 modulo the eight buckets. The sign is cosmetic; that it is a WHOLE
+	# number of steps is not, because that is what makes the snap cost no
+	# additional art.
 	var step: int = wrapi(after - before, 0, _visual.DIRECTIONS.size())
-	_check(step == 3, "one camera snap moves the bucket 1 step back (got %d)" % step)
+	_check(step == 6, "one camera snap moves the bucket 2 steps back (got %d)" % step)
 
 	rig.snap_by(1)
 	rig.snap_by(1)

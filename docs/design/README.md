@@ -9,7 +9,7 @@ How any of it is *drawn* is a separate question with a separate answer:
 [`../presentation-direction.md`](../presentation-direction.md). The game is presented
 isometrically — 2D sprite characters over real 3D levels — and that doc supersedes the GDD's
 camera and rendering sections. It matters here because it constrains faction art directly: a
-unit is read at a fixed 35.264° pitch, in four direction buckets, at roughly 16% of viewport
+unit is read at a fixed 35.264° pitch, in eight direction buckets, at roughly 16% of viewport
 height, usually in the dark. Silhouette and palette carry the whole read.
 
 ## Factions

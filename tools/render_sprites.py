@@ -71,6 +71,31 @@ CHARACTER_HEIGHT = 1.92
 ## behind crates that are modelled at true scale.
 GAME_CAMERA_SIZE = 10.5
 
+## Metres of floor kept BELOW the world origin, and the reason the origin is no
+## longer on the bottom edge of the frame.
+##
+## THE FLOOR IS NOT A HORIZONTAL LINE IN THIS FRAME. Under the tilted ortho
+## camera a floor point (x, y, 0) sits at screen height -0.4082x + 0.4082y, so
+## the bottom edge corresponds to the floor DIAGONAL y = x running toward the
+## camera, and everything on its near side is off-frame. A character straddles
+## the origin, so whichever foot is forward clips: measured at 8.4 px of 256 for
+## a standing rest pose and 19.1 px at a 0.45 m run stride, on a character only
+## ~157 px tall. Placing the origin exactly on the bottom edge -- which is what
+## sliding the camera by CANVAS_HEIGHT / 2 did -- guarantees this.
+##
+## 0.45 m, revised up from 0.25 after measuring real poses rather than the rest
+## stance the first estimate came from. The authored idle plants its lead foot
+## far enough forward to reach within 1 px of the edge at 0.25, and the run
+## stride went 5.2 px PAST it -- a stride displaces the lead foot along the same
+## screen-down diagonal, so the two costs add rather than overlapping.
+##
+## Still cheap: the canvas had 0.90 m of dead space above the head, and this
+## spends half of it, leaving ~50 px of headroom for a raised rifle.
+##
+## `UnitVisual.foot_anchor` MUST equal 1 - FLOOR_MARGIN / CANVAS_HEIGHT, or every
+## character floats by this many metres. See `report_framing`.
+FLOOR_MARGIN = 0.45
+
 ## Square, so that the horizontal half-extent is also 1.28 m -- comfortably wider
 ## than any arm span or rifle. Square also means a canvas rotation could never
 ## move the pivot, which is the property `UnitVisual.CANVAS` is square for.
@@ -91,6 +116,21 @@ RESOLUTION = 256
 # Blender +Y is therefore facing Godot -Z, which is bucket 0. Each subsequent
 # bucket is another +45 degrees about Blender +Z.
 DIRECTIONS = ["ne", "n", "nw", "w", "sw", "s", "se", "e"]
+
+## What actually gets rendered, and it is ALL of DIRECTIONS.
+##
+## The game reads eight buckets: `unit_visual.gd` DIRECTIONS and
+## `build_sprite_frames.gd` DIRECTIONS are the same eight, `GridManager.STEPS`
+## has eight entries, and `Unit._yaw_toward` snaps to 45 degrees. Every PNG this
+## writes is therefore read by something.
+##
+## Kept as a separate name from DIRECTIONS rather than collapsed into it: they
+## are different things that currently coincide. DIRECTIONS is the
+## index-to-angle TABLE -- `ne` is bucket 0 and each entry is another 45 degrees
+## about Blender +Z -- and the angle for a direction is found by its index there.
+## This is the SUBSET being rendered, which `--directions` narrows for a quick
+## look at one facing.
+GAME_DIRECTIONS = list(DIRECTIONS)
 
 ## The character is rotated and the camera and lights are NOT. That is the whole
 ## reason the camera lost its rotation: with one fixed viewpoint, a world-fixed
@@ -140,6 +180,17 @@ DEFAULT_ONE_SHOT_TIME = 0.4
 ## count never affects timing.
 SAMPLE_FPS = 12.0
 
+## Overridable with --fps, because the chunkiness of a cycle is an ART decision
+## and this is the only dial that sets it. Lowering it costs nothing in timing:
+## the game derives playback speed as frames/duration, so a run drawn in 4 frames
+## and one drawn in 8 both still occupy LOOP_TIME.
+##
+## Prefer rates that divide a cycle into an EVEN number of frames. A two-step run
+## puts its foot contacts on frame 0 and frame N/2, so an odd N lands the second
+## contact between frames and the cadence limps: 0.666 s at 9 fps is 6 frames
+## (contacts 0 and 3) and at 6 fps is 4 (contacts 0 and 2), but at 8 fps it is 5
+## and there is no frame 2.5.
+
 ## `run` must sample to a whole number of frames or the second footplant lands
 ## off-cycle: 0.666 s at 12 fps is 8 frames, and frame 0 and frame 4 are the two
 ## contacts. `unit_visual.gd` FOOTSTEP_OFFSET is 0.0 precisely because a drawn
@@ -159,9 +210,9 @@ def _clear_scene():
 def build_camera(scene):
     """Creates (or re-aims) the one orthographic camera every frame is shot from.
 
-    Placed so the GROUND PLANE LANDS ON THE BOTTOM EDGE of the frame, because
-    that is what `UnitVisual._apply_frame_scale` assumes when it offsets a sprite
-    by half its height. Get this wrong and every character floats or sinks.
+    Placed so the WORLD ORIGIN lands FLOOR_MARGIN metres above the bottom edge
+    of the frame, which is where `UnitVisual.foot_anchor` says it is. Get the two
+    out of step and every character floats or sinks by the difference.
     """
     cam_data = bpy.data.cameras.get("SpriteCam") or bpy.data.cameras.new("SpriteCam")
     cam_data.type = "ORTHO"
@@ -187,10 +238,13 @@ def build_camera(scene):
 
     # Back off along the view direction (distance is irrelevant under ortho, but
     # the character must be inside the clip range), then slide UP the screen by
-    # half a canvas. Sliding the camera up moves the content down, which is what
-    # drops the world origin onto the bottom edge of the frame.
+    # half a canvas LESS the floor margin. Sliding the camera up moves the
+    # content down, so this drops the world origin to FLOOR_MARGIN metres above
+    # the bottom edge rather than onto it -- see FLOOR_MARGIN for why the
+    # difference matters.
     distance = 10.0
-    cam.location = (-view_dir * distance) + (screen_up * (CANVAS_HEIGHT / 2.0))
+    cam.location = ((-view_dir * distance)
+                    + (screen_up * (CANVAS_HEIGHT / 2.0 - FLOOR_MARGIN)))
     cam_data.clip_start = 0.1
     cam_data.clip_end = distance * 3.0
 
@@ -304,7 +358,42 @@ def sample_frames(action, count, looping):
     return [start + span * (i / (count - 1)) for i in range(count)]
 
 
-def render_variant(variant, out_dir, character, only_poses=None):
+def mute_object_transform_curves(action):
+    """Silences any OBJECT-level transform channels on `action`, and says so.
+
+    The eight facings are produced by rotating the character object between
+    renders. An action that also animates that object's own transform therefore
+    fights the turntable -- and wins, because `frame_set` re-evaluates the action
+    after the rotation has been set. The result is eight IDENTICAL renders with
+    no error anywhere: correct file count, correct names, plausible images, one
+    facing. That silence is why this guard exists rather than a comment telling
+    you not to do it.
+
+    Object-level keys land in a pose action easily: anything keyed while in
+    Object Mode with the armature selected goes here rather than onto a bone.
+    Nothing this pipeline needs is ever expressed that way -- the character is
+    placed by the game, not by the clip -- so muting is always the right call.
+
+    Returns the curves muted, so the caller can restore them; the .blend is never
+    written, but the same action may be rendered again in one run.
+    """
+    muted = []
+    for fcurve in action.fcurves:
+        path = fcurve.data_path or ""
+        if path.startswith("pose.bones"):
+            continue
+        if path in ("location", "rotation_euler", "rotation_quaternion", "scale"):
+            if not fcurve.mute:
+                fcurve.mute = True
+                muted.append(fcurve)
+    if muted:
+        print("[render_sprites] %r animates the OBJECT transform (%s) -- muted "
+              "for rendering, or every direction would come out identical"
+              % (action.name, ", ".join(sorted({f.data_path for f in muted}))))
+    return muted
+
+
+def render_variant(variant, out_dir, character, only_poses=None, directions=None):
     scene = bpy.context.scene
     configure_render(scene)
     build_camera(scene)
@@ -332,24 +421,48 @@ def render_variant(variant, out_dir, character, only_poses=None):
     for pose in todo:
         action = actions[pose]
         character.animation_data.action = action
+        muted = mute_object_transform_curves(action)
         count = frame_count(pose)
         looping = pose in LOOP_TIME
         frames = sample_frames(action, count, looping)
 
-        for dir_index, direction in enumerate(DIRECTIONS):
+        for direction in (directions or GAME_DIRECTIONS):
+            # Angle comes from the position in DIRECTIONS, not from the position
+            # in the list being rendered, so rendering a subset never reassigns
+            # anyone's bucket.
+            dir_index = DIRECTIONS.index(direction)
             # The character turns; the camera and the world-fixed key do not.
             character.rotation_euler.z = original_rotation + math.radians(45.0 * dir_index)
 
             for frame_index, blender_frame in enumerate(frames):
+                # Belt and braces on top of the muting: frame_set re-evaluates
+                # everything, so ANY mechanism that drives this object's
+                # transform -- a driver, an NLA strip, a constraint -- would
+                # silently collapse all eight facings into one. Cheap to check,
+                # and the failure is invisible in the output otherwise.
                 scene.frame_set(int(round(blender_frame)),
                                 subframe=float(blender_frame % 1.0))
+                expected = original_rotation + math.radians(45.0 * dir_index)
+                if abs(character.rotation_euler.z - expected) > 1e-6:
+                    sys.exit(
+                        "[render_sprites] %r drives %s's rotation: after "
+                        "frame_set it reads %.1f deg, not the %.1f deg this "
+                        "direction needs. Every facing would render identical. "
+                        "Remove the object-level animation from the action."
+                        % (pose, character.name,
+                           math.degrees(character.rotation_euler.z),
+                           math.degrees(expected)))
+
                 name = "body_%s_%s_%s_%d.png" % (variant, pose, direction, frame_index)
                 scene.render.filepath = os.path.join(out_dir, name)
                 bpy.ops.render.render(write_still=True)
                 written += 1
 
+        for fcurve in muted:
+            fcurve.mute = False
+
         print("[render_sprites] %s: %d frames x %d directions"
-              % (pose, len(frames), len(DIRECTIONS)))
+              % (pose, len(frames), len(directions or GAME_DIRECTIONS)))
 
     character.rotation_euler.z = original_rotation
     print("[render_sprites] wrote %d images to %s" % (written, out_dir))
@@ -408,11 +521,21 @@ def report_framing():
           % (CHARACTER_HEIGHT, apparent, round(px), RESOLUTION))
     print("[render_sprites] in game at Camera3D.size %.1f that is %.1f%% of "
           "viewport height" % (GAME_CAMERA_SIZE, apparent / GAME_CAMERA_SIZE * 100.0))
-    print("[render_sprites] headroom above the head: %.2f m (%d px)"
-          % (CANVAS_HEIGHT - apparent, round((CANVAS_HEIGHT - apparent) / CANVAS_HEIGHT * RESOLUTION)))
+    headroom = CANVAS_HEIGHT - apparent - FLOOR_MARGIN
+    print("[render_sprites] floor margin below the origin: %.2f m (%d px); "
+          "headroom above the head: %.2f m (%d px)"
+          % (FLOOR_MARGIN, round(FLOOR_MARGIN / CANVAS_HEIGHT * RESOLUTION),
+             headroom, round(headroom / CANVAS_HEIGHT * RESOLUTION)))
+    print("[render_sprites] SET UnitVisual.foot_anchor = (0.5, %.4f) and "
+          "canvas_height = %.2f on the character scene"
+          % (1.0 - FLOOR_MARGIN / CANVAS_HEIGHT, CANVAS_HEIGHT))
 
 
 def main():
+    # Declared up front because the --fps help text reads it below, and Python
+    # rejects a `global` that follows any use of the name in the same scope.
+    global SAMPLE_FPS
+
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     parser = argparse.ArgumentParser(prog="render_sprites")
     parser.add_argument("--setup", metavar="BLEND",
@@ -421,6 +544,12 @@ def main():
     parser.add_argument("--out", default="assets/sprites")
     parser.add_argument("--character", help="object to rotate; defaults to the root armature")
     parser.add_argument("--poses", help="comma-separated subset to render")
+    parser.add_argument("--fps", type=float,
+                        help="sampling rate, default %g; lower is chunkier and "
+                             "does not change in-game timing" % SAMPLE_FPS)
+    parser.add_argument("--directions",
+                        help="comma-separated subset; defaults to all eight the "
+                             "game reads (%s)" % ",".join(GAME_DIRECTIONS))
     args = parser.parse_args(argv)
 
     if args.setup:
@@ -429,9 +558,19 @@ def main():
     if not args.variant:
         sys.exit("--variant is required (or use --setup)")
 
+    if args.fps:
+        SAMPLE_FPS = args.fps
+        print("[render_sprites] sampling at %g fps" % SAMPLE_FPS)
+
     only = set(args.poses.split(",")) if args.poses else None
+    dirs = args.directions.split(",") if args.directions else None
+    if dirs:
+        bad = [d for d in dirs if d not in DIRECTIONS]
+        if bad:
+            sys.exit("unknown direction(s): %s (pick from %s)"
+                     % (", ".join(bad), ", ".join(DIRECTIONS)))
     render_variant(args.variant, os.path.abspath(args.out),
-                   find_character(args.character), only)
+                   find_character(args.character), only, dirs)
 
 
 if __name__ == "__main__":

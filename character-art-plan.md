@@ -14,7 +14,7 @@
 > | §1.1 palette (black + olive pouches + red lenses), §1.2 shape/silhouette corrections, §1.3 camera framing (resolved — see the note in that section), §4.1 what "weighty" means | §2 poly budget, §3 phased mesh work, §4.2–4.3 foot-skate and stomp timing as *rig* problems, §5 Blender tooling |
 >
 > The palette and silhouette half is if anything **more** load-bearing now, not less: a
-> character is read at a fixed 35.264° pitch, in four direction buckets, at ~16% of viewport
+> character is read at a fixed 35.264° pitch, in eight direction buckets, at ~16% of viewport
 > height, usually in the dark. The olive pouches and red lenses were called out as the two
 > things that make the silhouette recognisable, and at sprite scale they are close to the only
 > things that can be.

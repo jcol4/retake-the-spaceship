@@ -40,7 +40,7 @@ This is deliberately the *only* piece of lore load-bearing enough to matter for 
 [`alpha-implementation.md`](alpha-implementation.md) §5 for what the stand-in draws.*
 
 **What the presentation imposes.** The game is isometric — 2D sprites over 3D levels, at a fixed
-35.264° pitch, in four direction buckets, with a character occupying about 16% of viewport
+35.264° pitch, in eight direction buckets, with a character occupying about 16% of viewport
 height, usually in a dark corridor (see
 [`../../../../presentation-direction.md`](../../../../presentation-direction.md)). Three consequences
 for this faction specifically:

@@ -14,8 +14,8 @@ marked SUPERSEDED in place and point at it.
 | | |
 |---|---|
 | Camera | Orthographic, pitch fixed at 35.264°, four snapped yaws (Q/E), no zoom |
-| Characters | 4-direction sprites (2 drawn + 2 mirrored), layered body/head/gear, tinted by tile light |
-| Movement | Four-way along the grid axes — no diagonal steps, so a unit only ever faces a drawn direction |
+| Characters | 8-direction sprites (5 drawn + 3 mirrored), layered body/head/gear, tinted by tile light |
+| Movement | Eight-way at uniform cost, guarded against cutting the corner where two walls meet |
 | Levels | 3D geometry built at runtime from ASCII decks in [`maps/`](maps/) |
 | Turn order | One shared initiative pool — friend and foe drawn from the same weighted bag |
 | Signature systems | Continuous light/sound detection; edge-based XCOM cover; VATS-style Aimed Shot |
@@ -61,6 +61,7 @@ prints PASS/FAIL lines and exits non-zero on failure.
 ```sh
 godot --headless --path . --script res://tools/test_map_roundtrip.gd   # map format, spawns, room graph
 godot --headless --path . --script res://tools/test_edge_cover.gd      # cover direction, diagonals, degradation
+godot --headless --path . --script res://tools/test_movement.gd        # 8-way adjacency, diagonal cost, corner guard
 godot --headless --path . --script res://tools/test_sprite_direction.gd # direction buckets, mirror rule
 godot --headless --path . --script res://tools/test_iso_picking.gd     # mouse picking at all four yaws
 godot --headless --path . --script res://tools/test_cerberus.gd        # security-robot faction rules

@@ -243,16 +243,16 @@ func _yaw_toward(world_pos: Vector3) -> float:
 	# Godot forward is -Z. Returns the short way round rather than unwinding
 	# through a full turn, or NAN when the point is directly underfoot.
 	#
-	# QUANTISED to the four grid axes, and that is a hard requirement rather than
-	# a tidiness one: a character is drawn in four directions
+	# QUANTISED to the eight grid directions, and that is a hard requirement
+	# rather than a tidiness one: a character is drawn in eight directions
 	# (UnitVisual.DIRECTIONS), so a unit holding a yaw between two of them has no
 	# art to show and the sprite layer hides itself. Movement already produces
-	# axis-aligned yaws — GridManager.STEPS sees to that — but `face_toward` is
+	# quantised yaws — GridManager.STEPS sees to that — but `face_toward` is
 	# driven by a raw mouse click, and that is the case this catches.
 	var delta := world_pos - global_position
 	if absf(delta.x) <= 0.001 and absf(delta.z) <= 0.001:
 		return NAN
-	var target := snappedf(atan2(-delta.x, -delta.z), PI / 2.0)
+	var target := snappedf(atan2(-delta.x, -delta.z), PI / 4.0)
 	return rotation.y + wrapf(target - rotation.y, -PI, PI)
 
 

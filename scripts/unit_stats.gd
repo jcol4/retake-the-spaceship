@@ -36,20 +36,17 @@ func max_hp() -> int:
 	return fitness  # +1 max HP per Fitness point (Sec 4.6.3)
 
 
-## Tiles per 1 AP. Raised by half when movement went four-way, to hold effective
-## reach roughly where it was: under the old eight-way rule N tiles reached a
-## square of (2N+1)^2, and four-way reaches a diamond of 2N^2+2N+1. Solving those
-## equal gives a factor of ~1.46, so 4 -> 6 and the Fitness step 1/20 -> 1/15,
-## which is exactly x1.5 at both ends of the stat range (fitness 0: 4->6,
-## fitness 99: 8->12).
+## Tiles per 1 AP. Back to the eight-way numbers: N tiles reaches a SQUARE of
+## (2N+1)^2 again, so the x1.5 that four-way movement needed to hold reach steady
+## (6 tiles, +1 per 15 Fitness) is undone here rather than left to inflate every
+## move band by half.
 ##
-## Area-matched rather than corner-matched on purpose. Matching the far CORNER
-## would need double, because a diagonal now costs two steps instead of one, and
-## doubling every move band to protect the one direction that got worse would
-## make every other direction absurd. These numbers were never playtested against
-## four-way movement; treat them as the starting point for that pass.
+## Reverted rather than re-derived, because these are the values the AP economy,
+## the map's corridor lengths and the alien engage distances were originally
+## sized against, and eight-way at uniform cost restores exactly the reachable
+## set they assumed. Still not playtested; treat as the starting point.
 func move_run() -> int:
-	var base := 6 + fitness / 15  # base 6 tiles, +1 per 15 Fitness (Sec 4.0/4.6.3)
+	var base := 4 + fitness / 20  # base 4 tiles, +1 per 20 Fitness (Sec 4.0/4.6.3)
 	var mult := weapon.move_multiplier if weapon else 1.0
 	return maxi(1, roundi(base * mult))
 
