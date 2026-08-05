@@ -122,7 +122,7 @@ Placeholder only, drawn in code like every other character (see
 [`../../../../presentation-direction.md`](../../../../presentation-direction.md) §2). `UnitVisual`
 gained a `machine` placeholder style for this faction: rectangles only — no discs, no taper,
 nothing rounded — against the organic set's warmer, dirtier palette, so the two factions are
-told apart by silhouette and colour in a dark corridor at 16% of viewport height, which is
+told apart by silhouette and colour in a dark corridor at ~15% of viewport height, which is
 where and how most of this game is read.
 
 Each model owns a proportion rather than just a colour: a squat armored post, a wide weapons

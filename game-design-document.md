@@ -24,7 +24,7 @@ A turn-based, squad-level tactics game in the spirit of *XCOM*, played in a full
 
 - **Platform:** PC (native build via Godot Engine)
 - **Engine:** Godot (4.x recommended for its Vulkan-based 3D renderer)
-- **Perspective:** ⚠️ **SUPERSEDED** — see [docs/presentation-direction.md](docs/presentation-direction.md). The environment is still fully 3D, but it is viewed through a fixed orthographic isometric camera with four snapped yaws, and characters are hand-drawn 2D sprites composited into it. *(Was: fully 3D environment viewed via a free-moving camera defaulting to a bird's-eye angle, §10.2.)*
+- **Perspective:** ⚠️ **SUPERSEDED** — see [docs/presentation-direction.md](docs/presentation-direction.md). The environment is still fully 3D, but it is viewed through a fixed orthographic isometric camera with four snapped yaws, and characters are 2D sprites composited into it — **prerendered from rigged 3D characters** (Fallout-style), in eight directions, not modelled in the scene and not hand-drawn. *(Was: fully 3D environment viewed via a free-moving camera defaulting to a bird's-eye angle, §10.2.)*
 - **Art style:** Stylized, low-poly
 - **Setting/tone:** Decrepit, derelict spaceships — dark corridors, failing power, *Dead Space*-inspired atmosphere
 

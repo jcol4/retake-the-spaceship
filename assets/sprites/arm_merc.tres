@@ -19,6 +19,22 @@ animations = [{
 "texture": ExtResource("1_psxn3")
 }],
 "loop": 1,
+"name": &"aim_hold_e",
+"speed": 0.625
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 1,
+"name": &"aim_hold_n",
+"speed": 0.625
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 1,
 "name": &"aim_hold_ne",
 "speed": 0.625
 }, {
@@ -28,6 +44,14 @@ animations = [{
 }],
 "loop": 1,
 "name": &"aim_hold_nw",
+"speed": 0.625
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 1,
+"name": &"aim_hold_s",
 "speed": 0.625
 }, {
 "frames": [{
@@ -50,6 +74,30 @@ animations = [{
 "duration": 1.0,
 "texture": ExtResource("1_psxn3")
 }],
+"loop": 1,
+"name": &"aim_hold_w",
+"speed": 0.625
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"alert_scream_e",
+"speed": 0.35714285714285715
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"alert_scream_n",
+"speed": 0.35714285714285715
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
 "loop": 0,
 "name": &"alert_scream_ne",
 "speed": 0.35714285714285715
@@ -60,6 +108,14 @@ animations = [{
 }],
 "loop": 0,
 "name": &"alert_scream_nw",
+"speed": 0.35714285714285715
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"alert_scream_s",
 "speed": 0.35714285714285715
 }, {
 "frames": [{
@@ -82,6 +138,94 @@ animations = [{
 "duration": 1.0,
 "texture": ExtResource("1_psxn3")
 }],
+"loop": 0,
+"name": &"alert_scream_w",
+"speed": 0.35714285714285715
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"begin_shoot_e",
+"speed": 2.2222222222222223
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"begin_shoot_n",
+"speed": 2.2222222222222223
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"begin_shoot_ne",
+"speed": 2.2222222222222223
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"begin_shoot_nw",
+"speed": 2.2222222222222223
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"begin_shoot_s",
+"speed": 2.2222222222222223
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"begin_shoot_se",
+"speed": 2.2222222222222223
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"begin_shoot_sw",
+"speed": 2.2222222222222223
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"begin_shoot_w",
+"speed": 2.2222222222222223
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 1,
+"name": &"crouch_idle_e",
+"speed": 0.625
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 1,
+"name": &"crouch_idle_n",
+"speed": 0.625
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
 "loop": 1,
 "name": &"crouch_idle_ne",
 "speed": 0.625
@@ -92,6 +236,14 @@ animations = [{
 }],
 "loop": 1,
 "name": &"crouch_idle_nw",
+"speed": 0.625
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 1,
+"name": &"crouch_idle_s",
 "speed": 0.625
 }, {
 "frames": [{
@@ -114,6 +266,30 @@ animations = [{
 "duration": 1.0,
 "texture": ExtResource("1_psxn3")
 }],
+"loop": 1,
+"name": &"crouch_idle_w",
+"speed": 0.625
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"crouch_to_stand_e",
+"speed": 2.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"crouch_to_stand_n",
+"speed": 2.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
 "loop": 0,
 "name": &"crouch_to_stand_ne",
 "speed": 2.5
@@ -124,6 +300,14 @@ animations = [{
 }],
 "loop": 0,
 "name": &"crouch_to_stand_nw",
+"speed": 2.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"crouch_to_stand_s",
 "speed": 2.5
 }, {
 "frames": [{
@@ -147,6 +331,30 @@ animations = [{
 "texture": ExtResource("1_psxn3")
 }],
 "loop": 0,
+"name": &"crouch_to_stand_w",
+"speed": 2.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"downed_e",
+"speed": 1.25
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"downed_n",
+"speed": 1.25
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
 "name": &"downed_ne",
 "speed": 1.25
 }, {
@@ -156,6 +364,14 @@ animations = [{
 }],
 "loop": 0,
 "name": &"downed_nw",
+"speed": 1.25
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"downed_s",
 "speed": 1.25
 }, {
 "frames": [{
@@ -179,6 +395,158 @@ animations = [{
 "texture": ExtResource("1_psxn3")
 }],
 "loop": 0,
+"name": &"downed_w",
+"speed": 1.25
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"end_shoot_e",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"end_shoot_n",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"end_shoot_ne",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"end_shoot_nw",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"end_shoot_s",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"end_shoot_se",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"end_shoot_sw",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"end_shoot_w",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"fire_shoot_e",
+"speed": 9.090909090909092
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"fire_shoot_n",
+"speed": 9.090909090909092
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"fire_shoot_ne",
+"speed": 9.090909090909092
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"fire_shoot_nw",
+"speed": 9.090909090909092
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"fire_shoot_s",
+"speed": 9.090909090909092
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"fire_shoot_se",
+"speed": 9.090909090909092
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"fire_shoot_sw",
+"speed": 9.090909090909092
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"fire_shoot_w",
+"speed": 9.090909090909092
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"hit_react_e",
+"speed": 2.127659574468085
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"hit_react_n",
+"speed": 2.127659574468085
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
 "name": &"hit_react_ne",
 "speed": 2.127659574468085
 }, {
@@ -188,6 +556,14 @@ animations = [{
 }],
 "loop": 0,
 "name": &"hit_react_nw",
+"speed": 2.127659574468085
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"hit_react_s",
 "speed": 2.127659574468085
 }, {
 "frames": [{
@@ -211,6 +587,38 @@ animations = [{
 "texture": ExtResource("1_psxn3")
 }],
 "loop": 0,
+"name": &"hit_react_w",
+"speed": 2.127659574468085
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 1,
+"name": &"idle_e",
+"speed": 0.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"idle_fidget_e",
+"speed": 2.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"idle_fidget_n",
+"speed": 2.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
 "name": &"idle_fidget_ne",
 "speed": 2.5
 }, {
@@ -220,6 +628,14 @@ animations = [{
 }],
 "loop": 0,
 "name": &"idle_fidget_nw",
+"speed": 2.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"idle_fidget_s",
 "speed": 2.5
 }, {
 "frames": [{
@@ -242,6 +658,22 @@ animations = [{
 "duration": 1.0,
 "texture": ExtResource("1_psxn3")
 }],
+"loop": 0,
+"name": &"idle_fidget_w",
+"speed": 2.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 1,
+"name": &"idle_n",
+"speed": 0.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
 "loop": 1,
 "name": &"idle_ne",
 "speed": 0.5
@@ -252,6 +684,14 @@ animations = [{
 }],
 "loop": 1,
 "name": &"idle_nw",
+"speed": 0.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 1,
+"name": &"idle_s",
 "speed": 0.5
 }, {
 "frames": [{
@@ -274,6 +714,30 @@ animations = [{
 "duration": 1.0,
 "texture": ExtResource("1_psxn3")
 }],
+"loop": 1,
+"name": &"idle_w",
+"speed": 0.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"interact_e",
+"speed": 1.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"interact_n",
+"speed": 1.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
 "loop": 0,
 "name": &"interact_ne",
 "speed": 1.0
@@ -284,6 +748,14 @@ animations = [{
 }],
 "loop": 0,
 "name": &"interact_nw",
+"speed": 1.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"interact_s",
 "speed": 1.0
 }, {
 "frames": [{
@@ -307,6 +779,30 @@ animations = [{
 "texture": ExtResource("1_psxn3")
 }],
 "loop": 0,
+"name": &"interact_w",
+"speed": 1.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"melee_e",
+"speed": 0.8333333333333334
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"melee_n",
+"speed": 0.8333333333333334
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
 "name": &"melee_ne",
 "speed": 0.8333333333333334
 }, {
@@ -316,6 +812,14 @@ animations = [{
 }],
 "loop": 0,
 "name": &"melee_nw",
+"speed": 0.8333333333333334
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"melee_s",
 "speed": 0.8333333333333334
 }, {
 "frames": [{
@@ -338,6 +842,30 @@ animations = [{
 "duration": 1.0,
 "texture": ExtResource("1_psxn3")
 }],
+"loop": 0,
+"name": &"melee_w",
+"speed": 0.8333333333333334
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 1,
+"name": &"overwatch_hold_e",
+"speed": 0.625
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 1,
+"name": &"overwatch_hold_n",
+"speed": 0.625
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
 "loop": 1,
 "name": &"overwatch_hold_ne",
 "speed": 0.625
@@ -348,6 +876,14 @@ animations = [{
 }],
 "loop": 1,
 "name": &"overwatch_hold_nw",
+"speed": 0.625
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 1,
+"name": &"overwatch_hold_s",
 "speed": 0.625
 }, {
 "frames": [{
@@ -370,6 +906,30 @@ animations = [{
 "duration": 1.0,
 "texture": ExtResource("1_psxn3")
 }],
+"loop": 1,
+"name": &"overwatch_hold_w",
+"speed": 0.625
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"reload_e",
+"speed": 0.8333333333333334
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"reload_n",
+"speed": 0.8333333333333334
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
 "loop": 0,
 "name": &"reload_ne",
 "speed": 0.8333333333333334
@@ -387,6 +947,14 @@ animations = [{
 "texture": ExtResource("1_psxn3")
 }],
 "loop": 0,
+"name": &"reload_s",
+"speed": 0.8333333333333334
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
 "name": &"reload_se",
 "speed": 0.8333333333333334
 }, {
@@ -397,6 +965,84 @@ animations = [{
 "loop": 0,
 "name": &"reload_sw",
 "speed": 0.8333333333333334
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"reload_w",
+"speed": 0.8333333333333334
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("2_c2fn5")
+}, {
+"duration": 1.0,
+"texture": ExtResource("3_lopqe")
+}, {
+"duration": 1.0,
+"texture": ExtResource("4_wx4jp")
+}, {
+"duration": 1.0,
+"texture": ExtResource("5_0qb54")
+}, {
+"duration": 1.0,
+"texture": ExtResource("6_l4irq")
+}, {
+"duration": 1.0,
+"texture": ExtResource("7_2om72")
+}, {
+"duration": 1.0,
+"texture": ExtResource("8_c10bu")
+}, {
+"duration": 1.0,
+"texture": ExtResource("9_v8pxc")
+}, {
+"duration": 1.0,
+"texture": ExtResource("10_l4ko6")
+}, {
+"duration": 1.0,
+"texture": ExtResource("11_ip5hx")
+}],
+"loop": 1,
+"name": &"run_e",
+"speed": 15.015015015015015
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("2_c2fn5")
+}, {
+"duration": 1.0,
+"texture": ExtResource("3_lopqe")
+}, {
+"duration": 1.0,
+"texture": ExtResource("4_wx4jp")
+}, {
+"duration": 1.0,
+"texture": ExtResource("5_0qb54")
+}, {
+"duration": 1.0,
+"texture": ExtResource("6_l4irq")
+}, {
+"duration": 1.0,
+"texture": ExtResource("7_2om72")
+}, {
+"duration": 1.0,
+"texture": ExtResource("8_c10bu")
+}, {
+"duration": 1.0,
+"texture": ExtResource("9_v8pxc")
+}, {
+"duration": 1.0,
+"texture": ExtResource("10_l4ko6")
+}, {
+"duration": 1.0,
+"texture": ExtResource("11_ip5hx")
+}],
+"loop": 1,
+"name": &"run_n",
+"speed": 15.015015015015015
 }, {
 "frames": [{
 "duration": 1.0,
@@ -500,8 +1146,59 @@ animations = [{
 "texture": ExtResource("11_ip5hx")
 }],
 "loop": 1,
+"name": &"run_s",
+"speed": 15.015015015015015
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("2_c2fn5")
+}, {
+"duration": 1.0,
+"texture": ExtResource("3_lopqe")
+}, {
+"duration": 1.0,
+"texture": ExtResource("4_wx4jp")
+}, {
+"duration": 1.0,
+"texture": ExtResource("5_0qb54")
+}, {
+"duration": 1.0,
+"texture": ExtResource("6_l4irq")
+}, {
+"duration": 1.0,
+"texture": ExtResource("7_2om72")
+}, {
+"duration": 1.0,
+"texture": ExtResource("8_c10bu")
+}, {
+"duration": 1.0,
+"texture": ExtResource("9_v8pxc")
+}, {
+"duration": 1.0,
+"texture": ExtResource("10_l4ko6")
+}, {
+"duration": 1.0,
+"texture": ExtResource("11_ip5hx")
+}],
+"loop": 1,
 "name": &"run_se",
 "speed": 15.015015015015015
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"run_stop_e",
+"speed": 2.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"run_stop_n",
+"speed": 2.5
 }, {
 "frames": [{
 "duration": 1.0,
@@ -524,6 +1221,14 @@ animations = [{
 "texture": ExtResource("1_psxn3")
 }],
 "loop": 0,
+"name": &"run_stop_s",
+"speed": 2.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
 "name": &"run_stop_se",
 "speed": 2.5
 }, {
@@ -533,6 +1238,14 @@ animations = [{
 }],
 "loop": 0,
 "name": &"run_stop_sw",
+"speed": 2.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"run_stop_w",
 "speed": 2.5
 }, {
 "frames": [{
@@ -572,10 +1285,45 @@ animations = [{
 }, {
 "frames": [{
 "duration": 1.0,
+"texture": ExtResource("2_c2fn5")
+}, {
+"duration": 1.0,
+"texture": ExtResource("3_lopqe")
+}, {
+"duration": 1.0,
+"texture": ExtResource("4_wx4jp")
+}, {
+"duration": 1.0,
+"texture": ExtResource("5_0qb54")
+}, {
+"duration": 1.0,
+"texture": ExtResource("6_l4irq")
+}, {
+"duration": 1.0,
+"texture": ExtResource("7_2om72")
+}, {
+"duration": 1.0,
+"texture": ExtResource("8_c10bu")
+}, {
+"duration": 1.0,
+"texture": ExtResource("9_v8pxc")
+}, {
+"duration": 1.0,
+"texture": ExtResource("10_l4ko6")
+}, {
+"duration": 1.0,
+"texture": ExtResource("11_ip5hx")
+}],
+"loop": 1,
+"name": &"run_w",
+"speed": 15.015015015015015
+}, {
+"frames": [{
+"duration": 1.0,
 "texture": ExtResource("1_psxn3")
 }],
 "loop": 0,
-"name": &"shoot_recoil_ne",
+"name": &"stand_to_crouch_e",
 "speed": 2.5
 }, {
 "frames": [{
@@ -583,23 +1331,7 @@ animations = [{
 "texture": ExtResource("1_psxn3")
 }],
 "loop": 0,
-"name": &"shoot_recoil_nw",
-"speed": 2.5
-}, {
-"frames": [{
-"duration": 1.0,
-"texture": ExtResource("1_psxn3")
-}],
-"loop": 0,
-"name": &"shoot_recoil_se",
-"speed": 2.5
-}, {
-"frames": [{
-"duration": 1.0,
-"texture": ExtResource("1_psxn3")
-}],
-"loop": 0,
-"name": &"shoot_recoil_sw",
+"name": &"stand_to_crouch_n",
 "speed": 2.5
 }, {
 "frames": [{
@@ -623,6 +1355,14 @@ animations = [{
 "texture": ExtResource("1_psxn3")
 }],
 "loop": 0,
+"name": &"stand_to_crouch_s",
+"speed": 2.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
 "name": &"stand_to_crouch_se",
 "speed": 2.5
 }, {
@@ -633,6 +1373,30 @@ animations = [{
 "loop": 0,
 "name": &"stand_to_crouch_sw",
 "speed": 2.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"stand_to_crouch_w",
+"speed": 2.5
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"throw_grenade_e",
+"speed": 1.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"throw_grenade_n",
+"speed": 1.0
 }, {
 "frames": [{
 "duration": 1.0,
@@ -655,6 +1419,14 @@ animations = [{
 "texture": ExtResource("1_psxn3")
 }],
 "loop": 0,
+"name": &"throw_grenade_s",
+"speed": 1.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
 "name": &"throw_grenade_se",
 "speed": 1.0
 }, {
@@ -665,6 +1437,30 @@ animations = [{
 "loop": 0,
 "name": &"throw_grenade_sw",
 "speed": 1.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 0,
+"name": &"throw_grenade_w",
+"speed": 1.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 1,
+"name": &"walk_e",
+"speed": 0.7142857142857143
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 1,
+"name": &"walk_n",
+"speed": 0.7142857142857143
 }, {
 "frames": [{
 "duration": 1.0,
@@ -687,6 +1483,14 @@ animations = [{
 "texture": ExtResource("1_psxn3")
 }],
 "loop": 1,
+"name": &"walk_s",
+"speed": 0.7142857142857143
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 1,
 "name": &"walk_se",
 "speed": 0.7142857142857143
 }, {
@@ -696,5 +1500,13 @@ animations = [{
 }],
 "loop": 1,
 "name": &"walk_sw",
+"speed": 0.7142857142857143
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("1_psxn3")
+}],
+"loop": 1,
+"name": &"walk_w",
 "speed": 0.7142857142857143
 }]

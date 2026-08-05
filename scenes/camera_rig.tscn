@@ -13,11 +13,20 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 18)
 projection = 1
 ; Vertical world extent on screen, and the only scale control there is now that
 ; zoom is gone. Chosen against the XCOM reference framing in
-; character-art-plan.md, which puts a character at 15-20% of viewport height:
-; a 1.92 m sprite over a 12 m extent is 16%. Measured rather than eyeballed —
-; that plan asked for a real number and this is it.
+; character-art-plan.md, which puts a character at 15-20% of viewport height.
 ;
-; Tightening this further trades deck legibility for character detail. At 12 the
-; view is roughly 8 by 14 tiles, which still holds a whole compartment.
-size = 12.0
+; 10.5, corrected down from 12. THE FORESHORTENING IS THE WHOLE CORRECTION: an
+; upright figure seen at PITCH does not occupy its full height on screen, it
+; occupies height * cos(PITCH) = 1.92 * 0.8165 = 1.568 m. The old 12 was picked
+; from 1.92 / 12 = 16%, which omitted that cosine and was really 13.1% — under
+; the reference band, not inside it. 1.568 / 10.5 = 14.9%.
+;
+; The 16% figure WAS accurate for the code placeholder, which is drawn filling
+; its canvas and so is foreshortened by nothing. It stopped being accurate the
+; moment rendered art landed. Mirrored by render_sprites.py GAME_CAMERA_SIZE,
+; which is where the same arithmetic is printed at render time.
+;
+; Tightening this further trades deck legibility for character detail. At 10.5
+; the view is roughly 7 by 12 tiles, which still holds a whole compartment.
+size = 10.5
 far = 200.0

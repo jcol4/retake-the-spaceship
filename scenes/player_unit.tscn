@@ -37,16 +37,46 @@ script = ExtResource("1_script")
 ; rather than a scene edit.
 ;
 ; The sprite's pivot is its FEET, so no Y offset here.
-; TWO layers, not the four-layer default. The merc is drawn as one figure with
-; a separately-posed arm, so `head` and `helmet` are painted into `body` -- and
-; an empty layer would not stay empty, it would fall back to placeholder art and
-; paint a grey disc over the face. `arm` carries the rifle, which is why the
-; art is authored for all eight directions rather than five: mirroring would put
-; the weapon in the wrong hand. See tools/build_sprite_frames.gd.
+; ONE layer. Every other layer -- head, helmet, and the `arm` this used to carry
+; -- is painted into `body`, because the art is now RENDERED rather than drawn:
+; render_sprites.py shoots the whole character, rifle included, into a single
+; flattened pass. That is the trade it takes deliberately, in exchange for
+; correct self-occlusion between the rifle, the arms and the torso, which
+; separate layers cannot give at this camera angle.
+;
+; An empty layer does NOT stay empty -- it falls back to placeholder art and
+; paints a grey disc over the figure -- so a layer listed here must have a
+; matching `[layer]_merc.tres`. `arm_merc.tres` still exists from the abandoned
+; hand-drawn pass and covers only 11 frames of one direction; listing `arm`
+; would composite that stale sw-facing arm over every facing of the new render.
+;
+; The art is authored for all eight directions rather than five because the merc
+; is asymmetric: mirroring would put the rifle in the wrong hand. See
+; tools/build_sprite_frames.gd.
+;
+; canvas_height and foot_anchor are overridden here because this is the first
+; character with RENDERED art rather than the code placeholder, and the two
+; disagree about both. The defaults on unit_visual.gd describe the placeholder:
+; a canvas cut to the character (1.92 m) with the feet flush to the bottom edge
+; (anchor 1.0). Rendered art is neither — see render_sprites.py CANVAS_HEIGHT.
+;
+; 0.96484375 is MEASURED, not derived: it is 1 - 9/256, where 9 is the lowest
+; alpha row across all 568 rendered PNGs (worst case body_merc_run_n_1.png).
+; It is deliberately NOT 1 - FLOOR_MARGIN / CANVAS_HEIGHT, which would put the
+; anchor on the world origin at row 45. The origin is not the lowest point of
+; the art — a planted forward foot projects 36 px below it — and since the
+; sprite is a vertical billboard with ALPHA_CUT_DISCARD it writes depth, so
+; those 36 px fall under the floor mesh and are occluded. Feet through the
+; floor, which is exactly what anchoring on the origin looked like.
+;
+; Re-measure when a pose with a longer reach lands; a crouch or a dive would
+; push the lowest row down and this number with it.
 [node name="Visual" type="Node3D" parent="."]
 script = ExtResource("3_visual")
-layers = Array[StringName]([&"body", &"arm"])
+layers = Array[StringName]([&"body"])
 variant = &"merc"
+canvas_height = 2.56
+foot_anchor = Vector2(0.5, 0.96484375)
 has_light = true
 
 [node name="Body" type="StaticBody3D" parent="."]

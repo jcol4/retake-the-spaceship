@@ -29,8 +29,19 @@ Audit performed 2026-07-30 against `main` @ `cb89b85`.
 > | **D** | **Diagonal shots test both adjacent sides**, stronger applies (XCOM rule). | A diagonal crosses a corner, not an edge. |
 > | **E** | **Hunker still does not require cover**, and crouch poses are not direction-aware. | Both were listed as optional tightening in §2.10. Deliberately not taken — change one thing at a time. |
 > | **F** | **Ambient is `0.20`, `AMBIENT_FLOOR` is `12.0`** — not the §2.7.1 proposal of `0.10` / `8.0`. | Judged on screen against 0.1 and 0.25 once the ortho camera was in, exactly as §2.7.1 asked. At 0.1 bulkheads went black, and a fixed camera cannot be orbited to re-read the space. The `sight_light_threshold` 25.0 ceiling is untouched. |
-> | **G** | **`Camera3D.size` is 12**, putting a character at 16% of viewport height. | Closes `character-art-plan.md`'s open action item with arithmetic instead of a measuring script: under orthographic, share-of-height is `height / size` exactly, at any resolution. |
-> | **H** | **Placeholder sprite art is generated in code**, not shipped as PNGs. | Nothing to mistake for real art later, and nothing to delete when the real art lands. Every pose and direction exists, so layering, bucketing, mirroring, gear swap and lockstep are all exercisable now. |
+> | **G** | ~~**`Camera3D.size` is 12**, putting a character at 16% of viewport height.~~ **Superseded — see G′ below.** | Closes `character-art-plan.md`'s open action item with arithmetic instead of a measuring script: under orthographic, share-of-height is `height / size` exactly, at any resolution. |
+> | **H** | **Placeholder sprite art is generated in code**, not shipped as PNGs. | Nothing to mistake for real art later, and nothing to delete when the real art lands. Every pose and direction exists, so layering, bucketing, mirroring, gear swap and lockstep are all exercisable now. Still the path every character but the merc takes — see H′. |
+>
+> ### Corrections and decisions since, 2026-08-04
+>
+> | # | Decision | Why |
+> |---|---|---|
+> | **G′** | **`Camera3D.size` is 10.5**, putting a character at **14.9%** of viewport height. G's arithmetic was right and applied to the wrong quantity. | The share-of-height formula is exact, but the height that goes in it is the *foreshortened* one: at 35.264° a 1.92 m figure occupies `1.92 × cos(pitch) = 1.568 m` on screen. G's 16% was therefore really 13.1% — below the 15–20% reference band, not inside it. G *was* correct for the code placeholder, which fills its canvas and is foreshortened by nothing; it stopped being correct when rendered art landed. `render_sprites.report_framing` now prints the derivation so the next change is shown its consequence. |
+> | **I** | **Character sprites are RENDERED from a rigged 3D character, not hand-drawn.** `art_src/merc_anim.blend` → `tools/render_sprites.py` → PNGs → `tools/build_sprite_frames.gd` → `SpriteFrames`. | This reverses the *premise* of Q7, not its decision. Q7 killed the runtime 3D character and that stands — no bone, mesh or `.glb` reaches the game. But the fixed camera that Q2 bought turns out to make offline rendering cheap: with one viewpoint, world-fixed lights relight a character as it turns, at 8 renders per pose instead of 64. Rendering also resolves rifle/arm/torso self-occlusion for free, which the layer split could not. |
+> | **J** | **The merc's layer set is `body` + `arm`**, not the four-layer default. | Follows from I. Head and helmet are painted into the render because that is where self-occlusion is solved; `arm` survives only because the rifle arm poses independently of the gait. Vindicates Q15 (data-driven layers) from the opposite direction to the one expected — the flexibility was spent removing layers, not adding them. **Cost: a gear swap is now a re-render, not a layer reassignment.** |
+> | **K** | **Firing is four poses** — `aim_hold`, `begin_shoot`, `fire_shoot`, `end_shoot` — each authored to the timer that drives it (0.45 / 0.11 / 0.20 s). | Burst length is rolled per shot, so no single animation can match a count it does not know. Each phase degrades independently to `aim_hold`, and the timers run regardless, so burst pacing does not move as art lands. |
+> | **L** | **Q6's foot-skate dismissal was wrong and is reopened.** `move_speed` still stays 4.5 m/s — that half stands — but "sprites have no stride to skate" was true only of hand-drawn ones. | A rendered character has feet at real world positions. With `move_speed` 4.5 and the cycle forced to 0.666 s by the footstep cadence, the contact poses must be **1.50 m apart**. That is a hard authoring constraint that nothing currently checks; see `character-art-plan.md` §4.2 and §5.2. |
+> | **H′** | **Rendered art coexists with the placeholder per layer**, with no switch anywhere. | `UnitVisual` falls back to the code placeholder for any layer it finds no `.tres` for, so the merc's rendered `body`/`arm` and every other character's placeholder run side by side. The trap this creates: an *unused* layer does not stay empty, it renders a placeholder — which is why dropping a layer means removing it from `layers`, not leaving it unauthored. |
 >
 > ### One bug found and fixed during implementation
 >
@@ -40,8 +51,12 @@ Audit performed 2026-07-30 against `main` @ `cb89b85`.
 > of the camera check.
 
 Target: keep levels as real 3D geometry, render through an **orthographic isometric camera at
-fixed pitch with four snapped yaws**, and composite hand-drawn 2D character sprites over the
-world (Divinity/Fallout approach). New art pipeline is Rhino → Blender → `.glb` → Godot.
+fixed pitch with four snapped yaws**, and composite 2D character sprites over the world
+(Divinity/Fallout approach). Map art pipeline is Rhino → Blender → `.glb` → Godot.
+
+*(Where this document says "hand-drawn" of character sprites, read "prerendered from a rigged
+3D character" — see decision **I** above. Nothing downstream of the PNG changed, which is why
+the rest of the text survives the substitution.)*
 
 ---
 

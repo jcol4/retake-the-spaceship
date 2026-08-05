@@ -48,6 +48,11 @@ LOOP_TIME = {
     "crouch_idle": 1.6, "overwatch_hold": 1.6, "aim_hold": 1.6,
 }
 ONE_SHOT_TIME = {
+    ## The three burst phases. A pose missing from this table silently falls to
+    ## DEFAULT_TIME and the GIF plays it at that length instead -- which for a
+    ## 0.11 s recoil is fourteen times too slow, and looks like the animation is
+    ## broken rather than the preview being wrong.
+    "begin_shoot": 0.45, "fire_shoot": 0.11, "end_shoot": 0.20,
     "melee": 1.20, "reload": 1.20, "throw_grenade": 1.00, "interact": 1.00,
     "hit_react": 0.47, "downed": 0.80, "alert_scream": 2.80,
 }

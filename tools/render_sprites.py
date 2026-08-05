@@ -92,8 +92,23 @@ GAME_CAMERA_SIZE = 10.5
 ## Still cheap: the canvas had 0.90 m of dead space above the head, and this
 ## spends half of it, leaving ~50 px of headroom for a raised rifle.
 ##
-## `UnitVisual.foot_anchor` MUST equal 1 - FLOOR_MARGIN / CANVAS_HEIGHT, or every
-## character floats by this many metres. See `report_framing`.
+## THIS IS NOT `UnitVisual.foot_anchor`, and tying the two together was a
+## mistake worth naming. This margin exists so the canvas does not CLIP a
+## forward foot; the anchor says where the art's feet are, so the game can stand
+## it on a floor. Setting the anchor to 1 - FLOOR_MARGIN / CANVAS_HEIGHT puts it
+## on the world origin, and the origin is NOT the lowest point of the art: a
+## planted forward foot projects below it, measured at 36 px for this character.
+## The sprite is a vertical billboard writing depth, so those 36 px land beneath
+## the floor mesh and get occluded -- feet visibly sunk into the ground.
+##
+## The anchor must instead sit at or below the LOWEST PIXEL across every pose.
+## Measure it from the rendered PNGs rather than deriving it, and re-measure
+## when a pose with a longer reach lands:
+##
+##     lowest alpha row L over all body_<variant>_*.png
+##     foot_anchor.y = 1 - L / RESOLUTION
+##
+## FLOOR_MARGIN only has to be large enough that L stays above zero.
 FLOOR_MARGIN = 0.45
 
 ## Square, so that the horizontal half-extent is also 1.28 m -- comfortably wider
@@ -146,7 +161,8 @@ REST_FACING_IS_BLENDER_PLUS_Y = True
 # nearest pose that does exist, so a half-animated character still runs.
 POSES = [
     "idle", "run", "walk", "crouch_idle", "overwatch_hold", "aim_hold",
-    "shoot_recoil", "run_stop", "stand_to_crouch", "crouch_to_stand", "melee",
+    "begin_shoot", "fire_shoot", "end_shoot",
+    "run_stop", "stand_to_crouch", "crouch_to_stand", "melee",
     "reload", "throw_grenade", "interact", "hit_react", "downed",
     "alert_scream", "idle_fidget",
 ]
@@ -169,6 +185,9 @@ DEFAULT_LOOP_TIME = 1.6
 
 ## Copied from `build_sprite_frames.gd` ONE_SHOT_TIME.
 ONE_SHOT_TIME = {
+    ## Must equal unit_visual.gd RAISE_TIME, BURST_CADENCE and SETTLE_TIME.
+    ## See build_sprite_frames.gd.
+    "begin_shoot": 0.45, "fire_shoot": 0.11, "end_shoot": 0.20,
     "melee": 1.20, "reload": 1.20, "throw_grenade": 1.00, "interact": 1.00,
     "hit_react": 0.47, "downed": 0.80, "alert_scream": 2.80,
 }
@@ -526,9 +545,13 @@ def report_framing():
           "headroom above the head: %.2f m (%d px)"
           % (FLOOR_MARGIN, round(FLOOR_MARGIN / CANVAS_HEIGHT * RESOLUTION),
              headroom, round(headroom / CANVAS_HEIGHT * RESOLUTION)))
-    print("[render_sprites] SET UnitVisual.foot_anchor = (0.5, %.4f) and "
-          "canvas_height = %.2f on the character scene"
-          % (1.0 - FLOOR_MARGIN / CANVAS_HEIGHT, CANVAS_HEIGHT))
+    print("[render_sprites] SET UnitVisual.canvas_height = %.2f on the character "
+          "scene. foot_anchor is NOT derived from FLOOR_MARGIN -- measure the "
+          "lowest alpha row L across the rendered PNGs and use 1 - L/%d; the "
+          "world origin (row %d) is above the lowest foot, and anchoring there "
+          "sinks it through the floor."
+          % (CANVAS_HEIGHT, RESOLUTION,
+             round(FLOOR_MARGIN / CANVAS_HEIGHT * RESOLUTION)))
 
 
 def main():

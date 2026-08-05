@@ -36,11 +36,14 @@ This is deliberately the *only* piece of lore load-bearing enough to matter for 
 
 ## Visual/audio direction
 
-*Placeholder art built 2026-07-31; no authored art for this faction or any other yet. See
+*Placeholder art built 2026-07-31; no authored art for this faction. The contractors are the
+only character with real art so far, and it is **rendered from a rigged 3D model** rather than
+drawn — see [`../../../../presentation-direction.md`](../../../../presentation-direction.md)
+§2.1, since that is the pipeline this faction will go through too. See
 [`alpha-implementation.md`](alpha-implementation.md) §5 for what the stand-in draws.*
 
 **What the presentation imposes.** The game is isometric — 2D sprites over 3D levels, at a fixed
-35.264° pitch, in eight direction buckets, with a character occupying about 16% of viewport
+35.264° pitch, in eight direction buckets, with a character occupying about 15% of viewport
 height, usually in a dark corridor (see
 [`../../../../presentation-direction.md`](../../../../presentation-direction.md)). Three consequences
 for this faction specifically:

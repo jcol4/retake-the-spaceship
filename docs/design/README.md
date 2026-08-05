@@ -9,8 +9,13 @@ How any of it is *drawn* is a separate question with a separate answer:
 [`../presentation-direction.md`](../presentation-direction.md). The game is presented
 isometrically — 2D sprite characters over real 3D levels — and that doc supersedes the GDD's
 camera and rendering sections. It matters here because it constrains faction art directly: a
-unit is read at a fixed 35.264° pitch, in eight direction buckets, at roughly 16% of viewport
-height, usually in the dark. Silhouette and palette carry the whole read.
+unit is read at a fixed 35.264° pitch, in eight direction buckets, at roughly **15%** of
+viewport height, usually in the dark. Silhouette and palette carry the whole read.
+
+Those sprites are **prerendered from rigged 3D characters** rather than hand-drawn, so a
+faction's visual identity is a modelling brief. The cost that imposes on design is worth
+knowing before specifying anything: a full character is twenty poses × eight directions, so
+every distinct silhouette is a render pass rather than a texture swap.
 
 ## Factions
 

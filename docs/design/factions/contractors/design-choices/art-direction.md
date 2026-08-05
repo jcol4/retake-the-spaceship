@@ -4,6 +4,15 @@
 here from the contractor faction's perspective — see the source doc at the repo root for the full
 phased implementation plan and tooling notes.*
 
+> **How this art reaches the screen (2026-08-04).** Contractors are **prerendered**: a rigged
+> 3D character is posed per action in Blender and turned through eight facings under a camera
+> locked to the game's own pitch and yaw, producing flat sprites. So everything below about
+> palette, silhouette, kit and gait describes a **model**, and describes it literally — this
+> is a modelling brief, not a painting brief. See
+> [presentation-direction.md](../../../../presentation-direction.md) §2.1.
+>
+> Rendered so far: `idle` and `run`, of twenty poses. Everything else is placeholder.
+
 ## The mercenary/PMC read
 
 The reference art is deliberately **not** a clean, uniformed military look — no faction insignia,
@@ -34,15 +43,21 @@ rounder knee pads.
 
 ## Why camera distance changes the whole art calculus
 
-> ✅ **RESOLVED 2026-07-30.** The camera is now fixed orthographic with no zoom, at a
-> `Camera3D.size` of 12 — a 1.92 m character over a 12 m vertical extent is **16% of
-> viewport height**, inside the reference band. The section's own practical implication
-> ("settle framing before investing in detail") has therefore been honoured: framing is
-> settled, and it cannot drift, because there is no zoom control left to drift it. See
+> ✅ **RESOLVED 2026-07-30, corrected 2026-08-04.** The camera is fixed orthographic with no
+> zoom, at a `Camera3D.size` of **10.5** — putting a character at **14.9% of viewport
+> height**, inside the reference band. The section's own practical implication ("settle
+> framing before investing in detail") has therefore been honoured: framing is settled, and
+> it cannot drift, because there is no zoom control left to drift it. See
 > [presentation-direction.md](../../../../presentation-direction.md).
 >
-> The conclusion below still holds and now applies to **sprite** art rather than model
-> texture work: at 16% height, detail investment pays.
+> *The first answer was `size = 12` for "16%", and it was wrong by a cosine.* An upright
+> figure seen at 35.264° is foreshortened and occupies `1.92 × cos(pitch) = 1.568 m` of
+> screen, so 12 really gave 13.1% — under the band. The 16% was accurate for the code
+> placeholder, which fills its canvas and is foreshortened by nothing, and stopped being
+> accurate the moment rendered art landed.
+>
+> The conclusion below still holds and applies to the **model and its render** rather than to
+> realtime texture work: at ~15% height, detail investment pays.
 
 The reference is framed roughly 4× closer than the game's then-current default zoom (~15–20% of
 viewport height vs. ~4%). This isn't just a camera tweak — it inverts an earlier art conclusion:
@@ -55,12 +70,28 @@ on it.
 
 ## Weighty movement as a gameplay-feel decision, not just animation polish
 
-> ✅ **RESOLVED 2026-07-30 — declined. Move speed stays 4.5 m/s.** The reasoning below was
-> driven by foot-skate, which is a property of a 3D clip's stride against ground travel.
-> Sprites have no stride to skate: the walk cycle is now *authored against* 4.5 rather
-> than the speed being fitted to a clip that already existed. Doubling move duration was
-> a real cost against the 20–40 minute mission target and bought nothing once the
-> constraint that motivated it stopped existing.
+> ✅ **RESOLVED 2026-07-30 — declined. Move speed stays 4.5 m/s.** Doubling move duration was
+> a real cost against the 20–40 minute mission target.
+>
+> ⚠️ **But half the reasoning was wrong, and was corrected 2026-08-04.** The original said
+> "sprites have no stride to skate — the walk cycle is *authored against* 4.5 rather than the
+> speed being fitted to an existing clip." That is true of **hand-drawn** sprites. The sprites
+> turned out to be **rendered from a rigged 3D character**, which has feet at real world
+> positions, so the skate constraint applies exactly as it did in 3D. The medium changed; the
+> kinematics did not.
+>
+> **The decision stands, the constraint comes back with it.** Both inputs are now fixed rather
+> than open — `move_speed` 4.5 m/s, and a cycle forced to 0.666 s by the footstep cadence — so
+> the formula below has one answer:
+>
+> ```
+> 4.5 × 0.666 / 2 = 1.50 m between contact poses
+> ```
+>
+> That is a sprint stride, and it is the honest cost of keeping 4.5 m/s: the run cannot be
+> made heavier by slowing its cadence, so weight has to come from posture, ground contact and
+> interpolation instead. Nothing currently checks the 1.50 m. See `character-art-plan.md`
+> §4.2.
 
 The run-cycle rework (posture, cadence, ground contact) is explicitly tied to a movement-speed
 change: `MOVE_SPEED` dropping from 4.5 m/s to ~2.4 m/s to avoid foot-skate at a slower, heavier
@@ -75,20 +106,33 @@ mission length target).
   rely on HUD + active-unit ring only, per the reference's lack of any bright shoulder marker?
   **Still open**, and cheaper to answer than it was: a squad-colour cue is now a sprite layer,
   so it can be added and removed without touching a model.
-- ~~Texture resolution: 1024² vs 2048².~~ **Moot.** Characters are hand-drawn sprites; the
-  question is source canvas size per pose, not texture resolution. See below.
-- ~~Movement speed: is ~2.4 m/s acceptable?~~ **Closed — declined, stays 4.5 m/s.**
+- ~~Texture resolution: 1024² vs 2048².~~ **Moot.** Nothing is sampled at runtime. The
+  equivalent question is the render resolution, currently 256 px (1 px = 1 cm), and it is a
+  free choice — the game derives `pixel_size` from the PNG.
+- ~~Movement speed: is ~2.4 m/s acceptable?~~ **Closed — declined, stays 4.5 m/s**, with the
+  1.50 m stride constraint that follows from it (above).
 
 ## Budget
 
-> ⚠️ **SUPERSEDED 2026-07-30.** Characters are hand-drawn 2D sprites, so a triangle and
-> material budget no longer describes anything. The equivalent budget is **art volume**:
-> layers × poses × directions × frames, where the 5-drawn + 3-mirrored rule and the
-> per-character layer set are the two levers that control it. See
-> [presentation-direction.md](../../../../presentation-direction.md) §2.
+> ⚠️ **SUPERSEDED 2026-07-30, revised 2026-08-04.** A realtime triangle and material budget
+> describes nothing: the model is consumed **offline**, by Cycles, into PNGs, and nothing
+> about it is uploaded to a GPU at play time. Triangles are effectively free — spend them on
+> bevels, the dome helmet, round lenses and real joint weighting.
 >
-> Placeholder art is generated in code at a 64² canvas with `pixel_size` 0.03, putting a
-> character at 1.92 m — which is what the 16% framing figure above is measured against.
+> The budget that binds is **art volume × render time**:
+>
+> ```
+> images per character = poses × 8 directions × frames per pose
+> ```
+>
+> Twenty poses averaging ~10 frames is ~1,600 renders per layer. The levers are the
+> per-character layer set (the merc is 2 — `body` and `arm` — not 4), the sampling rate
+> (`--fps`, which costs nothing in game timing), and Cycles samples. See
+> [presentation-direction.md](../../../../presentation-direction.md) §2.1.
+>
+> Placeholder art — still what every character but the merc uses — is generated in code at a
+> 64² canvas, putting a character at 1.92 m. Rendered art uses a 2.56 m canvas at 256 px, and
+> the framing figure above is measured against the character's 1.92 m within it.
 
 *(Historical: model was 432 tris, 6 flat materials, no UVs/textures; the target was
 6,000–10,000 tris, ~8 materials, one UV set, one texture atlas.)*

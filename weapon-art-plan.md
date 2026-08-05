@@ -9,17 +9,31 @@
 >
 > This document specifies **Blender-generated weapon meshes for a rigged 3D character**. The
 > game is now presented isometrically, with 2D sprite characters — see
-> [`docs/presentation-direction.md`](docs/presentation-direction.md). The rig, the animation
-> set, the shared-clip constraint and the `.glb` export pipeline this plan is built around have
-> all been deleted, so **Sections 5–9 (geometry budgets, mounting, rig interface, sequencing)
-> no longer describe anything that exists.**
+> [`docs/presentation-direction.md`](docs/presentation-direction.md).
 >
-> What survives is the part that was never about geometry: **which five weapons there are, what
-> makes each readable at a glance, and the shared visual language between them.** A weapon is
-> now a sprite layer on a 4-direction character at ~16% of viewport height, so "readable at a
-> glance" got *harder*, not easier, and the silhouette analysis below is more load-bearing than
-> when it was written — the skeletonized stock and the oversized trigger guard are exactly the
-> kind of negative space that survives being 20 pixels tall.
+> **Revised 2026-08-04, and more of this survives than the first version of this banner said.**
+> The claim was that "the rig, the animation set and the `.glb` export pipeline have all been
+> deleted." What was deleted is the **runtime** one. Character sprites turn out to be
+> *rendered* from a rigged Blender character, so there is a rig again, weapons are modelled and
+> mounted on it again, and they are animated with it again — offline, into PNGs.
+>
+> | Live | Genuinely dead |
+> |---|---|
+> | §1–4 (which five weapons, silhouette, shared visual language), and §5–7 in substance: geometry, mounting and the rig interface all describe real work again, just consumed offline | The `.glb` **export** step and anything about a weapon existing as a Godot node at runtime — no mesh reaches the game. Geometry *budgets* invert: triangles are free offline (see `character-art-plan.md` §2) |
+>
+> Two consequences specific to weapons:
+>
+> - **A weapon is not its own sprite layer on the merc.** It is rendered *into* the body, along
+>   with the arms and torso, because that is where the renderer resolves self-occlusion for
+>   free. So swapping a weapon is a re-render of the character, not a layer reassignment — the
+>   real cost of five weapons, and the reason the merc is one variant rather than five today.
+> - **Mirroring is off the table for anything armed.** Flipping a sprite puts the rifle on the
+>   wrong shoulder, so armed characters are rendered in all eight directions rather than five.
+>
+> "Readable at a glance" got *harder*, not easier: a weapon is ~20 px of a character at ~15% of
+> viewport height, so the silhouette analysis below is more load-bearing than when it was
+> written — the skeletonized stock and the oversized trigger guard are exactly the kind of
+> negative space that survives that.
 >
 > Gameplay stats for the five live in
 > [`docs/design/factions/contractors/weapons/`](docs/design/factions/contractors/weapons/) and

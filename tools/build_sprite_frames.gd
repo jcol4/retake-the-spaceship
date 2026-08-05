@@ -21,7 +21,8 @@ extends SceneTree
 ## not registered when a tool script is compiled.
 const POSES := [
 	"idle", "run", "walk", "crouch_idle", "overwatch_hold", "aim_hold",
-	"shoot_recoil", "run_stop", "stand_to_crouch", "crouch_to_stand", "melee",
+	"begin_shoot", "fire_shoot", "end_shoot",
+	"run_stop", "stand_to_crouch", "crouch_to_stand", "melee",
 	"reload", "throw_grenade", "interact", "hit_react", "downed",
 	"alert_scream", "idle_fidget",
 ]
@@ -44,6 +45,12 @@ const LOOPING := ["idle", "run", "walk", "crouch_idle", "overwatch_hold", "aim_h
 ## long however many frames get drawn for it -- which is the property that keeps
 ## turn pacing identical as art lands.
 const ONE_SHOT_TIME := {
+	## Must equal unit_visual.gd RAISE_TIME, BURST_CADENCE and SETTLE_TIME:
+	## play_burst waits exactly those, so a phase authored to any other length
+	## either finishes early and freezes on its last frame, or is cut off. FIRE
+	## is the tight one -- it is restarted every BURST_CADENCE, so anything past
+	## 0.11 s of it is never seen.
+	"begin_shoot": 0.45, "fire_shoot": 0.11, "end_shoot": 0.20,
 	"melee": 1.20, "reload": 1.20, "throw_grenade": 1.00, "interact": 1.00,
 	"hit_react": 0.47, "downed": 0.80, "alert_scream": 2.80,
 }

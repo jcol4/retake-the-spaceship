@@ -37,9 +37,19 @@ const OVERWATCH := &"overwatch_hold"
 # Firing is two animations driven by play_burst rather than one per shot type:
 # the burst length is rolled per shot, and no fixed animation can match a count
 # it does not know. AIM_HOLD is the weapon up and steady either side of the
-# burst; SHOOT_RECOIL is one round's kick, replayed from the start once per round.
+# burst; the three-phase BEGIN/FIRE/END set below is what actually plays.
 const AIM_HOLD := &"aim_hold"
-const SHOOT_RECOIL := &"shoot_recoil"
+## The three phases of a burst, authored as three actions. BEGIN is the rifle
+## coming up to the shoulder, FIRE is one round's kick replayed from the start
+## once per round, END is lowering back out of the aim.
+##
+## Each degrades independently: a character with only FIRE art still fires, it
+## just cuts to the kick and back. The timers below run either way, so burst
+## pacing does not move as art lands — the same guarantee the rest of the
+## fallback system gives.
+const BEGIN_SHOOT := &"begin_shoot"
+const FIRE_SHOOT := &"fire_shoot"
+const END_SHOOT := &"end_shoot"
 # Transitions. Not stances and not actions: each is a one-shot bridging one
 # stance into another, played through play_stance_exit. All degrade to a hard
 # cut, at zero time cost, when the art is absent.
@@ -88,6 +98,9 @@ const FIDGET_GAP_MAX := 35.0
 ## tuned against, and a sprite reload has no more reason to take a different
 ## length than a mocap one did.
 const FALLBACK_TIME := {
+	BEGIN_SHOOT: RAISE_TIME,
+	FIRE_SHOOT: BURST_CADENCE,
+	END_SHOOT: SETTLE_TIME,
 	MELEE: 1.20,
 	RELOAD: 1.20,
 	GRENADE: 1.00,
@@ -103,7 +116,16 @@ const DEFAULT_FALLBACK_TIME := 0.4
 # order was given. BURST_CADENCE is the gap between rounds, short enough that the
 # kick has not fully recovered when the next lands, which is what makes a burst
 # look continuous. SETTLE is the weapon held on target afterwards.
-const RAISE_TIME := 0.18
+#
+# 0.45 s, raised from 0.18. At 0.18 the beat was only ever dead air: it was long
+# enough to stop a shot reading as instantaneous, but far too short to SHOW a
+# rifle being shouldered — a 0.18 s raise is two frames at the rate everything
+# else is drawn at, which is a cut with an extra image in it, not a movement.
+# Deliberate shouldering is the read this wants, and it costs about a quarter of
+# a second per shot in turn pacing. That cost is the reason this is a constant
+# with a comment rather than a number: it is the dial to turn if combat starts
+# feeling slow.
+const RAISE_TIME := 0.45
 const BURST_CADENCE := 0.11
 const SETTLE_TIME := 0.20
 
@@ -555,17 +577,21 @@ func play_burst(rounds: int) -> void:
 		for _i in rounds:
 			muzzle.emit()
 		return
-	_action = SHOOT_RECOIL
-	_play(AIM_HOLD)
+	_action = FIRE_SHOOT
+	# Each phase falls back to AIM_HOLD, so a character missing the raise or the
+	# lower still holds the weapon up for that beat rather than skipping it. The
+	# timers run regardless, which is what keeps burst pacing — and therefore
+	# turn pacing — identical across characters with different amounts of art.
+	_play(BEGIN_SHOOT if _has_any(BEGIN_SHOOT) else AIM_HOLD)
 	await get_tree().create_timer(RAISE_TIME).timeout
 	for _i in rounds:
 		# Restarted from frame 0 rather than merely played: play() on the
 		# animation already running is a no-op, so every round after the first
 		# would silently skip its kick.
-		_play(SHOOT_RECOIL, true)
+		_play(FIRE_SHOOT, true)
 		muzzle.emit()
 		await get_tree().create_timer(BURST_CADENCE).timeout
-	_play(AIM_HOLD)
+	_play(END_SHOOT if _has_any(END_SHOOT) else AIM_HOLD)
 	await get_tree().create_timer(SETTLE_TIME).timeout
 	_action = &""
 	_play(_stance)
@@ -756,7 +782,8 @@ const PLACEHOLDER_CROUCHED := [CROUCH, STAND_TO_CROUCH, CROUCH_TO_STAND, OVERWAT
 ## Every pose the placeholder generates art for — the full vocabulary above, so
 ## no caller can ask for something that does not exist.
 const PLACEHOLDER_POSES := [
-	IDLE, RUN, WALK, CROUCH, OVERWATCH, AIM_HOLD, SHOOT_RECOIL, RUN_STOP,
+	IDLE, RUN, WALK, CROUCH, OVERWATCH, AIM_HOLD,
+	BEGIN_SHOOT, FIRE_SHOOT, END_SHOOT, RUN_STOP,
 	STAND_TO_CROUCH, CROUCH_TO_STAND, MELEE, RELOAD, GRENADE, INTERACT,
 	HIT_REACT, DOWNED, ALERT_SCREAM, IDLE_FIDGET,
 ]
