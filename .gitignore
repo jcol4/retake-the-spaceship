@@ -11,3 +11,8 @@
 # for a single body and is re-downloadable from mixamo.com in a minute.
 # Note the single-level glob: art_src/*.fbx does not reach into anims/.
 art_src/*.fbx
+
+# Render output: contact sheets, preview strips and gifs produced by the
+# tools/ scripts (make_sprite_gif.py defaults --out here). ~27 MB across 146
+# files, all regenerable from the blends in art_src/, so not worth versioning.
+out/
