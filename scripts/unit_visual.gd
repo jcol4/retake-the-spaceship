@@ -129,6 +129,18 @@ const RAISE_TIME := 0.45
 const BURST_CADENCE := 0.11
 const SETTLE_TIME := 0.20
 
+## The same two beats when the shot is fired FROM COVER, where the phases are a
+## step out from behind the crate and a duck back behind it rather than a rifle
+## coming up on the spot. Longer because there is further to travel — a 0.45 s
+## step-out would read as a teleport with a lean in the middle.
+##
+## Applied only when the cover art actually resolved, so a character part-way
+## through being drawn keeps standing-shot pacing for the phases it has no cover
+## art for. Must equal build_sprite_frames.gd's ONE_SHOT_TIME entries for
+## `begin_shoot_low` and `end_shoot_low`, for the reason stated there.
+const COVER_RAISE_TIME := 0.75
+const COVER_SETTLE_TIME := 0.45
+
 ## Metres per second for the WALK stance, replacing Unit.move_speed on the moves
 ## that take it. Inherited from the measured Walking clip.
 const WALK_SPEED := 1.02
@@ -174,6 +186,19 @@ const MIRROR := {
 	&"w": [&"e", true],
 	&"sw": [&"se", true],
 }
+
+## Cover pose families. A unit using cover resolves every pose through the
+## matching suffix FIRST — `idle` becomes `idle_low`, `begin_shoot` becomes
+## `begin_shoot_low` — and falls back to the plain pose wherever that art does
+## not exist. See `_bases`.
+##
+## This is why cover needed no new stances and no new branches in `Unit`: the
+## unit still asks for "idle" and "a burst", and which art that means is decided
+## in one place. It also means the art can land one pose at a time — today only
+## `idle_low` is drawn, and the step-out and step-back degrade to the standing
+## versions until they are.
+const COVER_LOW := &"low"
+const COVER_HIGH := &"high"
 
 ## Rotates the bucket window so each bucket is CENTRED on a drawn direction
 ## rather than straddling two. Without it a unit facing a world axis would sit
@@ -277,6 +302,9 @@ var _direction := 0
 var _authored := false
 var _stepping: bool = false
 var _fidgeting: bool = false
+## COVER_LOW, COVER_HIGH, or "" for a unit not using cover. Written by the unit
+## (Unit.refresh_cover_pose), read by `_bases` on every resolve.
+var _cover: StringName = &""
 ## Tint for the self-lit `status` layer, if this character has one. White until
 ## a unit says otherwise — see CerberusUnit._refresh_status_light.
 var _status_color := Color.WHITE
@@ -487,24 +515,70 @@ func _bucket(relative_yaw: float) -> int:
 	return direction_bucket(relative_yaw)
 
 
+## The poses to try for `base`, most specific first: the current cover family's
+## variant, then the plain pose.
+##
+## This is the whole cover-art mechanism. Because it is a FALLBACK CHAIN rather
+## than a lookup, a cover variant that has not been drawn costs nothing and
+## changes nothing — the plain pose answers instead, exactly as it does for a
+## unit standing in the open.
+func _bases(base: StringName) -> Array[StringName]:
+	if _cover == &"":
+		return [base]
+	return [&"%s_%s" % [base, _cover], base]
+
+
 ## The animation name and flip for `base` in the current direction, resolving the
-## 5-drawn + 3-mirrored rule. Returns [name, flip_h].
+## cover chain and then the 5-drawn + 3-mirrored rule. Returns
+## [name, flip_h, resolved_base] — the third being WHICH candidate answered, so
+## play_burst can tell a step-out from a shoulder-and-fire.
 func _resolve(layer: StringName, base: StringName) -> Array:
 	var frames: SpriteFrames = _frames[layer]
 	var dir: StringName = DIRECTIONS[_direction]
-	var direct := &"%s_%s" % [base, dir]
-	# An asymmetric pose authored for all eight wins over the mirror table.
-	if frames.has_animation(direct):
-		return [direct, false]
-	if MIRROR.has(dir):
-		var m: Array = MIRROR[dir]
-		var mirrored := &"%s_%s" % [base, m[0]]
-		if frames.has_animation(mirrored):
-			return [mirrored, m[1]]
-	return [&"", false]
+	# Cover art in ANY form beats plain art, mirrored included: showing the crate
+	# pose flipped is right, and showing the standing pose unflipped is not.
+	for candidate in _bases(base):
+		var direct := &"%s_%s" % [candidate, dir]
+		# An asymmetric pose authored for all eight wins over the mirror table.
+		if frames.has_animation(direct):
+			return [direct, false, candidate]
+		if MIRROR.has(dir):
+			var m: Array = MIRROR[dir]
+			var mirrored := &"%s_%s" % [candidate, m[0]]
+			if frames.has_animation(mirrored):
+				return [mirrored, m[1], candidate]
+	return [&"", false, &""]
+
+
+## Which candidate `base` actually resolved to, or "" if nothing did. Equal to
+## `base` when the plain pose answered and to the suffixed name when a cover
+## variant did.
+func _resolved_base(base: StringName) -> StringName:
+	for layer in layers:
+		if not _frames.has(layer):
+			continue
+		var resolved := _resolve(layer, base)
+		if resolved[0] != &"":
+			return resolved[2]
+	return &""
 
 
 # --- Playback ----------------------------------------------------------------
+
+
+## Sets which cover family every subsequent pose resolves through. A cosmetic
+## switch only: the cover BONUS is a property of the tile edge the shot crosses
+## (GridManager.cover_type_on), never of what the unit is doing on screen, so no
+## value here can move an accuracy number.
+func set_cover_pose(family: StringName) -> void:
+	if family == _cover:
+		return
+	_cover = family
+	# Re-resolved rather than restarted: the pose NAME on screen is unchanged, so
+	# a unit that steps into cover mid-idle swaps art without its cycle jumping
+	# back to frame 0. Restart is what `_play`'s second argument is for, and this
+	# is deliberately not that case.
+	_play(_action if _action != &"" else _stance)
 
 
 func set_stance(stance: StringName) -> void:
@@ -578,12 +652,23 @@ func play_burst(rounds: int) -> void:
 			muzzle.emit()
 		return
 	_action = FIRE_SHOOT
+	# Resolved BEFORE the phase plays, because the length of the beat depends on
+	# which art answered: a step out of cover takes longer than shouldering a
+	# rifle on the spot. Empty means neither the cover variant nor the plain pose
+	# exists, and the phase degrades to AIM_HOLD as it always has.
+	var begin := _resolved_base(BEGIN_SHOOT)
+	var end := _resolved_base(END_SHOOT)
 	# Each phase falls back to AIM_HOLD, so a character missing the raise or the
 	# lower still holds the weapon up for that beat rather than skipping it. The
 	# timers run regardless, which is what keeps burst pacing — and therefore
 	# turn pacing — identical across characters with different amounts of art.
-	_play(BEGIN_SHOOT if _has_any(BEGIN_SHOOT) else AIM_HOLD)
-	await get_tree().create_timer(RAISE_TIME).timeout
+	_play(BEGIN_SHOOT if begin != &"" else AIM_HOLD)
+	await get_tree().create_timer(
+		_phase_time(BEGIN_SHOOT, begin, RAISE_TIME, COVER_RAISE_TIME)).timeout
+	# FIRE has no cover variant BY DESIGN, and that is the point of the whole
+	# arrangement: the unit has already stepped out, so it fires exactly as it
+	# does in the open. One set of kick art serves both, which halves what has to
+	# be drawn to make cover read.
 	for _i in rounds:
 		# Restarted from frame 0 rather than merely played: play() on the
 		# animation already running is a no-op, so every round after the first
@@ -591,10 +676,20 @@ func play_burst(rounds: int) -> void:
 		_play(FIRE_SHOOT, true)
 		muzzle.emit()
 		await get_tree().create_timer(BURST_CADENCE).timeout
-	_play(END_SHOOT if _has_any(END_SHOOT) else AIM_HOLD)
-	await get_tree().create_timer(SETTLE_TIME).timeout
+	_play(END_SHOOT if end != &"" else AIM_HOLD)
+	await get_tree().create_timer(
+		_phase_time(END_SHOOT, end, SETTLE_TIME, COVER_SETTLE_TIME)).timeout
 	_action = &""
 	_play(_stance)
+
+
+## How long a burst phase holds: the cover length when a cover variant answered
+## for it, the plain length otherwise. Decided per PHASE rather than per shot, so
+## a character with `begin_shoot_low` drawn but not `end_shoot_low` gets the long
+## step-out and the short settle — which is what its art actually shows.
+func _phase_time(base: StringName, resolved: StringName, plain: float,
+		in_cover: float) -> float:
+	return in_cover if resolved != &"" and resolved != base else plain
 
 
 ## Where a shot leaves the weapon, in world space.

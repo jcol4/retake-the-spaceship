@@ -72,10 +72,26 @@ as frames ÷ the duration that pose is supposed to occupy, so a run drawn in 8 f
 drawn in 12 both take 0.666 s and both keep their footplants on the footstep cadence. Chunkiness
 is set by `--fps` and costs nothing in timing.
 
-**Authored so far:** the merc's `idle` and `run`. Everything else — and every non-contractor —
+**Which way a character faces is set by one constant,** `render_sprites.py`
+`BUCKET_ZERO_DEGREES`, and it is the sharpest edge in this pipeline. A wrong value is
+*invisible in the art* — eight facings are self-consistent at any base, so the contact sheet
+looks right and only a unit walking east while its sprite runs north-east gives it away. It
+cannot be derived from the axis convention (this rig is posed facing screen-SE) and must never
+be read from the `.blend`. Re-aiming the set is a rename, not a re-render. See
+[`docs/presentation-direction.md`](docs/presentation-direction.md) §2.1.
+
+**Authored so far:** five of the merc's twenty poses, at all eight directions — `idle`, `run`,
+and the three shooting poses `begin_shoot`, `fire_shoot` and `end_shoot` — plus six cover
+variants: `idle`, `begin_shoot` and `end_shoot` in both `_low` and `_high`. Only the `body`
+layer; the `arm` layer is still `sw` alone. Everything else — and every non-contractor —
 still runs on `UnitVisual`'s code-generated placeholder, which draws a readable stand-in per
 layer, pose and direction so layering, bucketing, mirroring and gear swaps stay exercisable.
 Action *timing* is identical either way: without art, actions resolve on `FALLBACK_TIME`.
+
+A `SpriteFrames` always contains all 160 animations (20 poses × 8 directions) whether or not
+the art exists, because `build_sprite_frames.gd` falls back to the nearest pose that *does*
+exist. So the presence of `aim_hold_ne` in `body_merc.tres` is not evidence `aim_hold` was
+rendered — the loose PNGs under [`assets/sprites/`](assets/sprites/) are.
 
 See [`docs/presentation-direction.md`](docs/presentation-direction.md) §2 for the direction
 system, the pivot contract and the framing arithmetic.
@@ -112,20 +128,34 @@ godot --path . --script res://tools/test_room_visibility.gd            # render 
 | [`docs/presentation-direction.md`](docs/presentation-direction.md) | Source of truth for how the game is **drawn**. Supersedes the GDD's camera and rendering sections. |
 | [`docs/design/`](docs/design/) | The GDD reorganised and expanded **per faction** — who they are, what they field, and why. |
 | [`MIGRATION_PLAN.md`](MIGRATION_PLAN.md) | The 3D → isometric migration: what changed, why, and the two phases still outstanding. |
+| [`MIGRATION_PLAN_3D_8DIR.md`](MIGRATION_PLAN_3D_8DIR.md) | A proposed reversal of that migration, **overtaken by events** — kept because it is the record of how eight-way movement arrived without the runtime 3D pipeline coming back with it. |
 | [`character-art-plan.md`](character-art-plan.md) | Contractor art direction — the modelling and animation brief the rendered sprites are made against. |
-| [`weapon-art-plan.md`](weapon-art-plan.md) | Weapon art direction. Still written against the deleted runtime `.glb`; the shape language survives, the Godot-side sections do not. |
+| [`weapon-art-plan.md`](weapon-art-plan.md) | Weapon art direction. The shape language and the Blender-side tooling are live, since weapons are modelled and rendered with the character; its Godot-side sections describe the deleted runtime `.glb` and do not. Its banner still says the whole thing is dead, which is a correction behind `character-art-plan.md`'s. |
 
 ## Still outstanding
 
-**Character art.** Two of the twenty poses are rendered. In priority order:
+**Character art.** Five of the twenty poses are rendered, plus six cover variants. In priority
+order:
 
-- The remaining eighteen poses for the merc — the four firing poses (`aim_hold`,
-  `begin_shoot`, `fire_shoot`, `end_shoot`) first, since combat is what the player looks at
-  most.
+- `hit_react` — currently the only pose in the vocabulary the game deliberately *declines* to
+  play. `Unit.take_damage` settles into the appropriate idle instead, because playing it would
+  resolve to a stand-in that reads as nothing happening while still costing the beat
+  `FALLBACK_TIME` charges for. Restoring it is one line; draw `hit_react_low` alongside it, or
+  a soldier will stand up out of cover to flinch.
+- `aim_hold` — the last of the four firing poses, and the one held longest on screen, since a
+  unit sits in it for the whole of an Aimed Shot.
 - The `arm` layer, authored only for `sw`. Until the other seven exist, the rifle arm falls
   back to the `sw` art in every direction (`build_sprite_frames.gd` `_pick`).
-- `idle` for `e`, `s` and `w`, and a re-render of `idle` for `n` and `nw` — seven frames of
-  those two came out of Blender truncated and were removed.
+- The other fourteen body poses — `walk`, `crouch_idle`, `overwatch_hold`, `run_stop`, the
+  two crouch transitions, `melee`, `reload`, `throw_grenade`, `interact`, `hit_react`,
+  `downed`, `alert_scream` and `idle_fidget`.
+- Non-contractors have no authored art at all: the swarm has one placeholder frame
+  (`body_swarm_idle_se`) and the four Cerberus models none, which is what the lineup image
+  above is showing.
+
+Foot-skate and turn timing (`character-art-plan.md` §4.2–4.3) are more exposed at eight
+facings than they were at four — more turns, each smaller — and that is unresolved rather
+than solved.
 
 **Map art**, both gated on geometry that does not exist yet, with standing task lists in
 `MIGRATION_PLAN.md`:

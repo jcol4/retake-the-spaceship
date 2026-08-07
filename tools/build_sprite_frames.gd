@@ -27,6 +27,26 @@ const POSES := [
 	"alert_scream", "idle_fidget",
 ]
 
+## Cover variants of the poses above, for a unit posed as using the cover its
+## tile edge carries (unit_visual.gd COVER_LOW / COVER_HIGH).
+##
+## Kept OUT of POSES, and that separation is load-bearing rather than tidiness.
+## Everything in POSES is emitted for all eight directions whether it was drawn
+## or not, stubbed by `_pick` from the nearest thing that exists — which is right
+## for a pose the game will otherwise resolve to nothing, and catastrophic for
+## these: unit_visual.gd's cover chain asks `has_animation("begin_shoot_low_ne")`
+## and falls back to plain `begin_shoot_ne` when the answer is no, so stubbing
+## the name would answer YES and hand it whatever PNG `_pick` happened to find.
+## The fallback would never fire and the unit would fire its rifle by playing,
+## say, a reload.
+##
+## So these are emitted ONLY where art genuinely exists, per direction as well as
+## per pose. That is what lets the set land one pose at a time.
+const COVER_POSES := [
+	"idle_low", "begin_shoot_low", "end_shoot_low",
+	"idle_high", "begin_shoot_high", "end_shoot_high",
+]
+
 ## All EIGHT, not the five-plus-mirror set. A character carrying a rifle cannot
 ## be mirrored -- unit_visual.gd's MIRROR table would put the weapon in the wrong
 ## hand -- so the asymmetric path in `_resolve` (art for the mirrored direction
@@ -38,7 +58,10 @@ const POSES := [
 ## are the four world diagonals.
 const DIRECTIONS := ["ne", "n", "nw", "w", "sw", "s", "se", "e"]
 
-const LOOPING := ["idle", "run", "walk", "crouch_idle", "overwatch_hold", "aim_hold"]
+const LOOPING := [
+	"idle", "run", "walk", "crouch_idle", "overwatch_hold", "aim_hold",
+	"idle_low", "idle_high",
+]
 
 ## Seconds a one-shot occupies, copied from unit_visual.gd's FALLBACK_TIME.
 ## `speed` is derived as frames/duration, so the animation takes exactly this
@@ -51,6 +74,12 @@ const ONE_SHOT_TIME := {
 	## is the tight one -- it is restarted every BURST_CADENCE, so anything past
 	## 0.11 s of it is never seen.
 	"begin_shoot": 0.45, "fire_shoot": 0.11, "end_shoot": 0.20,
+	## Likewise COVER_RAISE_TIME and COVER_SETTLE_TIME: play_burst waits these
+	## instead whenever the cover variant is the one that resolved. There is no
+	## `fire_shoot_low` on purpose — the unit has stepped out by then and fires
+	## with the standing art.
+	"begin_shoot_low": 0.75, "end_shoot_low": 0.45,
+	"begin_shoot_high": 0.75, "end_shoot_high": 0.45,
 	"melee": 1.20, "reload": 1.20, "throw_grenade": 1.00, "interact": 1.00,
 	"hit_react": 0.47, "downed": 0.80, "alert_scream": 2.80,
 }
@@ -74,6 +103,9 @@ const LOOP_TIME := {
 	"walk": 1.4,
 	"idle": 2.0,  # a breathing cycle
 	"crouch_idle": 1.6, "overwatch_hold": 1.6, "aim_hold": 1.6,
+	# Slower than the standing breath: a soldier pressed against a crate under
+	# fire is holding still, not idling.
+	"idle_low": 2.4, "idle_high": 2.4,
 }
 const DEFAULT_LOOP_TIME := 1.6
 
@@ -120,14 +152,34 @@ func _build(layer: String, variant: String) -> bool:
 			for tex in textures:
 				frames.add_frame(name, tex)
 
+	# Exact matches only — no `_pick`, no stubbing. A cover pose that was not
+	# drawn for this direction must be ABSENT from the SpriteFrames so that
+	# unit_visual.gd's chain falls back to the plain pose; see COVER_POSES. That
+	# also makes a partly-drawn set behave sensibly per direction: the four
+	# facings that were drawn hug the crate, the rest stand plain, and nothing
+	# ever shows the wrong facing.
+	var cover := 0
+	for pose in COVER_POSES:
+		for dir in DIRECTIONS:
+			var textures: Array = found.get("%s/%s" % [pose, dir], [])
+			if textures.is_empty():
+				continue
+			cover += 1
+			var name := StringName("%s_%s" % [pose, dir])
+			frames.add_animation(name)
+			frames.set_animation_loop(name, pose in LOOPING)
+			frames.set_animation_speed(name, _speed(pose, textures.size()))
+			for tex in textures:
+				frames.add_frame(name, tex)
+
 	var path := "%s/%s_%s.tres" % [DIR, layer, variant]
 	var err := ResourceSaver.save(frames, path)
 	if err != OK:
 		push_error("save %s failed: %d" % [path, err])
 		return false
-	print("[frames] %s  %d animations, %d authored, %d stubbed" % [
+	print("[frames] %s  %d animations, %d authored, %d stubbed, %d cover" % [
 		path, frames.get_animation_names().size(), drawn,
-		frames.get_animation_names().size() - drawn])
+		frames.get_animation_names().size() - drawn - cover, cover])
 	return true
 
 

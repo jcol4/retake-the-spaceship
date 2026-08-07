@@ -25,7 +25,17 @@ import os
 import sys
 
 import bpy
+from bpy_extras.object_utils import world_to_camera_view
 from mathutils import Vector
+
+## Pixels of slack added below the lowest geometry when reporting `foot_anchor`.
+##
+## The reported anchor is measured from GEOMETRY, but the thing that must not
+## fall below the floor is the lowest opaque PIXEL, and antialiasing puts those
+## roughly a pixel outside the silhouette. Two covers it, and erring low is free:
+## an anchor a hair below the feet lifts the sprite by a hair, which is invisible,
+## while an anchor a hair above sinks it into the floor, which is not.
+ANCHOR_SAFETY_PX = 2
 
 # --- The camera contract -----------------------------------------------------
 #
@@ -153,6 +163,49 @@ GAME_DIRECTIONS = list(DIRECTIONS)
 ## 64 a rotatable camera would have needed.
 REST_FACING_IS_BLENDER_PLUS_Y = True
 
+## Z rotation, in degrees, at which the character faces DIRECTIONS[0]. Every
+## facing is this plus 45 degrees per bucket, so it is the single number the
+## whole direction mapping hangs off.
+##
+## A CONSTANT, and it has to be. This used to read `character.rotation_euler.z`
+## at startup, on the reasoning that the scene's authored rotation is the natural
+## zero -- but that property is not a stable reading. Blender evaluates the saved
+## active action when the file loads, and an action carrying object-level
+## transform keys (see mute_object_transform_curves) drives this very property.
+## So the base angle silently became "whichever action the artist last had open",
+## and clearing the action does not undo it: the evaluated value sticks.
+##
+## The failure that cost an afternoon: `run` drives the object to 540 degrees and
+## the authored rest is 810, so rendering `run` from a file saved on `run` put
+## every run frame 270 degrees from where the same script had put `idle`. Same
+## script, same .blend, different answer, no error, and the only symptom is a
+## character that sprints sideways. Muting was already in place and did not help
+## -- it stops the action fighting the turntable DURING a render, but the base
+## was already wrong before the first frame.
+##
+## NOT 0, because REST_FACING_IS_BLENDER_PLUS_Y describes the modelling
+## convention rather than this rig: the character was posed facing screen-SE to
+## make it easier to model, so the whole set needs turning back onto bucket 0
+## before the 45-degree steps start.
+##
+## 180 was arrived at IN THE GAME, and that is the only place this can be
+## settled. Four values were tried: 0 from the axis convention, 90 from the
+## .blend's stored rotation, 135 from reading rendered frames at full
+## resolution, and finally this. The first three were each wrong by a whole
+## bucket or more, and every one of them produced a sprite set that looked
+## entirely reasonable laid out on a contact sheet.
+##
+## That is the trap worth remembering: eight facings of a character are
+## self-consistent at ANY base, so a wrong one is invisible in the art. It only
+## shows up when a unit walks east and the sprite runs north-east. Judge this
+## against a moving unit on screen, never against the PNGs.
+##
+## Each 45 here is one bucket. If it is off again, the whole set can be
+## re-aimed without re-rendering: renaming every file's direction one bucket
+## (ne->e, n->ne, nw->n, w->nw, sw->w, s->sw, se->s, e->se) is byte-identical to
+## +45 here, and the reverse mapping is -45.
+BUCKET_ZERO_DEGREES = 180.0
+
 # --- Poses -------------------------------------------------------------------
 #
 # Blender actions are matched to these by name. An action named `idle` becomes
@@ -165,6 +218,16 @@ POSES = [
     "run_stop", "stand_to_crouch", "crouch_to_stand", "melee",
     "reload", "throw_grenade", "interact", "hit_react", "downed",
     "alert_scream", "idle_fidget",
+    # Cover variants -- a unit posed as using the cover on its tile edge. Each is
+    # optional: `build_sprite_frames.gd` emits them only where art exists, and
+    # `unit_visual.gd` falls back to the plain pose everywhere else, so drawing
+    # `idle_low` alone is a complete and shippable step.
+    #
+    # There is no `fire_shoot_low`, deliberately: `begin_shoot_low` is the step
+    # OUT of cover, so by the time rounds leave the barrel the character is in
+    # the open and the standing kick is the correct art.
+    "idle_low", "begin_shoot_low", "end_shoot_low",
+    "idle_high", "begin_shoot_high", "end_shoot_high",
 ]
 
 ## Seconds one cycle of each looping stance occupies in game. Copied from
@@ -180,6 +243,7 @@ LOOP_TIME = {
     "walk": 1.4,
     "idle": 2.0,
     "crouch_idle": 1.6, "overwatch_hold": 1.6, "aim_hold": 1.6,
+    "idle_low": 2.4, "idle_high": 2.4,
 }
 DEFAULT_LOOP_TIME = 1.6
 
@@ -188,6 +252,9 @@ ONE_SHOT_TIME = {
     ## Must equal unit_visual.gd RAISE_TIME, BURST_CADENCE and SETTLE_TIME.
     ## See build_sprite_frames.gd.
     "begin_shoot": 0.45, "fire_shoot": 0.11, "end_shoot": 0.20,
+    ## Must equal unit_visual.gd COVER_RAISE_TIME and COVER_SETTLE_TIME.
+    "begin_shoot_low": 0.75, "end_shoot_low": 0.45,
+    "begin_shoot_high": 0.75, "end_shoot_high": 0.45,
     "melee": 1.20, "reload": 1.20, "throw_grenade": 1.00, "interact": 1.00,
     "hit_react": 0.47, "downed": 0.80, "alert_scream": 2.80,
 }
@@ -412,6 +479,71 @@ def mute_object_transform_curves(action):
     return muted
 
 
+def renderable_meshes():
+    """Every mesh that actually reaches the film.
+
+    All of them, not just the character's body: the rifle is a separate object
+    and a lowered muzzle can be the lowest thing on screen. `GroundReference` is
+    excluded for free, since it is hide_render.
+    """
+    return [o for o in bpy.context.scene.objects
+            if o.type == "MESH" and not o.hide_render]
+
+
+def lowest_point_on_screen(scene, camera, meshes):
+    """Lowest normalised screen height of any rendered vertex this frame.
+
+    0.0 is the bottom edge of the film, 1.0 the top. Evaluated rather than raw,
+    so armature deformation counts -- the whole question is where the FEET end
+    up once the pose is applied.
+    """
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    lowest = 1.0
+    for obj in meshes:
+        evaluated = obj.evaluated_get(depsgraph)
+        mesh = evaluated.to_mesh()
+        matrix = evaluated.matrix_world
+        for vertex in mesh.vertices:
+            y = world_to_camera_view(scene, camera, matrix @ vertex.co).y
+            if y < lowest:
+                lowest = y
+        evaluated.to_mesh_clear()
+    return lowest
+
+
+def report_anchor(lowest_ndc):
+    """Prints the `UnitVisual.foot_anchor` these renders actually need.
+
+    Printed rather than left to be derived because deriving it is what went
+    wrong twice: the obvious formula, 1 - FLOOR_MARGIN / CANVAS_HEIGHT, anchors
+    on the WORLD ORIGIN, and a planted forward foot projects below that. The
+    sprite is a depth-writing billboard, so anything below the anchor is under
+    the floor mesh and gets occluded -- feet sunk into the ground.
+
+    This is a property of the poses, not of the pipeline, so it changes whenever
+    art with a longer reach lands and there is no constant that can stand in
+    for it.
+    """
+    row = lowest_ndc * RESOLUTION
+    safe_row = max(0.0, row - ANCHOR_SAFETY_PX)
+    anchor = 1.0 - safe_row / RESOLUTION
+    origin_row = FLOOR_MARGIN / CANVAS_HEIGHT * RESOLUTION
+
+    print("[render_sprites] lowest pixel: row %.1f of %d (world origin is row "
+          "%.0f, so the art reaches %.1f px BELOW it)"
+          % (row, RESOLUTION, origin_row, origin_row - row))
+    if row <= 0.0:
+        print("[render_sprites] *** CLIPPED: the pose runs off the bottom of the "
+              "canvas. Raise FLOOR_MARGIN (now %.2f m) and re-render. ***"
+              % FLOOR_MARGIN)
+    elif row < ANCHOR_SAFETY_PX + 2:
+        print("[render_sprites] WARNING: only %.1f px of floor margin left. A "
+              "longer pose will clip -- consider raising FLOOR_MARGIN." % row)
+    print("[render_sprites] SET UnitVisual.foot_anchor = (0.5, %.8f)" % anchor)
+    print("[render_sprites]   (measured over the frames rendered THIS run; "
+          "render every pose to get the number the character actually needs)")
+
+
 def render_variant(variant, out_dir, character, only_poses=None, directions=None):
     scene = bpy.context.scene
     configure_render(scene)
@@ -434,8 +566,16 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
         sys.exit("No actions matched a pose name. Rename your actions to: %s"
                  % ", ".join(POSES))
 
-    original_rotation = character.rotation_euler.z
+    # NOT read from the character -- see BUCKET_ZERO_DEGREES for the bug that
+    # caused. Printed because it is the one number that silently re-aims every
+    # sprite in the game, and a render log that does not state it cannot be used
+    # to tell two renders apart after the fact.
+    original_rotation = math.radians(BUCKET_ZERO_DEGREES)
+    print("[render_sprites] bucket 0 (%s) renders at %.1f deg; each bucket +45"
+          % (DIRECTIONS[0], BUCKET_ZERO_DEGREES))
     written = 0
+    meshes = renderable_meshes()
+    lowest_ndc = 1.0
 
     for pose in todo:
         action = actions[pose]
@@ -474,6 +614,12 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
 
                 name = "body_%s_%s_%s_%d.png" % (variant, pose, direction, frame_index)
                 scene.render.filepath = os.path.join(out_dir, name)
+                # Measured before the render, on the same evaluated pose the
+                # render is about to shoot. Costs a vertex loop against a Cycles
+                # frame, which is nothing, and saves reading 500 PNGs back.
+                lowest_ndc = min(lowest_ndc,
+                                 lowest_point_on_screen(scene, scene.camera, meshes))
+
                 bpy.ops.render.render(write_still=True)
                 written += 1
 
@@ -485,6 +631,7 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
 
     character.rotation_euler.z = original_rotation
     print("[render_sprites] wrote %d images to %s" % (written, out_dir))
+    report_anchor(lowest_ndc)
     print("[render_sprites] now run build_sprite_frames.gd with SF_VARIANT=%s "
           "SF_LAYERS=body" % variant)
 

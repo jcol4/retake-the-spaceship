@@ -138,13 +138,43 @@ exactly, and that is the whole reason the pipeline is affordable:
   competes with the in-game tile-light tint rather than adding to it (see Lighting below), so
   strong directional shading would read as wrong in a dark corridor.
 
-The three constants worth knowing, all in `render_sprites.py`:
+The four constants worth knowing, all in `render_sprites.py`:
 
 | | | |
 |---|---|---|
 | `CANVAS_HEIGHT` | 2.56 m | The frame's world height — **not** the character's 1.92 m. The extra is headroom for a raised rifle or a grenade wind-up, which a canvas cut to the character would clip. |
 | `RESOLUTION` | 256 px | Makes 1 px = 1 cm exactly. A free choice: the game derives `pixel_size` from the PNG, so dropping to 96 or 128 for chunkier pixels needs no Godot-side change. |
 | `FLOOR_MARGIN` | 0.45 m | Floor kept *below* the world origin, and the reason the origin is not on the bottom edge. |
+| `BUCKET_ZERO_DEGREES` | 180° | The Z rotation at which the character faces bucket 0 (`ne`). Every facing is this plus 45° per bucket, so it aims **every sprite in the game**. |
+
+`BUCKET_ZERO_DEGREES` is the one that has actually bitten. Three things about it are worth
+stating plainly, because each was learned the expensive way:
+
+**It cannot be derived — only measured.** The obvious answer is 0: the axis convention says a
+character modelled facing Blender `+Y` faces Godot `−Z`, which is bucket 0, and
+`stage_merc_for_render.py` states that as a contract. But the merc rig was *posed* facing
+screen-SE to make it easier to model, so the contract describes the pipeline's intent rather
+than this `.blend`. Values of 0, 90 and 135 were each argued for from first principles and each
+was wrong.
+
+**A wrong value is invisible in the art.** Eight facings of a character are perfectly
+self-consistent at *any* base — the set looks correct laid out on a contact sheet, every file
+is a good render with the right name, and the only thing wrong is which way the character
+points. It shows up solely as a unit that walks east while its sprite runs north-east. **Judge
+it against a moving unit in the running game, never against the PNGs.**
+
+**It must never be read from the `.blend`.** It once was, as `character.rotation_euler.z` at
+startup. Blender evaluates the saved active action on file load, and several actions carry
+object-level transform keys that drive that exact property — so the base silently became
+*whichever action was last open in Blender*, and two renders of different poses could disagree
+with each other. Muting those curves (below) does not help: it stops an action fighting the
+turntable *during* a render, but the base is already wrong before the first frame.
+
+Re-aiming the whole set does **not** require re-rendering. Renaming every file's direction one
+bucket (`ne`→`e`, `n`→`ne`, `nw`→`n`, `w`→`nw`, `sw`→`w`, `s`→`sw`, `se`→`s`, `e`→`se`) is
+byte-identical to `+45` here; the reverse mapping is `−45`. That turns a 40-minute re-render
+into a few seconds — do the rename *and* update the constant, or the next render will
+disagree with the art.
 
 `FLOOR_MARGIN` is the one that is not obvious. **The floor is not a horizontal line in this
 frame.** Under the tilted camera a floor point projects to screen height
@@ -299,6 +329,48 @@ freezes on its last frame:
 
 Those three numbers appear in `unit_visual.gd`, `build_sprite_frames.gd` `ONE_SHOT_TIME` and
 `render_sprites.py` `ONE_SHOT_TIME`, and are commented as a set in all three.
+
+#### Cover variants
+
+A unit using cover is posed differently, and that is expressed as a **suffix on the pose it
+already asks for** rather than as new poses in the vocabulary above. `UnitVisual._bases`
+resolves `idle` as `idle_low` first and plain `idle` second; `Unit.cover_pose` decides which
+family (if any) is active and pushes it with `set_cover_pose`.
+
+| Family | Suffix | Tier |
+|---|---|---|
+| Low | `_low` | Light cover — crouched behind it |
+| High | `_high` | Heavy cover — stood pressed against it |
+
+Because it is a **fallback chain and not a lookup**, an undrawn variant costs nothing and
+changes nothing: the plain pose answers instead, exactly as for a unit in the open. That is
+what let the set land one pose at a time, and it applies free to any pose later drawn with a
+suffix — `reload_low`, `overwatch_hold_low`, `run_stop_low` all work the moment they exist,
+with no code change.
+
+Authored: `idle_low`, `begin_shoot_low`, `end_shoot_low` and the three `_high` equivalents.
+
+**There is deliberately no `fire_shoot_low`.** `begin_shoot_low` is the character *stepping out*
+of cover, so by the time rounds leave the barrel it is in the open and the standing kick is the
+correct art. That halves what has to be drawn to make cover read, and it is why the two step
+phases get their own longer timings — `COVER_RAISE_TIME` 0.75 s and `COVER_SETTLE_TIME` 0.45 s
+against the standing 0.45/0.20, since a step out of cover has further to travel than a rifle
+coming up on the spot. `play_burst` picks per phase, on whether that phase's cover art actually
+resolved, so a character with `begin_shoot_low` but no `end_shoot_low` gets the long step-out
+and the short settle — which is what its art shows.
+
+Two interactions are worth knowing. **Hunkering settles into the cover pose**, not the generic
+`crouch_idle`: `idle_low` already shows a soldier down behind the crate, and resolving the
+crouch through the chain would fall back to standing-in-the-open and make the action look like
+it did nothing. And **cover posture is cosmetic only** — the cover *bonus* comes from the tile
+edge a shot crosses (`GridManager.cover_type_on`), never from what the unit is doing on screen,
+so no pose here can move an accuracy number.
+
+The one part that is *not* cosmetic is `Unit.snap_to_cover`: arriving in cover turns the unit to
+look out over it, XCOM-style. Facing aims the flashlight, the flashlight decides what is lit,
+and what is lit decides both what notices the unit and how accurate shots into that light are
+(§5.2). It routes through `face_toward` precisely so the lighting is recomputed exactly as for
+any other turn.
 
 Missing art degrades differently per kind, and the differences are deliberate:
 
@@ -513,6 +585,7 @@ helmet bone.
 | `tools/test_room_visibility.gd` | render gating, fast-forward, overwatch survives it |
 | `tools/test_cerberus.gd` | the security-robot faction's rules, against the built deck |
 | `tools/_debug_occlusion.gd` | prints hidden walls as ASCII at all four yaws |
+| `tools/_debug_montage.gd` | contact sheet from an explicit list of image paths, for comparing facings across renders |
 
 All but `test_room_visibility.gd` run headless; that one needs a window, because headless
 would make `is_instant()` answer the trivial question instead of the interesting one.
@@ -526,6 +599,7 @@ would make `is_instant()` answer the trivial question instead of the interesting
 | `tools/build_sprite_frames.gd` | Godot, headless | Collects the loose PNGs into `[layer]_[variant].tres`. **Rerun after every render** |
 | `tools/make_sprite_gif.py` | Blender | Review GIFs, one per direction, at the cadence the game plays. Disposable; nothing reads them |
 | `tools/preview_sprite.gd` | Godot | Contact sheets and strips of a variant's poses |
+| `tools/_debug_montage.gd` | Godot, headless | Contact sheet from arbitrary **absolute** paths, so freshly rendered frames can be laid beside shipped ones without importing them. `MONTAGE_FILES` (`;`-separated), `MONTAGE_COLS`, `MONTAGE_CELL`, `MONTAGE_OUT`. Set `MONTAGE_CELL=256` — downscaling is what makes a facing unreadable |
 
 `render_sprites.py` guards the one failure that is invisible in its own output: an action that
 animates the *object* transform fights the turntable and wins, producing eight identical

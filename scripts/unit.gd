@@ -131,6 +131,8 @@ func _ready() -> void:
 		_name_label.text = stats.display_name
 	visual.setup()
 	visual.muzzle.connect(_on_muzzle)
+	GridManager.cover_destroyed.connect(_on_cover_destroyed)
+	refresh_cover_pose()  # a unit may spawn already in cover
 	visual.set_flashlight_enabled(has_flashlight and flashlight_on)
 
 
@@ -140,13 +142,20 @@ func begin_activation() -> void:
 	var was_crouched := hunkered
 	hunkered = false
 	on_overwatch = false
-	if was_crouched:
-		# Standing back up only reads if the unit was actually down there —
-		# playing it from an idle stance is a rise from nothing. Not awaited,
-		# for the same reason as do_hunker.
+	# Standing back up only reads if the unit was actually down there — playing it
+	# from an idle stance is a rise from nothing. A unit STILL in cover was never
+	# down there in the first place: its hunker was the cover pose, and the pose
+	# it is owed now is that same one, so rising out of it and settling back into
+	# it would be a bob on the spot. Not awaited, for the same reason as
+	# do_hunker.
+	#
+	# Refreshed before the branch, not inside it: `hunkered` has just cleared, and
+	# both arms need the posture that leaves behind.
+	refresh_cover_pose()
+	if was_crouched and cover_pose() == &"":
 		visual.play_stance_exit(UnitVisual.CROUCH_TO_STAND, UnitVisual.IDLE)
 	else:
-		visual.set_stance(UnitVisual.IDLE)
+		settle_idle()
 	ap_changed.emit(self)
 
 
@@ -171,6 +180,10 @@ func move_along(path: Array[Vector3i]) -> void:
 	# a sprite has no stride to skate, so a tile is a tile.
 	var walking := path.size() == 1 and visual.has_walk()
 	var speed := UnitVisual.WALK_SPEED if walking else move_speed
+	# Cleared for the duration of the move: a unit crossing the deck is not using
+	# the cover it started behind, and leaving the family set would have it run
+	# the whole way in a crouch the moment `run_low` art exists.
+	visual.set_cover_pose(&"")
 	visual.set_stance(UnitVisual.WALK if walking else UnitVisual.RUN)
 	var was_hidden := is_instant()
 	for step in path:
@@ -204,11 +217,20 @@ func move_along(path: Array[Vector3i]) -> void:
 	# cosmetic — nothing downstream waits on it to know where the unit is.
 	GridManager.set_occupant(grid_pos, self)
 	global_position = GridManager.grid_to_world(grid_pos)
+	# Turn out over whatever this tile has to hide behind before settling. MUST
+	# precede the settle rather than follow it: `cover_pose` is facing-dependent,
+	# so a unit that settled first would pose plain and then visibly snap into the
+	# crouch a moment later.
+	await snap_to_cover()
 	if walking:
 		# A walk is already at rest by the time it ends, so it settles straight
 		# into idle rather than through a stop.
-		visual.set_stance(UnitVisual.IDLE)
+		settle_idle()
 	else:
+		# Refreshed before the stop plays, so arriving at a crate resolves as
+		# `run_stop_low` — getting INTO cover — the moment that art exists, and
+		# falls through to the plain skid until then.
+		refresh_cover_pose()
 		await visual.play_stance_exit(UnitVisual.RUN_STOP, UnitVisual.IDLE)
 	moved.emit(self)
 
@@ -271,6 +293,12 @@ func face_toward(world_pos: Vector3) -> void:
 		tween.tween_property(self, "rotation:y", yaw, TURN_TIME * 2.0)
 		await tween.finished
 		is_busy = false
+	# Which cover a unit is using follows from where it looks (MIN_FACING_DOT), so
+	# a turn in place can put it into cover or take it out of one without it
+	# having moved a tile. This is also what gets fire_at right: it turns onto its
+	# target before the burst, so the step-out plays for the cover the unit is
+	# actually shooting over.
+	refresh_cover_pose()
 	if has_flashlight and flashlight_on:
 		# Same guard move_along uses: the cone has swung, so what it lights (and
 		# what notices being lit) has to be recomputed before anything else acts.
@@ -299,6 +327,146 @@ func cover_penalty_for(cover_type: int) -> int:
 	return Combat.cover_penalty(cover_type)
 
 
+# --- Cover posture -----------------------------------------------------------
+#
+# COSMETIC ONLY. Cover's effect on a shot is decided by the tile edge the shot
+# crosses (Combat.compute_accuracy via GridManager.cover_type_on), and nothing
+# below is an input to it. A unit gets its cover bonus whether or not it is
+# posed as if using cover, which is what makes it safe to let the art land one
+# pose at a time.
+
+## Cover tier -> the UnitVisual pose family that tier is drawn as. Light cover is
+## crouched behind; heavy is stood pressed against the edge of it.
+##
+## TEMPORARY: heavy is pointed at COVER_LOW rather than COVER_HIGH so both tiers
+## exercise the crouched art while the cover set is being proved out. Restore
+## `UnitVisual.COVER_HIGH` on the HEAVY row to get the two distinct stances back.
+const COVER_FAMILY := {
+	MapData.Cover.LIGHT: UnitVisual.COVER_LOW,
+	MapData.Cover.HEAVY: UnitVisual.COVER_LOW,
+}
+
+## How far toward a covered side the unit must already be looking for that cover
+## to be the one it hugs.
+##
+## The gate is what keeps this from being a gameplay change. Facing drives the
+## flashlight cone and the cone drives what notices the unit (Sec 5.2), so
+## turning a unit to face out of its cover would move detection — instead the
+## unit hugs cover only where its own facing already points out over it, and a
+## soldier standing beside a crate looking down the wall stays posed plain.
+##
+## 0.7: facing is quantised to eight directions and cover sides are the four
+## cardinals, so the reachable dot products are 0, ±0.707 and ±1. This admits the
+## cardinal itself and the two diagonals either side of it, and nothing else.
+const MIN_FACING_DOT := 0.7
+
+
+## Which covered side this unit is using, or -1 for none. The side it is most
+## looking OUT over — a soldier uses the crate the threat is on the far side of
+## — with ties going to the heavier cover.
+func _best_cover_side() -> int:
+	var forward := Vector3(-sin(rotation.y), 0.0, -cos(rotation.y))
+	var best := -1
+	var best_score := -1.0
+	var best_tier := MapData.Cover.NONE
+	for side in GridManager.covered_sides(grid_pos):
+		var score := forward.dot(Vector3(MapData.SIDE_STEP[side]))
+		if score < MIN_FACING_DOT:
+			continue
+		var tier := GridManager.cover_type_on(grid_pos, side)
+		if score > best_score or (is_equal_approx(score, best_score) and tier > best_tier):
+			best = side
+			best_score = score
+			best_tier = tier
+	return best
+
+
+## The covered side to turn out over on arrival, or -1 for none. Heaviest cover
+## first, then whichever needs the SMALLEST turn — so a unit that ran east into a
+## corner covered on two sides keeps looking the way it was already going rather
+## than spinning to an equally good crate behind it.
+##
+## Deliberately ungated, unlike `_best_cover_side`: that one asks "is this unit
+## using cover", and the answer has to be no for a soldier facing the wrong way.
+## This one asks "which cover should it turn to use", where facing is the thing
+## being decided rather than an input to it.
+func _cover_side_to_face() -> int:
+	var forward := Vector3(-sin(rotation.y), 0.0, -cos(rotation.y))
+	var best := -1
+	var best_tier := MapData.Cover.NONE
+	var best_score := -INF
+	for side in GridManager.covered_sides(grid_pos):
+		var tier := GridManager.cover_type_on(grid_pos, side)
+		var score := forward.dot(Vector3(MapData.SIDE_STEP[side]))
+		if tier > best_tier or (tier == best_tier and score > best_score):
+			best = side
+			best_tier = tier
+			best_score = score
+	return best
+
+
+## Turns the unit to look out over the cover it has arrived at, XCOM-style.
+## Coroutine — callers MUST `await`. A no-op on a tile with no cover, which
+## leaves the unit facing the way it was travelling.
+##
+## Unlike everything else in this section this is NOT cosmetic, and it is worth
+## being blunt about why: facing aims the flashlight, the flashlight decides what
+## is lit, and what is lit decides both which aliens notice this unit and how
+## accurate the shots into that light are (Sec 5.2). Moving into cover therefore
+## now changes what the squad can see and what can see it.
+##
+## Routed through `face_toward` precisely so none of that is bypassed — it
+## recomputes the lighting exactly as any other turn does, rather than writing
+## `rotation.y` behind the system's back and leaving the light pointing at where
+## the unit used to look.
+func snap_to_cover() -> void:
+	var side := _cover_side_to_face()
+	if side < 0:
+		return
+	await face_toward(GridManager.grid_to_world(grid_pos + MapData.SIDE_STEP[side]))
+
+
+## The pose family this unit's tile, cover and facing put it in, or "" for none.
+func cover_pose() -> StringName:
+	# A body on the deck is its own read and must not be posed as using cover.
+	# Hunkering is NOT excluded here, unlike downing: a hunkered soldier in cover
+	# is exactly what the cover art shows, so do_hunker settles into this rather
+	# than into the generic crouch.
+	if is_downed:
+		return &""
+	var side := _best_cover_side()
+	if side < 0:
+		return &""
+	return COVER_FAMILY.get(GridManager.cover_type_on(grid_pos, side), &"")
+
+
+## Recomputes the cover posture and pushes it to the sprite. Cheap, and safe to
+## call at any point — it re-resolves what is on screen without restarting it.
+func refresh_cover_pose() -> void:
+	visual.set_cover_pose(cover_pose())
+
+
+## Settles into idle in whatever posture the unit's current tile and facing call
+## for. THE one answer to "what does standing still look like right now" — every
+## path that ends in a unit at rest goes through here, so a new resting state can
+## never be added that forgets about cover.
+func settle_idle() -> void:
+	refresh_cover_pose()
+	visual.set_stance(UnitVisual.IDLE)
+
+
+func _on_cover_destroyed(pos: Vector3i, side: int, _tier: int) -> void:
+	# An edge is shared by the two tiles it separates, and the signal names only
+	# one of them — so a unit on the far side is equally affected and has to check
+	# both. Without this a soldier whose crate is shot apart keeps crouching
+	# behind a piece of cover that no longer exists.
+	if pos != grid_pos and pos + MapData.SIDE_STEP[side] != grid_pos:
+		return
+	if is_downed:
+		return
+	refresh_cover_pose()
+
+
 ## Returns the damage that actually landed, after `damage_taken` — callers use it
 ## to report what happened rather than what was rolled, so an armored target's
 ## log line does not claim 12 damage when 4 got through.
@@ -324,7 +492,17 @@ func take_damage(amount: int) -> int:
 		SecurityNetwork.report_evidence(grid_pos, SecurityNetwork.Evidence.CORPSE)
 		downed.emit(self)
 	elif not is_downed:
-		visual.play_action(UnitVisual.HIT_REACT)
+		# No flinch: a unit that survives a hit just holds whatever idle its tile
+		# and facing call for. Deliberate and temporary — HIT_REACT exists in the
+		# vocabulary and there is placeholder art for it, but there is no authored
+		# merc flinch yet, so playing it would resolve through the fallback chain
+		# to a pose that reads as nothing happening while still costing the beat
+		# FALLBACK_TIME charges for it. Settling is at least honest about that.
+		#
+		# Restoring it is one line: swap this for the play_action call. Do that
+		# once `hit_react` is drawn, and draw `hit_react_low` alongside it — a
+		# soldier flinching behind a crate should not stand up to do it.
+		settle_idle()
 	return amount
 
 
@@ -512,14 +690,25 @@ func _on_muzzle() -> void:
 
 func do_hunker() -> void:
 	hunkered = true
+	refresh_cover_pose()
+	# In cover, the hunker IS the cover pose: `idle_low` already shows a soldier
+	# down behind the crate, so hunkering settles there rather than into the
+	# generic crouch — which, resolved through the cover chain, would fall back to
+	# the standing-in-the-open crouch and make the action look like it did
+	# nothing. Out of cover there is nothing to get behind, and that plain crouch
+	# is the whole of what there is to show.
+	var settled := UnitVisual.IDLE if cover_pose() != &"" else UnitVisual.CROUCH
 	# Deliberately not awaited, and do_hunker stays a plain function: dropping
 	# into cover is cosmetic, and the unit is already counted as hunkered by the
-	# line above. The transition hands off to CROUCH when it finishes.
-	visual.play_stance_exit(UnitVisual.STAND_TO_CROUCH, UnitVisual.CROUCH)
+	# line above. The transition hands off when it finishes.
+	visual.play_stance_exit(UnitVisual.STAND_TO_CROUCH, settled)
 
 
 func do_overwatch() -> void:
 	on_overwatch = true
+	# Holding an angle from behind a crate is a different pose from holding one in
+	# the open. Falls through to the plain hold until `overwatch_hold_low` exists.
+	refresh_cover_pose()
 	visual.set_stance(UnitVisual.OVERWATCH)
 
 

@@ -31,6 +31,9 @@ func _initialize() -> void:
 	_check_direction()
 	_check_diagonals()
 	_check_passability()
+	# Before _check_degradation, which shoots the (9,6) south edge to pieces —
+	# every posture case below is phrased against that edge being intact.
+	await _check_posture()
 	_check_degradation()
 
 	print("")
@@ -79,6 +82,76 @@ func _check_direction() -> void:
 	_check(_combat.cover_penalty(MapData.Cover.HEAVY) == _combat.COVER_PENALTY_HEAVY,
 		"heavy still costs COVER_PENALTY_HEAVY")
 	_check(_combat.cover_penalty(MapData.Cover.NONE) == 0, "no cover costs nothing")
+
+
+## Cover POSTURE — which cover a unit turns to use and whether it is posed as
+## using it. Separate from everything above because it is the one part of the
+## cover system that is not purely a fact about the map: it depends on where the
+## unit is looking, and (via snap_to_cover) it changes where the unit looks.
+##
+## `&"low"` rather than `UnitVisual.COVER_LOW`: naming UnitVisual here would
+## compile unit_visual.gd, which reads the LightingManager and GridManager
+## autoloads at compile time, and a --script tool runs before those register.
+func _check_posture() -> void:
+	var unit = load("res://scenes/player_unit.tscn").instantiate()
+	unit.position = _grid.grid_to_world(COVERED)
+	root.add_child(unit)
+	await process_frame
+
+	# The tile's only cover is on its south edge, so that is the side to turn out
+	# over — from any starting facing, including directly away from it.
+	unit.rotation.y = 0.0  # facing north, straight away from the crate
+	_check(unit._cover_side_to_face() == MapData.Side.SOUTH,
+		"a unit facing away from its cover still snaps to the covered side")
+	# ...and while it faces that way it is NOT using the cover, which is what the
+	# facing gate exists to say.
+	_check(unit.cover_pose() == &"",
+		"and is not posed as using cover until it has turned")
+
+	# Godot forward is -Z and south is +Z, so PI is looking out over the crate.
+	unit.rotation.y = PI
+	_check(unit.cover_pose() == &"low", "facing out over the cover poses it low")
+	# A diagonal either side of due south is still using that cover: facing is
+	# quantised to eight and the crate is one of four, so demanding an exact match
+	# would drop the unit out of cover on half its reachable facings.
+	unit.rotation.y = PI - PI / 4.0
+	_check(unit.cover_pose() == &"low", "as does a diagonal adjacent to it")
+	# One more step round is 90 degrees off, running along the crate rather than
+	# looking over it.
+	unit.rotation.y = PI - PI / 2.0
+	_check(unit.cover_pose() == &"",
+		"but looking along the crate rather than over it does not")
+
+	# Hunkering must NOT suppress the cover pose: the hunker settles into the
+	# cover art, so a unit reporting no pose here would drop to the generic
+	# standing-in-the-open crouch instead.
+	unit.rotation.y = PI
+	unit.hunkered = true
+	_check(unit.cover_pose() == &"low", "a hunkered unit in cover keeps the cover pose")
+	unit.hunkered = false
+	# Being downed does suppress it — a body on the deck is its own read.
+	unit.is_downed = true
+	_check(unit.cover_pose() == &"", "a downed unit has no cover pose")
+	unit.is_downed = false
+
+	# An open tile leaves facing alone, so a unit that runs into the middle of a
+	# room keeps looking the way it was going.
+	unit.grid_pos = COVERED + Vector3i(0, 0, -1)
+	_check(unit._cover_side_to_face() == -1, "an uncovered tile is nothing to turn toward")
+	_check(unit.cover_pose() == &"", "and poses plain")
+
+	# The unit registered itself as the occupant of COVERED in _ready, and the
+	# tile has to be clear again before _check_degradation asks whether it is
+	# passable — so the occupant is released HERE rather than left to the free.
+	# `grid_pos` is put back first because it is the key that entry was written
+	# under, and the line above moved it.
+	unit.grid_pos = COVERED
+	_grid.set_occupant(COVERED, null)
+	# Freed the ordinary way and then given the frame it needs to happen, rather
+	# than `free()`d out from under the tree: a Unit builds a light rig and a
+	# label in _ready, and tearing it down mid-frame strands them.
+	unit.queue_free()
+	await process_frame
 
 
 func _check_diagonals() -> void:
