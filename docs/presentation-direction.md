@@ -145,7 +145,7 @@ The four constants worth knowing, all in `render_sprites.py`:
 | `CANVAS_HEIGHT` | 2.56 m | The frame's world height — **not** the character's 1.92 m. The extra is headroom for a raised rifle or a grenade wind-up, which a canvas cut to the character would clip. |
 | `RESOLUTION` | 256 px | Makes 1 px = 1 cm exactly. A free choice: the game derives `pixel_size` from the PNG, so dropping to 96 or 128 for chunkier pixels needs no Godot-side change. |
 | `FLOOR_MARGIN` | 0.45 m | Floor kept *below* the world origin, and the reason the origin is not on the bottom edge. |
-| `BUCKET_ZERO_DEGREES` | 180° | The Z rotation at which the character faces bucket 0 (`ne`). Every facing is this plus 45° per bucket, so it aims **every sprite in the game**. |
+| `BUCKET_ZERO_DEGREES` | 90° | The Z rotation at which the character faces bucket 0 (`ne`). Every facing is this plus 45° per bucket, so it aims **every sprite in the game**. `run` is aimed 2 buckets off it — see below. |
 
 `BUCKET_ZERO_DEGREES` is the one that has actually bitten. Three things about it are worth
 stating plainly, because each was learned the expensive way:
@@ -175,6 +175,20 @@ bucket (`ne`→`e`, `n`→`ne`, `nw`→`n`, `w`→`nw`, `sw`→`w`, `s`→`sw`, 
 byte-identical to `+45` here; the reverse mapping is `−45`. That turns a 40-minute re-render
 into a few seconds — do the rename *and* update the constant, or the next render will
 disagree with the art.
+
+**`run` is authored a quarter turn anticlockwise of every other action** in
+`merc_anim.blend`, so it needs +90° on top of the base to line up with them. That correction
+lives in `POSE_BUCKET_ZERO`, which the render loop reads per pose, so re-rendering `run` needs
+no special handling.
+
+The rotation is in the *pose*, not the object transform — which is why muting the
+object-transform curves never revealed it, and why the `run` action's root bone measures
+identical to `idle`'s. Every bone-level measurement said the two actions were oriented the
+same; only the rendered result disagreed.
+
+The cleaner fix is upstream: rotate the `run` action in the `.blend` to match the others and
+delete the `POSE_BUCKET_ZERO` entry. Worth doing if the rig is ever reworked, not worth
+invalidating a correct sprite set for on its own.
 
 `FLOOR_MARGIN` is the one that is not obvious. **The floor is not a horizontal line in this
 frame.** Under the tilted camera a floor point projects to screen height

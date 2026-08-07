@@ -188,23 +188,55 @@ REST_FACING_IS_BLENDER_PLUS_Y = True
 ## make it easier to model, so the whole set needs turning back onto bucket 0
 ## before the 45-degree steps start.
 ##
-## 180 was arrived at IN THE GAME, and that is the only place this can be
-## settled. Four values were tried: 0 from the axis convention, 90 from the
-## .blend's stored rotation, 135 from reading rendered frames at full
-## resolution, and finally this. The first three were each wrong by a whole
-## bucket or more, and every one of them produced a sprite set that looked
-## entirely reasonable laid out on a contact sheet.
+## 90 is what the SHIPPED art for every pose except `run` is aimed at. `run` is
+## the exception and is currently 2 buckets (90 degrees) from it -- see the
+## warning below before re-rendering it.
+##
+## This value can only be settled IN THE GAME. Four have been tried: 0 from the
+## axis convention, 90 from the .blend's stored rotation, then 135 and 180 from
+## reading rendered frames at full resolution. Every one of them produced a
+## sprite set that looked entirely reasonable laid out on a contact sheet.
 ##
 ## That is the trap worth remembering: eight facings of a character are
-## self-consistent at ANY base, so a wrong one is invisible in the art. It only
-## shows up when a unit walks east and the sprite runs north-east. Judge this
-## against a moving unit on screen, never against the PNGs.
+## self-consistent at ANY base, so a wrong one is invisible in the art. It shows
+## up only when a unit walks east and its sprite runs north-east. Judge this
+## against a MOVING UNIT on screen, never against the PNGs, and never re-derive
+## it from the axis convention -- this rig is posed facing screen-SE, so
+## REST_FACING_IS_BLENDER_PLUS_Y describes the pipeline's intent and not this
+## .blend.
 ##
-## Each 45 here is one bucket. If it is off again, the whole set can be
-## re-aimed without re-rendering: renaming every file's direction one bucket
+## Re-aiming needs no re-render. Renaming every file's direction one bucket
 ## (ne->e, n->ne, nw->n, w->nw, sw->w, s->sw, se->s, e->se) is byte-identical to
-## +45 here, and the reverse mapping is -45.
-BUCKET_ZERO_DEGREES = 180.0
+## +45 here; the reverse (ne->n, n->nw, ...) is -45. Seconds, not 40 minutes.
+##
+## Poses whose action is authored at a different facing get their correction
+## here (see POSE_BUCKET_ZERO), so re-rendering them needs no special handling.
+BUCKET_ZERO_DEGREES = 90.0
+
+## Per-pose overrides, for an action posed at a different facing from the rest.
+##
+## `run` is authored a quarter turn ANTICLOCKWISE of every other action in
+## merc_anim.blend, so it needs 90 degrees clockwise on top of the base to line
+## up with them. That is a fact about the rig, not about the renderer -- the
+## rotation lives in the pose, which is why muting object-transform curves never
+## revealed it and why the root bone measures identical to `idle`.
+##
+## Encoded rather than left as a note, because the alternative is a landmine:
+## re-rendering `run` would silently produce art 2 buckets off from every other
+## pose, and that is exactly the failure this file already warns is invisible in
+## its own output.
+##
+## The cleaner fix is upstream -- rotate the `run` action in the .blend to match
+## the others and delete this entry. Worth doing if the rig is ever reworked;
+## not worth invalidating a correct sprite set for on its own.
+POSE_BUCKET_ZERO = {
+    "run": BUCKET_ZERO_DEGREES + 90.0,
+}
+
+
+def bucket_zero(pose):
+    """Degrees at which `pose` faces bucket 0."""
+    return POSE_BUCKET_ZERO.get(pose, BUCKET_ZERO_DEGREES)
 
 # --- Poses -------------------------------------------------------------------
 #
@@ -570,9 +602,11 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
     # caused. Printed because it is the one number that silently re-aims every
     # sprite in the game, and a render log that does not state it cannot be used
     # to tell two renders apart after the fact.
-    original_rotation = math.radians(BUCKET_ZERO_DEGREES)
     print("[render_sprites] bucket 0 (%s) renders at %.1f deg; each bucket +45"
           % (DIRECTIONS[0], BUCKET_ZERO_DEGREES))
+    for pose, deg in sorted(POSE_BUCKET_ZERO.items()):
+        print("[render_sprites]   except %r, authored at a different facing: "
+              "%.1f deg" % (pose, deg))
     written = 0
     meshes = renderable_meshes()
     lowest_ndc = 1.0
@@ -580,6 +614,9 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
     for pose in todo:
         action = actions[pose]
         character.animation_data.action = action
+        # Per POSE, not once per run: an action authored at a different facing
+        # needs its own zero (POSE_BUCKET_ZERO).
+        original_rotation = math.radians(bucket_zero(pose))
         muted = mute_object_transform_curves(action)
         count = frame_count(pose)
         looping = pose in LOOP_TIME
@@ -629,7 +666,10 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
         print("[render_sprites] %s: %d frames x %d directions"
               % (pose, len(frames), len(directions or GAME_DIRECTIONS)))
 
-    character.rotation_euler.z = original_rotation
+    # Left facing bucket 0 of the SHARED base, not of whichever pose happened to
+    # be rendered last. Cosmetic -- the .blend is never written -- but a tidier
+    # state to hand back, and it no longer depends on the loop variable.
+    character.rotation_euler.z = math.radians(BUCKET_ZERO_DEGREES)
     print("[render_sprites] wrote %d images to %s" % (written, out_dir))
     report_anchor(lowest_ndc)
     print("[render_sprites] now run build_sprite_frames.gd with SF_VARIANT=%s "
