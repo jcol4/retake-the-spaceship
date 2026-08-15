@@ -373,10 +373,13 @@ coming up on the spot. `play_burst` picks per phase, on whether that phase's cov
 resolved, so a character with `begin_shoot_low` but no `end_shoot_low` gets the long step-out
 and the short settle — which is what its art shows.
 
-Two interactions are worth knowing. **Hunkering settles into the cover pose**, not the generic
-`crouch_idle`: `idle_low` already shows a soldier down behind the crate, and resolving the
-crouch through the chain would fall back to standing-in-the-open and make the action look like
-it did nothing. And **cover posture is cosmetic only** — the cover *bonus* comes from the tile
+Two interactions are worth knowing. **Hunkering *is* the low pose**, not a move into one:
+`Unit.cover_pose` answers `low` for any hunkered unit, so `do_hunker` is a bare `settle_idle()`
+that resolves to `idle_low` whether or not there is a crate to get behind. Cover the unit is
+actually behind still wins, so hunkering never demotes a high pose to a low one. There is no
+`stand_to_crouch` bridge and no `crouch_to_stand` on the way back up — those belonged to the 3D
+rig, where a Mixamo clip existed to play between two mocap stances; the drawn set has neither,
+so both the drop and the rise are hard cuts. And **cover posture is cosmetic only** — the cover *bonus* comes from the tile
 edge a shot crosses (`GridManager.cover_type_on`), never from what the unit is doing on screen,
 so no pose here can move an accuracy number.
 

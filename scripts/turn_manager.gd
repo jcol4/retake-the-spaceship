@@ -16,6 +16,12 @@ var _awaiting_player: bool = false
 func start_mission() -> void:
 	turn_number = 0
 	mission_over = false
+	# Both hold state that outlives a single activation and would otherwise
+	# outlive the MISSION too: squad blackboards are static, and an escalation is
+	# a live ship-wide flag. Starting a second mission holding the first one's
+	# claims — on units that no longer exist — is the bug this prevents.
+	Doctrines.reset()
+	AlienHivemind.reset()
 	_start_turn()
 
 
@@ -61,7 +67,8 @@ func _draw_next() -> void:
 	active_unit = drawn
 	drawn.begin_activation()
 	if drawn.stunned:
-		# Sec 4.2: a torso crit burns the target's next activation outright.
+		# Sec 4.2: a torso crit burns the target's next activation outright —
+		# the WHOLE pool, however big Fitness made it, not a fixed 2 AP.
 		drawn.stunned = false
 		drawn.ap = 0
 		log_message.emit("%s is STUNNED and loses their turn!" % drawn.stats.display_name)
@@ -78,6 +85,34 @@ func _draw_next() -> void:
 		_awaiting_player = true  # wait for end_activation from the player unit
 
 
+## A pinned unit that breaks cover eats the shot the suppressor was holding for
+## exactly that. Called by Unit.move_along per tile, alongside `check_overwatch`.
+##
+## Fired as a plain SHOOT rather than an OVERWATCH, and that is the whole reward
+## for having paid the extra AP and three rounds: a reserved snap shot carries
+## -30% accuracy, this carries none. The suppressor already has the angle held
+## and the weapon up — they are not reacting, they are waiting.
+##
+## The shot ENDS the suppression whether it hits or misses. Suppression is a
+## burst of covering fire, and once it has been fired at somebody it is spent.
+func check_suppression_break(mover: Unit) -> void:
+	if mission_over or mover.is_downed:
+		return
+	var watcher := mover.suppressed_by
+	if watcher == null or watcher.is_downed or not watcher.can_shoot():
+		return
+	if not GridManager.has_line_of_sight(watcher, mover):
+		return
+	watcher.release_suppression()
+	var result: Combat.ShotResult = await watcher.fire_at(mover, Combat.ShotAction.SHOOT)
+	log_message.emit("SUPPRESSING FIRE! %s breaks cover — %s fires (%d%% acc): %s" % [
+		mover.stats.display_name, watcher.stats.display_name,
+		result.accuracy, Combat.describe(result),
+	])
+	if mover.is_downed:
+		log_message.emit("%s is DOWN!" % mover.stats.display_name)
+
+
 func check_overwatch(mover: Unit) -> void:
 	# Sec 4.2: a unit holding Overwatch interrupts the draw order to fire when
 	# an *enemy* walks into its sightline — never on allied movement. Called by
@@ -88,7 +123,9 @@ func check_overwatch(mover: Unit) -> void:
 		var watcher := node as Unit
 		if watcher == null or watcher == mover or not watcher.on_overwatch or watcher.is_downed:
 			continue
-		if watcher.is_player_controlled == mover.is_player_controlled:
+		# Asked of the WATCHER, which is the whole of "never on allied movement":
+		# a reserved angle covers what its owner would shoot at, and nothing else.
+		if not watcher.is_hostile_to(mover):
 			continue
 		if not watcher.can_shoot() or not GridManager.has_line_of_sight(watcher, mover):
 			continue
@@ -111,6 +148,11 @@ func end_activation(unit: Unit) -> void:
 
 
 func _check_end_conditions() -> bool:
+	# The mission is the CONTRACTORS' mission, so both halves are asked from their
+	# point of view: is the squad still standing, and is anything still hostile to
+	# it. The second is a faction question rather than "is anything left that
+	# isn't the player" — a future neutral or allied faction should not have to be
+	# killed to end a mission.
 	var players_alive := false
 	var enemies_alive := false
 	for node in get_tree().get_nodes_in_group("units"):
@@ -119,7 +161,7 @@ func _check_end_conditions() -> bool:
 			continue
 		if unit.is_player_controlled:
 			players_alive = true
-		else:
+		elif Faction.is_hostile(Faction.Id.CONTRACTORS, unit.faction):
 			enemies_alive = true
 	if not enemies_alive:
 		_end_mission(true)

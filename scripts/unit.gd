@@ -7,7 +7,13 @@ signal ap_changed(unit: Unit)
 signal downed(unit: Unit)
 signal moved(unit: Unit)
 
-const MAX_AP := 2
+## AP per tile of movement (rework doc Sec 4.1). FLAT, for every unit regardless
+## of stats: Fitness buys a bigger pool, not cheaper steps, and a diagonal costs
+## the same one AP a cardinal does because the grid is eight-way at uniform cost
+## (Sec 4.0 — GridManager.get_reachable_tiles is a BFS for exactly this reason).
+##
+## The only thing that raises it is injury; see `move_ap_per_tile`.
+const MOVE_AP_PER_TILE := 1
 const TURN_TIME := 0.09  # seconds to swing toward the next tile
 
 # Rounds per burst. One trigger pull is still one Combat.resolve_shot — one hit
@@ -21,7 +27,21 @@ const BURST_MAX := 5
 const BURST_STRAY_MAX := 2
 
 @export var stats: UnitStats
-@export var is_player_controlled: bool = false
+
+## Which side this unit is on. THE input to every hostility decision — see
+## `is_hostile_to`, and `Faction` for why this replaced a boolean.
+@export var faction: Faction.Id = Faction.Id.ALIENS
+
+## Kept as a derived, READ-ONLY convenience for the paths that genuinely mean
+## "the player's own unit" rather than "not an enemy" — input handling, the HUD,
+## the win/loss tally, room rendering. Those are about who is holding the mouse,
+## not about who shoots whom, and rewriting them in terms of factions would say
+## less rather than more.
+##
+## Read-only on purpose: it used to be the field that got assigned, so making it
+## unassignable is what guarantees no path still sets sides the old way.
+var is_player_controlled: bool:
+	get: return faction == Faction.Id.CONTRACTORS
 ## Metres per second while walking a path. Cosmetic ONLY — the tile budget and
 ## the AP economy know nothing about it, so no value here can affect balance.
 ##
@@ -30,6 +50,21 @@ const BURST_STRAY_MAX := 2
 ## sprite run cycle is drawn to read correctly at 4.5 m/s, instead of the speed
 ## being fitted to a clip that already existed. Slower types override it here.
 @export var move_speed: float = 4.5
+
+## Whether this unit only ever has ONE gait, and it is the walk.
+##
+## The default gait rule — run unless the move is a single tile — assumes a
+## character who owns both cycles and chooses between them. A shambler owns
+## exactly one: the brawler is animated to a walk and nothing else, and there is
+## no sprint it is holding back. Setting this makes `move_speed` the speed of
+## that walk rather than of a run, so the one number still means "how fast this
+## thing crosses the deck".
+##
+## Note what this is NOT: a slow flag. It changes which CYCLE plays and which
+## settle follows it, and a walk is already at rest when it ends, so a shambler
+## arrives without the skid a runner needs. Dropping `move_speed` alone would
+## have left it sprinting in place at a crawl.
+@export var walks_only: bool = false
 
 @onready var visual: UnitVisual = $Visual
 
@@ -43,6 +78,43 @@ var reserve: int = -1
 var is_downed: bool = false
 var hunkered: bool = false
 var on_overwatch: bool = false
+## AP the unit committed to its reserved shot (rework doc Sec 4.4). Recorded but
+## NOT yet read by the accuracy math — the reserve-to-penalty formula is the
+## rework's one genuinely open item (Sec 6 item 1), so the reaction shot still
+## takes Combat.OVERWATCH_PENALTY's flat -30% until that lands. Written here now
+## so the number the player committed exists to be scaled against when it does.
+var overwatch_reserve: int = 0
+
+## AP committed to the reserved shot. Read by `Combat.overwatch_penalty_for`:
+## the more of the activation a unit spends watching an angle, the better it
+## covers it. Reset in `begin_activation` along with `on_overwatch`.
+##
+## Suppression (XCOM-style), as a pair of links rather than a flag, because both
+## ends have to be reachable: the pinned unit needs to know whose fire to break
+## from, and the shooter needs to know who to fire on if they run.
+##
+## `suppressed_by` is the unit pinning THIS one; `suppressing` is the unit THIS
+## one is pinning. Exactly one suppression per shooter — a second one replaces
+## the first, since there is one weapon and it can only be pointed one way.
+var suppressed_by: Unit = null
+var suppressing: Unit = null
+## Rounds a burst of suppressing fire puts downrange. Three, and they are spent
+## up front rather than per reaction shot: the cost of pinning someone is paid
+## when you commit to it, whether or not they ever break cover.
+const SUPPRESS_AMMO_COST := 3
+## AP taken off the pinned unit's next activation, floored so it always gets
+## something. Being pinned costs you time as well as aim — this is the half of
+## suppression that an AI cannot simply choose to ignore by not shooting.
+## 3 rather than 2, scaled with the 1.5x AP pool: the penalty is meant to cost a
+## pinned unit a recognisable slice of its activation, and a flat 2 against a
+## bigger pool would have quietly demoted it to a rounding error.
+const SUPPRESSED_AP_PENALTY := 3
+## Seconds between bursts of covering fire while suppression holds. Purely
+## cosmetic: the rounds were already paid for and these bursts resolve no shot,
+## roll nothing and cannot hit anyone. It is what makes a pinned unit read as
+## pinned instead of as a unit standing still with a debuff icon.
+const SUPPRESSION_BURST_GAP := 3.0
+const SUPPRESSION_BURST_ROUNDS := 3
 var stunned: bool = false  # set by an incoming torso crit; burns this unit's next activation
 var is_busy: bool = false  # animating a move or a shot — reject new orders
 ## Turn number this unit last walked on, for motion-based detection (the security
@@ -137,25 +209,27 @@ func _ready() -> void:
 
 
 func begin_activation() -> void:
-	ap = MAX_AP
+	ap = ap_pool()
+	# Being pinned costs AP before anything else is decided. Floored at 1 rather
+	# than allowed to reach zero: a unit that loses its whole turn to suppression
+	# would make the action strictly better than the stun a torso crit buys, for
+	# a fraction of the setup.
+	if is_suppressed():
+		ap = maxi(1, ap - SUPPRESSED_AP_PENALTY)
+	# THIS unit's own suppression ends when it comes back round to act — the
+	# XCOM rule. Holding someone down is what it did INSTEAD of its last turn, so
+	# it cannot still be doing it during this one.
+	release_suppression()
 	# Sec 6.3 / 4.2: both clear on this unit's next activation.
-	var was_crouched := hunkered
 	hunkered = false
 	on_overwatch = false
-	# Standing back up only reads if the unit was actually down there — playing it
-	# from an idle stance is a rise from nothing. A unit STILL in cover was never
-	# down there in the first place: its hunker was the cover pose, and the pose
-	# it is owed now is that same one, so rising out of it and settling back into
-	# it would be a bob on the spot. Not awaited, for the same reason as
-	# do_hunker.
-	#
-	# Refreshed before the branch, not inside it: `hunkered` has just cleared, and
-	# both arms need the posture that leaves behind.
-	refresh_cover_pose()
-	if was_crouched and cover_pose() == &"":
-		visual.play_stance_exit(UnitVisual.CROUCH_TO_STAND, UnitVisual.IDLE)
-	else:
-		settle_idle()
+	overwatch_reserve = 0
+	# Ordered after the clear, and it is the whole of what standing back up is:
+	# `cover_pose` reads `hunkered`, so settling now resolves to the low idle for
+	# a unit still behind a crate and to the standing one for a unit that was
+	# only down because it hunkered. There is no rise-from-crouch transition —
+	# see do_hunker for why going down has none either.
+	settle_idle()
 	ap_changed.emit(self)
 
 
@@ -178,8 +252,15 @@ func move_along(path: Array[Vector3i]) -> void:
 	# a soldier crossing a single tile does not break into a sprint. Everything
 	# else the deceleration system used to decide here died with the 3D rig —
 	# a sprite has no stride to skate, so a tile is a tile.
-	var walking := path.size() == 1 and visual.has_walk()
-	var speed := UnitVisual.WALK_SPEED if walking else move_speed
+	# `walks_only` overrides the length test rather than extending it: a shambler
+	# walks a ten-tile path for the same reason it walks a one-tile one, which is
+	# that it has no other gait.
+	var walking := visual.has_walk() and (walks_only or path.size() == 1)
+	# WALK_SPEED is the SOLDIER's walk — the speed his cycle was measured at — so
+	# it is the right answer only for a unit that is walking as its slow option.
+	# A unit whose walk is its only gait carries its own, and that is what
+	# `move_speed` means for it.
+	var speed := move_speed if walks_only else (UnitVisual.WALK_SPEED if walking else move_speed)
 	# Cleared for the duration of the move: a unit crossing the deck is not using
 	# the cover it started behind, and leaving the family set would have it run
 	# the whole way in a crouch the moment `run_low` art exists.
@@ -202,10 +283,17 @@ func move_along(path: Array[Vector3i]) -> void:
 		grid_pos = step
 		if is_downed:
 			break
+		_trip_alarm_here()
 		if has_flashlight and flashlight_on:
 			# Keeps the beacon tracking mid-sprint, so an overwatcher's shot
 			# below judges light as it actually was at the moment it fired.
 			LightingManager.recompute_dynamic()
+		# Suppression resolves BEFORE overwatch: the suppressor already had its
+		# angle held on this specific unit, where an overwatcher is reacting to
+		# movement in general. Both can fire on the same step.
+		await TurnManager.check_suppression_break(self)
+		if is_downed:
+			break
 		await TurnManager.check_overwatch(self)
 		if is_downed:
 			break
@@ -233,6 +321,26 @@ func move_along(path: Array[Vector3i]) -> void:
 		refresh_cover_pose()
 		await visual.play_stance_exit(UnitVisual.RUN_STOP, UnitVisual.IDLE)
 	moved.emit(self)
+
+
+## Sets off an alarm panel this unit has just stepped onto (Sec 6 trigger 2).
+##
+## Aliens are exempt, and it is not a courtesy: the panel is ship security, so
+## the things that live here are what it is FOR. A shambler wandering across one
+## and calling in the whole deck on itself would be nonsense, and would also make
+## the trap fire long before the squad ever reached it.
+##
+## Fires once. Clearing the flag is what stops a corridor becoming a siren the
+## player can re-trigger by pacing, or — worse — that a patrolling robot re-trips
+## every turn on its way back to its post.
+func _trip_alarm_here() -> void:
+	if faction == Faction.Id.ALIENS:
+		return
+	var tile: GridTileData = GridManager.get_tile(grid_pos)
+	if tile == null or not tile.alarm:
+		return
+	tile.alarm = false
+	AlienHivemind.report_alarm(grid_pos, self)
 
 
 func _step_to(target: Vector3, speed: float) -> void:
@@ -426,18 +534,30 @@ func snap_to_cover() -> void:
 	await face_toward(GridManager.grid_to_world(grid_pos + MapData.SIDE_STEP[side]))
 
 
-## The pose family this unit's tile, cover and facing put it in, or "" for none.
+## The pose family this unit's tile, cover, facing and posture put it in, or ""
+## for none.
 func cover_pose() -> StringName:
 	# A body on the deck is its own read and must not be posed as using cover.
-	# Hunkering is NOT excluded here, unlike downing: a hunkered soldier in cover
-	# is exactly what the cover art shows, so do_hunker settles into this rather
-	# than into the generic crouch.
 	if is_downed:
 		return &""
+	var family: StringName = &""
 	var side := _best_cover_side()
-	if side < 0:
-		return &""
-	return COVER_FAMILY.get(GridManager.cover_type_on(grid_pos, side), &"")
+	if side >= 0:
+		family = COVER_FAMILY.get(GridManager.cover_type_on(grid_pos, side), &"")
+	# Hunkering is NOT excluded here, unlike downing — and in the open it SUPPLIES
+	# the family rather than merely surviving it. Being down low is the whole of
+	# what the action is, and `idle_low` is the art for a soldier down low, crate
+	# or no crate; without this line a hunker on an uncovered tile resolves to the
+	# standing idle and reads as having done nothing.
+	#
+	# Cover the unit is actually behind still wins, so hunkering never demotes a
+	# high pose to a low one. This is cosmetic only either way: the accuracy
+	# penalty is Combat's HUNKER_PENALTY off the `hunkered` flag, and the cover
+	# bonus is a property of the tile edge a shot crosses, so no answer here can
+	# move a number.
+	if family == &"" and hunkered:
+		return UnitVisual.COVER_LOW
+	return family
 
 
 ## Recomputes the cover posture and pushes it to the sprite. Cheap, and safe to
@@ -478,6 +598,10 @@ func take_damage(amount: int) -> int:
 		is_downed = true
 		on_overwatch = false
 		stunned = false
+		# A corpse holds nobody down. `is_suppressed` also guards against a dead
+		# suppressor, so this is belt-and-braces — but it clears the back-link too,
+		# which that guard cannot.
+		release_suppression()
 		GridManager.set_occupant(grid_pos, null)
 		if _name_label:
 			_name_label.visible = false
@@ -506,6 +630,137 @@ func take_damage(amount: int) -> int:
 	return amount
 
 
+## Whether this unit will engage `other`. THE hostility test — every targeting
+## path, and Overwatch's trigger, goes through here rather than comparing sides
+## by hand, so which relationships exist is stated in exactly one file.
+##
+## Asked of the OBSERVER, since `Faction.HOSTILE_TO` allows one-way
+## relationships: `a.is_hostile_to(b)` and `b.is_hostile_to(a)` are two questions
+## and may legitimately disagree.
+func is_hostile_to(other: Unit) -> bool:
+	return other != null and Faction.is_hostile(faction, other.faction)
+
+
+## Every other living unit on this unit's own side. The counterpart to
+## `hostiles`, and the thing squad reasoning is built on — "is there anybody left
+## to exploit the window I am about to open".
+func allies() -> Array[Unit]:
+	var out: Array[Unit] = []
+	for node in get_tree().get_nodes_in_group("units"):
+		var other := node as Unit
+		if other != null and other != self and not other.is_downed and other.faction == faction:
+			out.append(other)
+	return out
+
+
+## Every living unit this one would engage. Replaces the `player_units` /
+## `enemy_units` group lookups that hostility used to be read off, which could
+## only ever describe a two-sided fight.
+func hostiles() -> Array[Unit]:
+	var out: Array[Unit] = []
+	for node in get_tree().get_nodes_in_group("units"):
+		var other := node as Unit
+		if other != null and not other.is_downed and is_hostile_to(other):
+			out.append(other)
+	return out
+
+
+## Narrates something this unit did, for the combat log.
+##
+## A no-op on the base class, overridden by the types that own an
+## `action_logged` signal. Exists so the GOAP action library — which is written
+## against `Unit` and must serve three factions — can report what it did without
+## knowing which subclass it is driving, or whether that subclass logs at all.
+func report_action(_text: String) -> void:
+	pass
+
+
+## Damage this unit does to a cover edge it deliberately fires ON, as opposed to
+## the incidental chipping every shot causes (Sec 6.1.1). Its own weapon damage
+## by default; the Cerberus cover-breaker overrides it upward, which is the whole
+## of what makes that unit a cover-breaker.
+func cover_breaking_damage() -> int:
+	return stats.weapon_damage
+
+
+## Whether this unit has taken enough damage to start caring about its own skin.
+## Half its Max HP, which is also where the Sec 4.2.1 torso injury threshold
+## sits — a soldier that has lost half of itself is the same soldier the injury
+## system already considers to be in trouble.
+func is_hurt() -> bool:
+	return current_hp * 2 <= stats.max_hp()
+
+
+func is_suppressed() -> bool:
+	# The link is only real while the shooter is: a dead suppressor holds nobody
+	# down, and checking here rather than hunting for every way a unit can die
+	# means no path can leave a corpse pinning somebody.
+	return suppressed_by != null and not suppressed_by.is_downed
+
+
+## Needs a full burst in the magazine, not just a round. Suppression is volume
+## of fire — a soldier with two bullets left cannot lay any down.
+func can_suppress() -> bool:
+	return ammo >= SUPPRESS_AMMO_COST
+
+
+## Sec 4.2 + the coordinated-AI doc's `Suppress` action. ENDS the activation, as
+## Hunker and Overwatch do, and for the same reason `_end_activation_ap` gives:
+## the unit is committing the rest of its turn to holding an angle.
+##
+## Coroutine — callers MUST await. The burst that opens it is played rather than
+## implied, so suppression starts on screen the way any other shot does.
+func do_suppress(target: Unit) -> void:
+	if target == null or target.is_downed:
+		return
+	ammo -= SUPPRESS_AMMO_COST
+	# Replace whatever this unit was pinning before. One weapon, one direction.
+	release_suppression()
+	suppressing = target
+	target.suppressed_by = self
+	_end_activation_ap()
+	is_busy = true
+	await face_toward(target.global_position)
+	await visual.play_burst(SUPPRESSION_BURST_ROUNDS)
+	is_busy = false
+	# Deliberately NOT awaited: the covering fire runs for as long as the
+	# suppression does, which is until this unit's next activation — awaiting it
+	# would hang the turn loop forever.
+	_suppression_fire_loop()
+
+
+## Cosmetic covering fire, one burst every SUPPRESSION_BURST_GAP seconds for as
+## long as this unit is holding someone down.
+##
+## Resolves NOTHING. It spends no ammo, rolls no accuracy and deals no damage —
+## the three rounds and the single decision were paid for in `do_suppress`, and
+## a loop that fired real shots on a wall-clock timer would let a unit kill
+## things between activations.
+##
+## Skipped entirely when the unit is off screen or headless (`is_instant`), where
+## there is nobody to show it to and the timer would just burn turn time.
+func _suppression_fire_loop() -> void:
+	while suppressing != null and not is_downed and is_inside_tree():
+		if is_instant():
+			return
+		await get_tree().create_timer(SUPPRESSION_BURST_GAP).timeout
+		# Re-checked after the wait: three seconds is long enough for the
+		# suppression to have ended, or for either party to have died.
+		if suppressing == null or is_downed or is_busy or not is_inside_tree():
+			return
+		await visual.play_burst(SUPPRESSION_BURST_ROUNDS)
+
+
+## Drops the suppression this unit is APPLYING, if any. Safe to call at any time
+## and on a unit suppressing nobody.
+func release_suppression() -> void:
+	if suppressing == null:
+		return
+	if suppressing.suppressed_by == self:
+		suppressing.suppressed_by = null
+	suppressing = null
+
+
 func can_shoot() -> bool:
 	return ammo > 0
 
@@ -514,12 +769,54 @@ func can_reload() -> bool:
 	return ammo < stats.mag_size and (reserve < 0 or reserve > 0)
 
 
-func move_run() -> int:
-	return maxi(1, roundi(stats.move_run() * _leg_speed_multiplier()))
+## This unit's AP pool for one activation. Wraps `stats` so a type that wants a
+## pool its stat block does not describe has one place to say so.
+func ap_pool() -> int:
+	return stats.ap_pool()
 
 
-func move_sprint() -> int:
-	return maxi(1, roundi(stats.move_sprint() * _leg_speed_multiplier()))
+func action_cost(action: UnitStats.Action) -> int:
+	return stats.action_cost(action)
+
+
+func aimed_shot_cost(body_part: int) -> int:
+	return Combat.aimed_shot_ap_cost(body_part, stats.reflexes)
+
+
+## The cheapest zone this unit could aim at — the Torso, always. What gates the
+## Aimed Shot BUTTON, since the zone is not picked until after it is pressed.
+func min_aimed_shot_cost() -> int:
+	return aimed_shot_cost(Combat.BodyPart.TORSO)
+
+
+## What one tile costs THIS unit right now. MOVE_AP_PER_TILE for everybody
+## intact; more for a unit walking on an injured leg.
+##
+## This is where Sec 4.2.1's "-33% movement range per injured leg" now lives.
+## That penalty used to scale a Run/Sprint tile allowance, and the allowance is
+## what the flat-AP rework deleted — so the same 33% is inverted into the cost of
+## a step instead of the number of them. It stays a MOVEMENT penalty either way,
+## which is the point: routing it through the AP pool instead would have quietly
+## made a leg wound cost the unit shots and reloads as well.
+##
+## Integer AP per tile means the realised cut is coarser than 33%: one leg lands
+## on 2 AP/tile (half range, not a third off) and two legs on 3. That is the Sec
+## 4.3b cost rule doing its job — costs round up — and the two-leg case comes out
+## almost exactly on the old number anyway.
+func move_ap_per_tile() -> int:
+	var legs := _injured_leg_count()
+	if legs == 0:
+		return MOVE_AP_PER_TILE
+	return ceili(MOVE_AP_PER_TILE / maxf(1.0 - LEG_INJURY_SPEED_PENALTY * legs, 0.01))
+
+
+## How many tiles this unit can still afford to walk.
+func move_tiles_affordable() -> int:
+	return ap / move_ap_per_tile()
+
+
+func move_cost_for(tiles: int) -> int:
+	return tiles * move_ap_per_tile()
 
 
 func ranged_accuracy_penalty() -> int:
@@ -528,6 +825,17 @@ func ranged_accuracy_penalty() -> int:
 
 func melee_accuracy_penalty() -> int:
 	return ARM_MELEE_ACC_PENALTY * _injured_arm_count()
+
+
+## Situational accuracy this unit gains against a specific target in melee. Zero
+## for everyone except the Agile Hunter, whose ambush bonus (Sec 11.5) is the one
+## case where WHO is being struck changes how well the swing lands.
+##
+## Sited beside `melee_accuracy_penalty` and read from the same place in
+## `Combat.compute_melee_accuracy`, so the bonus reaches the previewed number and
+## the rolled one through one code path rather than two that can disagree.
+func melee_accuracy_bonus(_target: Unit) -> int:
+	return 0
 
 
 func melee_damage_multiplier() -> float:
@@ -586,10 +894,6 @@ func _injured_arm_count() -> int:
 	if is_part_injured(Combat.BodyPart.ARM_R):
 		n += 1
 	return n
-
-
-func _leg_speed_multiplier() -> float:
-	return 1.0 - LEG_INJURY_SPEED_PENALTY * _injured_leg_count()
 
 
 func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.BodyPart.TORSO) -> Combat.ShotResult:
@@ -688,28 +992,59 @@ func _on_muzzle() -> void:
 	vfx.muzzle_flash(from)
 
 
+## Sec 6.3. ENDS the activation: see `_end_activation_ap` for why the leftover AP
+## goes with it.
 func do_hunker() -> void:
 	hunkered = true
-	refresh_cover_pose()
-	# In cover, the hunker IS the cover pose: `idle_low` already shows a soldier
-	# down behind the crate, so hunkering settles there rather than into the
-	# generic crouch — which, resolved through the cover chain, would fall back to
-	# the standing-in-the-open crouch and make the action look like it did
-	# nothing. Out of cover there is nothing to get behind, and that plain crouch
-	# is the whole of what there is to show.
-	var settled := UnitVisual.IDLE if cover_pose() != &"" else UnitVisual.CROUCH
-	# Deliberately not awaited, and do_hunker stays a plain function: dropping
-	# into cover is cosmetic, and the unit is already counted as hunkered by the
-	# line above. The transition hands off when it finishes.
-	visual.play_stance_exit(UnitVisual.STAND_TO_CROUCH, settled)
+	_end_activation_ap()
+	# The hunker IS a pose, not a move into one. `cover_pose` answers COVER_LOW
+	# for any hunkered unit, so settling into idle resolves to `idle_low` whether
+	# or not there is a crate to get behind — one line, and the same one every
+	# other resting state goes through.
+	#
+	# No stand-to-crouch transition: that was the 3D rig's, where a Mixamo clip
+	# existed to bridge two mocap stances. The drawn set has no `stand_to_crouch`
+	# and is not getting one, so the drop is a cut, and do_hunker stays a plain
+	# function with nothing to await.
+	settle_idle()
 
 
-func do_overwatch() -> void:
+## Sec 4.2. ENDS the activation, as `do_hunker` does — see `_end_activation_ap`.
+##
+## `reserve_ap` is how much of what is left the unit commits to the reserved shot
+## (rework doc Sec 4.4), replacing the old flat 1 AP price. Callers pass -1 for
+## "all of it", which is the sane default AND now a real choice: the reserve
+## scales the reaction shot's accuracy (`Combat.overwatch_penalty_for`), so
+## reserving late in an activation with 1 AP left covers an angle far worse than
+## committing a full turn to it.
+func do_overwatch(reserve_ap: int = -1) -> void:
 	on_overwatch = true
+	overwatch_reserve = ap if reserve_ap < 0 else clampi(reserve_ap, 1, ap)
+	_end_activation_ap()
 	# Holding an angle from behind a crate is a different pose from holding one in
 	# the open. Falls through to the plain hold until `overwatch_hold_low` exists.
 	refresh_cover_pose()
 	visual.set_stance(UnitVisual.OVERWATCH)
+
+
+## Burns whatever AP is left, because the action that called it ends the unit's
+## turn outright rather than costing a fixed slice of it.
+##
+## Hunker and Overwatch are both "I am done, and I am spending the rest of this
+## turn watching" — reserving an angle you then walk away from is not a reserved
+## angle, and neither is ducking behind a crate to pop out and shoot on the same
+## activation. So the listed cost is a FLOOR, not the price: any remainder is
+## forfeited. Under the granular pool that remainder is a much bigger number than
+## it was at 2 AP, which is the whole reason both actions are worth taking LAST.
+##
+## Lives on Unit, called by the two actions themselves rather than by their
+## callers, so no path can take the posture without ending the turn — not the
+## HUD, not the security-robot AI. Both sides then stop on their own: the AI
+## loops all run `while ap > 0`, and PlayerUnit._check_activation_end closes the
+## activation on the zero. Routed through `spend_ap` so `ap_changed` still fires
+## and the HUD greys out immediately.
+func _end_activation_ap() -> void:
+	spend_ap(ap)
 
 
 func do_reload() -> void:

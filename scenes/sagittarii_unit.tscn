@@ -13,10 +13,14 @@ script = ExtResource("1_script")
 ; stops coming, not that it arrives.
 move_speed = 1.8
 ; The heaviest plate short of Securus, and the reason EMP is worth a kit slot:
-; at 8, a Shoot with the Assault Rifle's 12 damage delivers 4, while the same
-; shot into a zeroed-armor window delivers all 12.
-armor_value = 8
-move_tiles_per_ap = 2
+; at 5, a Shoot with the Assault Rifle's 8 damage delivers 3, while the same shot
+; into a zeroed-armor window delivers all 8.
+;
+; Rescaled with weapon damage (~0.65x) rather than with HP, because armor is
+; subtracted FROM a roll: left at 8 against the new damage scale it would have
+; swallowed most of a rifle round, and EMP would have gone from worth a kit slot
+; to mandatory.
+armor_value = 5
 light_cover_penalty_mult = 0.5
 salvage_value = 4
 

@@ -10,3 +10,7 @@ var cover_edges: Dictionary = {}
 var occupant: Node3D = null
 var light_value: float = 0.0  # 0-100, written by LightingManager (Sec 5)
 var world_pos: Vector3 = Vector3.ZERO  # world-space center of this tile
+## An alarm panel (Sec 6 trigger 2). Tripped by walking onto the tile, and it
+## fires ONCE — the flag is cleared when it goes off, so a corridor cannot be
+## turned into a repeating siren by pacing over it.
+var alarm: bool = false

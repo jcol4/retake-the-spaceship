@@ -20,9 +20,9 @@ extends SceneTree
 ## and unit_visual.gd reads the LightingManager/GridManager autoloads, which are
 ## not registered when a tool script is compiled.
 const POSES := [
-	"idle", "run", "walk", "crouch_idle", "overwatch_hold", "aim_hold",
+	"idle", "run", "walk", "overwatch_hold", "aim_hold",
 	"begin_shoot", "fire_shoot", "end_shoot",
-	"run_stop", "stand_to_crouch", "crouch_to_stand", "melee",
+	"run_stop", "melee",
 	"reload", "throw_grenade", "interact", "hit_react", "downed",
 	"alert_scream", "idle_fidget",
 ]
@@ -59,7 +59,7 @@ const COVER_POSES := [
 const DIRECTIONS := ["ne", "n", "nw", "w", "sw", "s", "se", "e"]
 
 const LOOPING := [
-	"idle", "run", "walk", "crouch_idle", "overwatch_hold", "aim_hold",
+	"idle", "run", "walk", "overwatch_hold", "aim_hold",
 	"idle_low", "idle_high",
 ]
 
@@ -102,12 +102,28 @@ const LOOP_TIME := {
 	"run": 2 * 0.333,  # = unit_visual.gd's 2 x FOOTSTEP_GAP
 	"walk": 1.4,
 	"idle": 2.0,  # a breathing cycle
-	"crouch_idle": 1.6, "overwatch_hold": 1.6, "aim_hold": 1.6,
+	"overwatch_hold": 1.6, "aim_hold": 1.6,
 	# Slower than the standing breath: a soldier pressed against a crate under
 	# fire is holding still, not idling.
 	"idle_low": 2.4, "idle_high": 2.4,
 }
 const DEFAULT_LOOP_TIME := 1.6
+
+## Per-variant cycle times, overriding LOOP_TIME for one character.
+##
+## A cycle time is a fact about a GAIT, and two characters do not share one. The
+## table above is the soldier's: `walk` is 1.4 s because that is 1.02 m/s over
+## his ~0.7 m stride. The brawler shambles the same ~0.72 m step at 0.9 m/s, so
+## its cycle is 1.6 s, and playing it at the soldier's 1.4 would skate its feet
+## backwards over the deck by 12% of every step.
+##
+## Overriding here rather than slowing the sprite at runtime keeps the timing in
+## the DATA: `body_brawler.tres` ships knowing how fast its own walk goes, and
+## `unit.gd`'s move_speed is the only other place the same number appears.
+## Change one and the feet slide; the pair is the contract.
+const VARIANT_LOOP_TIME := {
+	"brawler": {"walk": 1.6},
+}
 
 const DIR := "res://assets/sprites"
 
@@ -148,7 +164,7 @@ func _build(layer: String, variant: String) -> bool:
 			var name := StringName("%s_%s" % [pose, dir])
 			frames.add_animation(name)
 			frames.set_animation_loop(name, pose in LOOPING)
-			frames.set_animation_speed(name, _speed(pose, textures.size()))
+			frames.set_animation_speed(name, _speed(pose, textures.size(), variant))
 			for tex in textures:
 				frames.add_frame(name, tex)
 
@@ -168,7 +184,7 @@ func _build(layer: String, variant: String) -> bool:
 			var name := StringName("%s_%s" % [pose, dir])
 			frames.add_animation(name)
 			frames.set_animation_loop(name, pose in LOOPING)
-			frames.set_animation_speed(name, _speed(pose, textures.size()))
+			frames.set_animation_speed(name, _speed(pose, textures.size(), variant))
 			for tex in textures:
 				frames.add_frame(name, tex)
 
@@ -239,7 +255,13 @@ func _pick(found: Dictionary, pose: String, dir: String) -> Array:
 ## duration 1.0 each runs for n/speed seconds. So both branches are the same
 ## calculation -- frames divided by the time the pose is supposed to occupy --
 ## and neither cares how many frames were drawn.
-func _speed(pose: String, frame_count: int) -> float:
+func _speed(pose: String, frame_count: int, variant: String) -> float:
 	var seconds: float = LOOP_TIME.get(pose, DEFAULT_LOOP_TIME) if pose in LOOPING \
 		else ONE_SHOT_TIME.get(pose, DEFAULT_ONE_SHOT_TIME)
+	# Applied to LOOPING and one-shot alike: the table is keyed by pose name, so
+	# a variant that needs a longer melee says so the same way it says its walk
+	# is longer.
+	var overrides: Dictionary = VARIANT_LOOP_TIME.get(variant, {})
+	if overrides.has(pose):
+		seconds = overrides[pose]
 	return maxi(frame_count, 1) / seconds

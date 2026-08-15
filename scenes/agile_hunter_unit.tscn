@@ -1,0 +1,41 @@
+[gd_scene format=3 uid="uid://chunterunit01"]
+
+[ext_resource type="Script" path="res://scripts/agile_hunter_unit.gd" id="1_script"]
+[ext_resource type="Script" path="res://scripts/unit_visual.gd" id="2_visual"]
+
+[sub_resource type="CapsuleShape3D" id="capsule_shape"]
+radius = 0.38
+height = 1.7
+
+[node name="AgileHunterUnit" type="Node3D" groups=["enemy_units", "units"]]
+script = ExtResource("1_script")
+; Faster than the soldier's 4.5, and it is the ONLY unit on the board that is.
+; The melee tier is otherwise defined by being outrunnable — a swarm shambles at
+; 1.5 — so the one creature you cannot simply walk away from should read as
+; different the moment it starts moving, before it has done anything.
+move_speed = 5.4
+
+; One layer, like the rest of the alien tier: the swarm variant stands in until
+; the Hunter has art of its own. Tinted rather than left identical so two alien
+; types are not indistinguishable on screen — the same stopgap the mercs use,
+; and flagged the same way.
+[node name="Visual" type="Node3D" parent="."]
+script = ExtResource("2_visual")
+layers = Array[StringName]([&"body"])
+variant = &"swarm"
+has_light = false
+faction_tint = Color(0.62, 0.78, 1, 1)
+
+; Layer 2, mask 0 — a body volume for picking, not a gameplay surface.
+[node name="Body" type="StaticBody3D" parent="."]
+collision_layer = 2
+collision_mask = 0
+
+[node name="Collision" type="CollisionShape3D" parent="Body"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.85, 0)
+shape = SubResource("capsule_shape")
+
+[node name="NameLabel" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.1, 0)
+billboard = 1
+text = "Hunter"

@@ -70,10 +70,10 @@ its melee range and Armor, then finish it off fast once the head breaks.
 
 | | |
 |---|---|
-| HP / Armor | 85 / 10 — the thickest plate in either roster |
-| Attack | Melee only: 60 accuracy, 18 damage. No ranged weapon at all |
+| HP / Armor | 26 / 6 — the thickest plate in either roster |
+| Attack | Melee only: 60 accuracy, 12 damage. No ranged weapon at all |
 | Movement | 3 tiles per AP, `move_speed` 2.6 — slow, but it walks the whole way |
-| Head | `head_hp` 24; once broken, `broken_head_damage_mult` 1.75 on every subsequent hit |
+| Head | `head_hp` 12; once broken, `broken_head_damage_mult` 1.75 on every subsequent hit |
 | EMP | `emp_stun_duration_mult` 0.5 — half the roster's window |
 | Salvage | 8 |
 

@@ -47,8 +47,8 @@ dangerous in numbers."
 
 | | |
 |---|---|
-| HP / Armor | 45 / 4 |
-| Weapon | QRN Sentry Gun — 25 accuracy, 10 damage, 8-round magazine |
+| HP / Armor | 14 / 3 |
+| Weapon | QRN Sentry Gun — 25 accuracy, 7 damage, 8-round magazine |
 | Movement | Fitness-derived, `move_speed` 2.2 — it repositions, it does not travel |
 | Post | `holds_position` true, `post_leash` 3 tiles |
 | Salvage | 2 |
@@ -58,8 +58,10 @@ own contribution is what it does with a *quiet* activation: `_hold_post` spends 
 existing Overwatch action rather than idling, so a bypassed Auxilium is never free to walk past
 twice. Both halves are checked in `tools/test_cerberus.gd`.
 
-Armor 4 against the Assault Rifle's 12 damage is the "rarely drops one outright" line above,
-stated as a number: two clean snap shots, or one flank, or a 2 AP Aimed Shot.
+Armor 3 against the Assault Rifle's 8 damage is the "rarely drops one outright" line above,
+stated as a number: 5 through the plate against 14 HP, so three clean snap shots — or one flank, or
+an Aimed Shot. Still more than a passing sentry can absorb quietly, which is the property that
+pushes the player toward the flank rather than the trade.
 
 ## Open items
 

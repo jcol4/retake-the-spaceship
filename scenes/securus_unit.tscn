@@ -14,9 +14,14 @@ script = ExtResource("1_script")
 move_speed = 2.6
 ; The thickest plate in either roster. With the head intact, the answer is EMP
 ; or an Aimed Shot; with it broken, ordinary gunfire finally works.
-armor_value = 10
-move_tiles_per_ap = 3
-head_hp = 24
+; Rescaled with weapon damage (~0.65x), not with HP: armor is subtracted FROM a
+; damage roll, so it has to track the damage scale or the plate stops being a tax
+; and starts being immunity. 6 against an 8-damage rifle leaves 2 through, which
+; is what 10 against 12 always left.
+armor_value = 6
+; 12, not 8 — the head is not scaled to the body, it is scaled to how many Aimed
+; Shots breaking it should take. Two, as before: a Battle Rifle headshot is 10.
+head_hp = 12
 broken_head_damage_mult = 1.75
 ; Half the roster's EMP duration. The lever still works — it is just a narrower
 ; window than the one that solves a Sagittarii, which is the elite tell.

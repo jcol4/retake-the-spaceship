@@ -10,8 +10,6 @@ extends CerberusUnit
 ## committed Aimed Shots, then finish it fast once the head is off — rather than
 ## one flat damage sponge from start to end.
 
-const MELEE_AP_COST := 1
-
 ## Damage a breach swing does to the cover edge between it and its target. Well
 ## above any tier's HP on purpose: the alpha reading of "breach" is one tier per
 ## swing, so heavy goes to light and light goes to nothing, using the existing
@@ -26,32 +24,35 @@ const BREACH_DAMAGE := 999
 ##
 ## Armor deliberately does NOT protect it: a weak point that the unit's own plate
 ## covers is not a weak point. Head damage is the raw roll.
-@export var head_hp: int = 24
+## Scaled to the DAMAGE curve, not to the body's HP: what this number is for is
+## "how many Aimed Shots break it", and the answer is still two. The scene
+## overrides it anyway; this default just has to agree with it.
+@export var head_hp: int = 12
 ## Damage multiplier on every subsequent hit, to any zone, once the head is off.
 @export var broken_head_damage_mult: float = 1.75
-
-## Tiles per 1 AP. Slow and heavy, but it does close — the threat is arrival.
-@export var move_tiles_per_ap: int = 3
 
 var head_broken: bool = false
 
 
-func _move_budget() -> int:
-	return move_tiles_per_ap
-
-
 ## Replaces the ranged loop entirely, the same way SwarmUnit's does: advance and
 ## swing. Reached only in COMBAT — awareness is CerberusUnit's business.
+##
+## Its pace is its AP pool now, not a private tiles-per-AP rate (rework doc Sec
+## 4.1/4.5): slow and heavy, but it does close — the threat is arrival.
 func _combat_turn() -> void:
+	var melee_cost := action_cost(UnitStats.Action.MELEE)
 	while ap > 0 and not is_downed:
 		var quarry := acquire_target()
 		if quarry == null:
 			return
 		if not GridManager.is_melee_adjacent(grid_pos, quarry.grid_pos):
-			await _move_toward(quarry)
+			await _move_toward(quarry, melee_cost)
 			continue
+		if ap < melee_cost:
+			ap = 0  # in contact but out of AP for the swing
+			return
 		_breach_cover(quarry)
-		spend_ap(MELEE_AP_COST)
+		spend_ap(melee_cost)
 		var result: Combat.ShotResult = await melee_at(quarry)
 		action_logged.emit("%s strikes %s (%d%% acc): %s" % [
 			stats.display_name, quarry.stats.display_name, result.accuracy, Combat.describe(result),

@@ -31,8 +31,13 @@ const IDLE := &"idle"
 const RUN := &"run"
 ## Short moves walk. See WALK_SPEED and Unit.move_along for when.
 const WALK := &"walk"
-const CROUCH := &"crouch_idle"
 const OVERWATCH := &"overwatch_hold"
+# There is no standalone crouch. Being down low is a COVER FAMILY, not a stance:
+# `Unit.cover_pose` answers `low` for a unit behind a crate or hunkered, and
+# every pose then resolves through the `_low` suffix (see COVER_LOW). A separate
+# `crouch_idle` existed only because the mocap set shipped one, and it competed
+# with `idle_low` for the same job — a hunker resolved through it fell back to
+# standing-in-the-open and read as having done nothing.
 
 # Firing is two animations driven by play_burst rather than one per shot type:
 # the burst length is rolled per shot, and no fixed animation can match a count
@@ -50,12 +55,14 @@ const AIM_HOLD := &"aim_hold"
 const BEGIN_SHOOT := &"begin_shoot"
 const FIRE_SHOOT := &"fire_shoot"
 const END_SHOOT := &"end_shoot"
-# Transitions. Not stances and not actions: each is a one-shot bridging one
-# stance into another, played through play_stance_exit. All degrade to a hard
-# cut, at zero time cost, when the art is absent.
+# Transitions. Not stances and not actions: a one-shot bridging one stance into
+# another, played through play_stance_exit. Degrades to a hard cut, at zero time
+# cost, when the art is absent.
+#
+# One of them, where the mocap set had a bridge between every pair of stances.
+# The crouch pair went with the crouch stance; going down into cover and standing
+# back up are both cuts now.
 const RUN_STOP := &"run_stop"
-const STAND_TO_CROUCH := &"stand_to_crouch"
-const CROUCH_TO_STAND := &"crouch_to_stand"
 const MELEE := &"melee"
 const RELOAD := &"reload"
 const GRENADE := &"throw_grenade"
@@ -92,11 +99,19 @@ const FOOTSTEP_GAP := 0.333
 const FIDGET_GAP_MIN := 12.0
 const FIDGET_GAP_MAX := 35.0
 
-## Stand-in durations, so action pacing is identical with or without authored
-## art. These are the SOLDIER's measured clip lengths from the 3D pipeline that
-## preceded the sprites — kept because they are what the game's turn rhythm was
-## tuned against, and a sprite reload has no more reason to take a different
-## length than a mocap one did.
+## How long each action occupies, so pacing is identical with or without authored
+## art. Read as a stand-in when the art is missing, and as the AUTHORING CONTRACT
+## when it is drawn — build_sprite_frames.gd derives `speed` as frames/duration
+## from the same table, so a pose drawn in any number of frames still takes
+## exactly this long.
+##
+## The values arrived here as the old 3D soldier's measured clip lengths, which
+## is why some of them are oddly precise. They are kept not because a mocap take
+## has any authority over a drawn one, but because the game's turn rhythm was
+## tuned against them and none of it has been re-tuned. Same treatment as
+## Unit.move_speed and FOOTSTEP_OFFSET: the number is now OWNED rather than
+## inherited, and it is the dial to turn if an action feels wrong — changing one
+## is a pacing decision, not a correction.
 const FALLBACK_TIME := {
 	BEGIN_SHOOT: RAISE_TIME,
 	FIRE_SHOOT: BURST_CADENCE,
@@ -142,7 +157,19 @@ const COVER_RAISE_TIME := 0.75
 const COVER_SETTLE_TIME := 0.45
 
 ## Metres per second for the WALK stance, replacing Unit.move_speed on the moves
-## that take it. Inherited from the measured Walking clip.
+## that take it — a soldier crossing a single tile, who has both gaits and picks
+## the slow one.
+##
+## The AUTHORING CONTRACT for that cycle, the way move_speed is the run's: draw
+## the walk to read at 1.02 m/s rather than fitting the speed to whatever gets
+## drawn. It began as the old mocap Walking clip's measured speed and is kept
+## because build_sprite_frames.gd's `walk` LOOP_TIME (1.4 s over a ~0.7 m stride)
+## was derived from it — moving one without the other slides the feet.
+##
+## NOTHING REACHES IT TODAY, and that is a gap in the art rather than dead code:
+## the merc has no `walk` action, so `has_walk` is false and he always runs; the
+## brawler has one but is `walks_only` and carries its own speed in move_speed
+## (see Unit.move_along). This goes live the day a merc walk cycle is drawn.
 const WALK_SPEED := 1.02
 
 # --- Direction ---------------------------------------------------------------
@@ -246,6 +273,20 @@ const BUCKET_OFFSET := PI / 4.0
 
 ## Whether this character carries the rig-mounted light (Sec 5.2). Aliens do not.
 @export var has_light: bool = true
+
+## Multiplied into the tile-light tint, so two factions can share one sprite set
+## and still be told apart at XCOM camera distance. White (identity) by default.
+##
+## MULTIPLIED rather than assigned, which is the whole reason it is safe: a
+## tinted unit standing in the dark still reads dark, so the tint cannot quietly
+## undo the rule that a unit which LOOKS lit is one the rules also treat as lit
+## (see `_apply_tile_light`).
+##
+## A stopgap that is honest about being one — the rival mercs wear the player's
+## own rendered art recoloured, because that art is literally already called
+## `merc` (`variant = &"merc"`). A real second sprite set replaces this; until
+## then a flat multiply beats shipping two identical-looking factions.
+@export var faction_tint: Color = Color.WHITE
 
 ## Which family of shapes the placeholder generator draws for this character.
 ## `organic` is the standing biped everything started as; `machine` is the
@@ -761,7 +802,7 @@ func _apply_tile_light() -> void:
 	var tile: GridTileData = GridManager.get_tile(_unit.get("grid_pos"))
 	var lit := clampf(tile.light_value / 100.0, 0.0, 1.0) if tile else 1.0
 	var level := lerpf(MIN_TINT, 1.0, lit)
-	var tint := Color(level, level, level)
+	var tint := Color(level, level, level) * faction_tint
 	for layer in layers:
 		var sprite: AnimatedSprite3D = _sprites.get(layer)
 		if sprite:
@@ -871,15 +912,15 @@ const PLACEHOLDER_MACHINE_SPEC := {
 	&"securus": {"width": 24, "height": 42, "hover": 0, "head": 12, "shoulder": 7},
 }
 const PLACEHOLDER_MACHINE_DEFAULT := {"width": 20, "height": 28, "hover": 0, "head": 9, "shoulder": 5}
-## Poses the placeholder draws crouched rather than standing, so hunkering and
-## overwatch are visibly different from standing there.
-const PLACEHOLDER_CROUCHED := [CROUCH, STAND_TO_CROUCH, CROUCH_TO_STAND, OVERWATCH]
+## Poses the placeholder draws crouched rather than standing, so overwatch is
+## visibly different from standing there.
+const PLACEHOLDER_CROUCHED := [OVERWATCH]
 ## Every pose the placeholder generates art for — the full vocabulary above, so
 ## no caller can ask for something that does not exist.
 const PLACEHOLDER_POSES := [
-	IDLE, RUN, WALK, CROUCH, OVERWATCH, AIM_HOLD,
+	IDLE, RUN, WALK, OVERWATCH, AIM_HOLD,
 	BEGIN_SHOOT, FIRE_SHOOT, END_SHOOT, RUN_STOP,
-	STAND_TO_CROUCH, CROUCH_TO_STAND, MELEE, RELOAD, GRENADE, INTERACT,
+	MELEE, RELOAD, GRENADE, INTERACT,
 	HIT_REACT, DOWNED, ALERT_SCREAM, IDLE_FIDGET,
 ]
 
@@ -894,7 +935,7 @@ func _placeholder_frames(layer: StringName) -> SpriteFrames:
 		for dir: StringName in [&"n", &"ne", &"e", &"se", &"s"]:
 			var name := &"%s_%s" % [pose, dir]
 			frames.add_animation(name)
-			frames.set_animation_loop(name, pose in [IDLE, RUN, WALK, CROUCH, OVERWATCH, AIM_HOLD])
+			frames.set_animation_loop(name, pose in [IDLE, RUN, WALK, OVERWATCH, AIM_HOLD])
 			frames.add_frame(name, _placeholder_texture(layer, pose, dir))
 	return frames
 

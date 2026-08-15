@@ -61,7 +61,7 @@ happen.
 
 | | |
 |---|---|
-| HP / Armor | 20 / 0 |
+| HP / Armor | 6 / 0 |
 | Weapon | None. `weapon` is null, so `can_shoot()` is false forever — the same way the alien swarm is unarmed |
 | Movement | `move_speed` 5.0 — the only unit in the faction that outruns a soldier |
 | Scan | `evidence_scan_radius` 4, once per activation, no line of sight required |

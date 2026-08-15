@@ -34,6 +34,17 @@ A turn-based, squad-level tactics game in the spirit of *XCOM*, played in a full
 
 ### 4.0 The Grid
 
+> ⚠️ **The MOVEMENT ALLOWANCE below is SUPERSEDED** (2026-08-10) by
+> [docs/design/factions/contractors/design-choices/ap-and-stat-baselines.md](docs/design/factions/contractors/design-choices/ap-and-stat-baselines.md).
+> There is no Run/Sprint tile allowance and no Fitness movement bonus any more: movement costs a
+> flat **1 AP per tile** for every unit, and how far a soldier gets is decided by the size of its AP
+> pool. The reachable-tile preview is one range overlay graded by AP cost rather than two bands.
+>
+> The GRID ITSELF is unaffected and still current — eight-way movement, the diagonal costing the
+> same as a cardinal, the corner-cutting guard, Chebyshev range, free elevation traversal. The
+> diagonal rule in particular is *why* a tile is 1 AP: uniform step cost is what keeps the reachable
+> set a square and the pathfinder a BFS.
+
 - **Square tile grid** underlying a fully 3D environment (reference: *XCOM*'s grid logic, presented in true 3D rather than fixed-angle 2.5D).
 - **Elevation matters** — the grid supports multiple height levels/floors (high ground, ledges, stairs), affecting line of sight and accuracy (Section 6.4).
 - **Movement is eight-way, and a diagonal costs the same 1 tile an orthogonal step does** (the XCOM rule). A unit may step to any of the eight surrounding tiles, so N tiles of movement reaches a *square* of side 2N+1.
@@ -57,9 +68,29 @@ This is the signature mechanic of the game.
 - Once drawn, a unit acts, is removed from the pool, and the draw repeats until all units have acted; the pool then resets for the next turn.
 - **Visibility:** Players see their own units' Initiative stats. **Enemy Initiative is fully hidden** — no exact value, tier, or icon is shown, preserving full uncertainty about enemy draw order.
 - **Modifiability:** Abilities, items, and status effects can buff or debuff Initiative odds mid-mission.
-- **Composition:** Initiative = Reflexes (60%) + class base modifier (30%) + equipment bonus (10%). *(Tunable default — adjust after playtesting.)*
+- **Composition:** ⚠️ **SUPERSEDED** (2026-08-10) — see
+  [design-choices/ap-and-stat-baselines.md](docs/design/factions/contractors/design-choices/ap-and-stat-baselines.md).
+  Initiative is now `50 + 0.2 × Reflexes + equipment bonus`, floored, and **the class base modifier
+  is removed entirely** — class identity in turn order is indirect only, via the Reflexes range a
+  class tends to roll in. *(Was: Reflexes 60% + class base modifier 30% + equipment bonus 10%.)*
+  The **pool draw mechanic itself is unaffected** and still current; only the stat feeding it
+  changed.
 
 ### 4.2 Action Points
+
+> ⚠️ **SUPERSEDED** (2026-08-10) by
+> [docs/design/factions/contractors/design-choices/ap-and-stat-baselines.md](docs/design/factions/contractors/design-choices/ap-and-stat-baselines.md).
+> AP is a **granular per-soldier pool** (`floor(6 + 0.075 × Fitness)`), not a flat 2. Movement costs
+> 1 AP per tile rather than being a Run/Sprint pair; the other actions cost a base of 6–10 AP
+> discounted by Reflexes — movement is the only thing that did *not* scale with the pool, so the
+> extra AP buys distance rather than extra actions, and shooting twice still costs a soldier its
+> whole activation; Overwatch commits a variable reserve instead of a flat price. Left
+> standing rather than rewritten, per this document's convention: the 2 AP menu is what the game was
+> built against and the reasoning below is worth being able to read.
+>
+> What survives the change unaltered: **Hunker Down and Overwatch still end the activation
+> outright**, Overwatch is still the pool's one interrupt and still only against enemy movement, and
+> the **flashlight toggle is still free**.
 
 Every soldier has **2 Action Points (AP)** per activation, spent on the following actions:
 
@@ -70,9 +101,11 @@ Every soldier has **2 Action Points (AP)** per activation, spent on the followin
 | **Shoot** | 1 AP | Fire weapon at an accuracy penalty (snap shot) |
 | **Aimed Shot** | 2 AP | VATS-style targeted shot at a chosen body part — Head, Torso, either Arm, or either Leg (Section 4.2.1) |
 | **Throw Grenade** | 1 AP | Throw a grenade at a target location (separate action from Shoot) |
-| **Hunker Down** | 1 AP | Improve unit's Cover stat for incoming attacks until its next activation |
-| **Overwatch** | 1 AP | Reserve action, fired at a significant accuracy penalty; unit interrupts the pool draw to fire when an **enemy** unit moves into its line of sight (does not trigger against allies) |
+| **Hunker Down** | 1 AP, **ends activation** | Improve unit's Cover stat for incoming attacks until its next activation |
+| **Overwatch** | 1 AP, **ends activation** | Reserve action, fired at a significant accuracy penalty; unit interrupts the pool draw to fire when an **enemy** unit moves into its line of sight (does not trigger against allies) |
 | **Reload** | 1 AP | Refill weapon magazine (see 4.3) |
+
+**Turn-ending actions:** Hunker Down and Overwatch both **end the unit's activation outright**, whatever AP it has left — the listed 1 AP is a minimum price, not the whole of it. Both actions are a declaration that the unit is done and is spending the rest of the turn watching: an angle you reserve and then walk away from was never reserved, and ducking behind a crate to pop straight back out and shoot is not hunkering. They can therefore be taken *after* a Run or a Shoot, but nothing can follow them.
 
 **Overwatch & the pool:** Overwatch is the one action that breaks the normal draw order — but only in one direction. A unit on Overwatch can interrupt and act when an enemy walks into its sightline, regardless of whose "turn" the pool would otherwise draw. It does **not** trigger off allied movement. Its low AP cost is paid for by accuracy: the reserved shot carries a **flat −30% penalty** on top of a normal Shoot's math, reflecting a reactive snap-shot rather than one lined up in advance.
 
@@ -85,7 +118,7 @@ Replaces the old flat "full accuracy" Barrage. Aimed Shot lets the shooter pick 
 | Zone | Accuracy vs. the full-aim baseline | On landing a hit |
 |---|---|---|
 | Torso | +0% (the reliable, default target) | A **critical** hit also **stuns** the target for its next activation |
-| Head | **−50%** (severe penalty) | **Doubled** crit chance vs. normal, and a landed crit has a further chance to upgrade to a **severe critical (3× damage)** |
+| Head | **−50%** (severe penalty) | **Doubled** crit chance vs. normal, and a landed crit has a further chance to upgrade to a **severe critical (2× damage)** |
 | Left/Right Arm | −20% each | Damage accumulates toward that arm's own injury threshold |
 | Left/Right Leg | −20% each | Damage accumulates toward that leg's own injury threshold |
 
@@ -97,6 +130,12 @@ Replaces the old flat "full accuracy" Barrage. Aimed Shot lets the shooter pick 
 Torso and Head injuries are tracked the same way for future medical-system purposes, but their combat effect (stun / crit upgrade) triggers per landed crit on that zone rather than requiring the threshold to be crossed first.
 
 ### 4.3 Ammo & Reload
+
+> ⚠️ **The AP COSTS below are SUPERSEDED** (2026-08-10) — see
+> [design-choices/ap-and-stat-baselines.md](docs/design/factions/contractors/design-choices/ap-and-stat-baselines.md).
+> Reload is a Reflexes-discounted 4 AP base, and Aimed Shot 5–7 depending on zone. **The tradeoff
+> the section describes is unchanged and if anything sharper**: an Aimed Shot still costs more than
+> a snap shot and still burns the magazine faster, so Reload timing is still a real decision.
 
 - Weapons have a **fixed magazine size**.
 - Once empty, the soldier must spend **Reload (1 AP)** before firing again.
@@ -137,10 +176,25 @@ A SPECIAL-inspired stat system (minus Charisma, and deliberately trimmed to four
 
 **4.6.2 Reflexes**
 
+> ⚠️ **SUPERSEDED** (2026-08-10) — see
+> [design-choices/ap-and-stat-baselines.md](docs/design/factions/contractors/design-choices/ap-and-stat-baselines.md).
+> Reflexes' **major** role is now the **AP cost discount** on Shoot/Melee/Grenade/Reload/Aimed Shot.
+> Initiative is demoted to a minor `+0.2 per point` term. The accuracy contribution below (Shoot and
+> Overwatch only, never Aimed Shot) is **unchanged and still current** — and it is the reason Aimed
+> Shot gets a weaker cost discount than a snap shot does.
+
 - Contributes to accuracy for **Shoot and Overwatch only** — Aimed Shot relies on Perception (and the chosen zone's own modifier) alone.
 - Contributes to the unit's **Initiative** value (Section 4.1) alongside class base modifiers and equipment bonuses (60% weighting, see 4.1).
 
 **4.6.3 Fitness**
+
+> ⚠️ **SUPERSEDED** (2026-08-10) — see
+> [design-choices/ap-and-stat-baselines.md](docs/design/factions/contractors/design-choices/ap-and-stat-baselines.md).
+> Fitness' **major** role is now **AP pool size** (`floor(6 + 0.075 × Fitness)`). Max HP is demoted
+> to a minor term on a base value (`floor(base_hp + 0.08 × Fitness)`, base 15 for a soldier — a
+> soldier is ~20 max HP now, not ~70, and dies in two or three hits), and the
+> movement-tile bonus is gone outright — movement is a flat 1 AP per tile for everyone (Section 4.0's
+> callout). Both roles below were the *reverse* of this: HP was Fitness' only job.
 
 - **+1 max HP per Fitness point.**
 - **+1 movement tile per 20 Fitness points**, added to the base Run/Sprint values (Section 4.0).
@@ -150,7 +204,7 @@ A SPECIAL-inspired stat system (minus Charisma, and deliberately trimmed to four
 Resolved in three ordered phases, Fallout-style, whenever a shot is fired:
 
 1. **Reroll (shooter's Luck).** If the accuracy roll fails, there is a small chance the shot succeeds anyway: **Reroll chance ≈ Luck / 8 (%)**. This check only fires on an already-failed roll — it doesn't make already-successful shots "more" successful.
-2. **Critical hit (shooter's Luck).** Any landed hit — whether from the original roll or the reroll above — has a chance to crit: **Crit chance ≈ Luck / 4 (%)**. **Crit severity: double damage.** A critical hit is guaranteed once rolled and skips step 3 entirely — it cannot be dodged.
+2. **Critical hit (shooter's Luck).** Any landed hit — whether from the original roll or the reroll above — has a chance to crit: **Crit chance ≈ Luck / 4 (%)**. **Crit severity: 1.5× damage** (lowered from 2× with the lethality rescale — see [ap-and-stat-baselines.md](docs/design/factions/contractors/design-choices/ap-and-stat-baselines.md) §6.0). A critical hit is guaranteed once rolled and skips step 3 entirely — it cannot be dodged.
 3. **Dodge (target's Luck).** Any landed *non-crit* hit gives the target a chance to turn it back into a miss: **Dodge chance ≈ Luck / 8 (%)**, the same formula as the shooter's reroll. This is the symmetric, defensive half of Luck — being shot at and hit can still whiff if the target is lucky.
 
 - *(All three rates are tunable defaults — adjust after playtesting.)*
@@ -435,12 +489,34 @@ Final Accuracy % =
 
 ### 11.4 Fodder — Swarm
 
+> ⚠️ **The TWO-SPEED MOVEMENT below is SUPERSEDED** (2026-08-10) by
+> [docs/design/factions/contractors/design-choices/ap-and-stat-baselines.md](docs/design/factions/contractors/design-choices/ap-and-stat-baselines.md).
+> The shamble/lunge pair and its latch were built on "tiles per 1 AP", the unit of measure the AP
+> rework deletes — movement is 1 AP per tile for every unit, and pace is the size of the AP pool.
+> Both rates and the latch were removed with `SwarmUnit._move_budget`.
+>
+> **The turn of warning the latch existed to protect survives**, out of the pool arithmetic instead:
+> a swarm's 4 AP against its 3 AP claw means anything two or more tiles out cannot both arrive and
+> land a blow, while the one-step-then-swing reach the shamble always had still fits.
+> `tools/test_swarm_pace.gd` asserts that directly. Melee AP cost is likewise now Reflexes-derived
+> rather than a flat 1.
+>
+> Everything else here is **unchanged and still current**: attrition as the threat, no ranged weapon
+> at all, contact range as movement adjacency rather than raw Chebyshev, the melee accuracy formula,
+> and cover/falloff/light deliberately not applying to melee.
+
 - Slow, tanky, individually weak damage output.
 - Threat is **attrition** — forces the player to spend AP/ammo/turns on numbers rather than posing serious per-hit risk.
 - Combat bias: direct approach toward the nearest player unit, low priority on flanking/repositioning.
 - **No ranged weapon at all.** Its only action is a **melee attack at contact range**, so the whole loop is: crawl toward the target, claw it once adjacent.
-- **Movement: 3 tiles per 1 AP** — a fixed rate below what its Fitness would otherwise allow (contrast the general 4 + Fitness/20 of Sec 4.0). Deliberately outrunnable: a squad that keeps moving should be able to disengage, which is what makes a swarm a resource cost rather than a chase.
-- **Melee costs 1 AP**, so a 2 AP activation is *crawl 3 and swing*, *crawl 6*, or — already in contact — *two swings*.
+- **Movement is two-speed, and this is the melee tier's whole character.** Both rates are fixed, replacing the general 4 + Fitness/20 of Sec 4.0:
+  - **Shamble: 1 tile per 1 AP** at range. Two tiles a turn against a soldier's twelve. Approach is something the player *watches happen* and has time to answer.
+  - **Lunge: 4 tiles per 1 AP** if the unit's activation *begins* in Combat with a live player within **3 tiles** (Chebyshev). It stops crawling and commits.
+- **The lunge is latched at the start of the activation, not re-checked per AP.** A shambler that begins its turn at 5 tiles and crawls to 4 does *not* lunge on its second AP — it cannot close *and* pounce in one activation. The player always gets one turn of warning between "that thing is near" and "that thing is on me", and removing that warning is the main thing to *not* do to this mechanic.
+- **The lunge requires Combat state**, so a unit that has not confirmed a target never pounces. A squad moving dark past a nest (Sec 5.2) is not ambushed by something that never saw it; acquiring a target mid-turn grants the lunge from the *next* activation.
+- **This does not make Fodder un-outrunnable, and it must not.** A soldier runs 6–7 tiles per AP, so a squad that spends its whole activation running still breaks contact. What the lunge costs is the *whole activation*: backing off one tile and shooting anyway used to be free, and against a lunge it is not. **That trade — disengagement is still possible, but no longer free — is the design, and it is what keeps a swarm a resource cost rather than a chase.**
+- **Melee costs 1 AP.** A 2 AP activation is therefore *shamble 1 and swing*, *shamble 2*, *lunge 4 and swing*, or — already in contact — *two swings*.
+- **Overwatch is the counterplay, and is worth more against Fodder than it used to be:** a lunge drags the unit across four tiles of reserved fire rather than one.
 - **Contact range** is the same adjacency movement uses (8-way, subject to the corner-cutting guard, stair links count), **not** a raw Chebyshev distance of 1: the latter ignores floor level and would let a swarm on the deck claw a unit standing on the platform above it.
 - **Melee accuracy** = attacker Perception + melee base accuracy, ± the high-ground bonus and the target's Hunker penalty, then both sides' Luck (Sec 4.6.4) exactly as for a shot. Defaults: **melee base accuracy 45, damage 5.**
 - **Cover, distance falloff, and the light modifier deliberately do not apply to melee.** All three exist to model *distance*: cover can't shield a body something is already on top of, falloff is zero at one tile, and letting darkness reduce a claw's accuracy would make standing in the dark a *defence* against the swarm — backwards for a game built on darkness being the danger. Melee also does not damage cover, since the swing never travels through it.
@@ -475,7 +551,15 @@ Final Accuracy % =
 - **Alert propagation** via the room-graph structure from Section 10.4 — an alerted unit signals its current room node, propagation reaches only `AlienUnit`s registered to that node or its associated nest cluster.
 - Each `AlienUnit` participates in the shared initiative pool (Section 4.1) like any other unit — its state machine determines what it *does* when drawn, not whether it's drawn.
 
-**Current state of the scaffold.** `EnemyUnit` is the shared alien base described above (it predates the name `AlienUnit` and holds the iteration-1 ranged loop directly); `SwarmUnit extends EnemyUnit` is the first real roster type, overriding `take_turn` for the melee loop and `_move_budget` for the crawl rate. The state machine of 11.1 does **not** exist yet. Its seam is `EnemyUnit.acquire_target()` — the single point every AI loop gets a target from, currently omniscient (nearest living player, no sight or awareness check). Detection, alert propagation and the four states replace the body of that one method; returning `null` already means "no target, end the activation", which is what an Unaware alien idling at its nest should do. `Nest` (11.7) does not exist either — per-type stat rolls live in `main.gd` for now and want moving into its spawn table.
+**Current state of the scaffold** *(revised 2026-08-10 — the previous version of this paragraph was substantially out of date and had already caused a downstream design doc to list a prerequisite that was in fact already built).*
+
+- **The state machine of 11.1 EXISTS**, in `EnemyUnit`: `UNAWARE / ALERT / COMBAT`, with light-gated sight, beam detection, contact loss, and alert propagation. Only **Search** is deferred — three of the four states are live.
+- **`acquire_target()` is no longer omniscient.** It returns the confirmed target in COMBAT and `null` in every other state, which is exactly the seam the old text described as future work.
+- **Alert propagation is scoped by COMPARTMENT**, not by radius, via `MapData.compute_rooms` / `MapBuilder.room_at`. The room graph the old text said "doesn't exist yet" does exist.
+- **Sound reaches aliens** (`EnemyUnit.hear_noise`), so §5.4's shared channel is no longer robots-only.
+- **Per-type stat rolls have moved out of `main.gd`** into `AlienPresets`, alongside `ClassPresets`, `MercPresets` and `CerberusPresets`. They still want folding into a Nest spawn table when one exists.
+- **Roster in code:** `EnemyUnit` (generic ranged), `SwarmUnit` (Fodder), `BrawlerUnit`, `AgileHunterUnit` (11.5, planner-driven). **Spitter (11.6) is not built.**
+- **`Nest` (11.7) still does not exist.** It is the one genuinely missing piece here, and it blocks the nest-destruction escalation trigger — `AlienHivemind.report_nest_destroyed` is written and waiting for a caller.
 
 ---
 

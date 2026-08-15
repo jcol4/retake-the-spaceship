@@ -15,16 +15,60 @@ var stair_links: Dictionary = {}
 signal cover_destroyed(pos: Vector3i, side: int, now: int)
 
 
+## Deck levels that currently hold tiles, for `tile_under_ray`. Kept as a set
+## rather than rescanned per call: picking runs every frame while a move mode is
+## armed, and the answer only changes when a deck is built.
+var _floors: Dictionary = {}
+
+
 func clear() -> void:
 	tiles.clear()
 	stair_links.clear()
+	_floors.clear()
 
 
 func add_tile(pos: Vector3i, world_pos: Vector3) -> GridTileData:
 	var t := GridTileData.new()
 	t.world_pos = world_pos
 	tiles[pos] = t
+	_floors[pos.y] = true
 	return t
+
+
+## The tile a camera ray passes over, found by intersecting the ray with each
+## deck's horizontal plane rather than by raycasting against geometry.
+##
+## GEOMETRY IS DELIBERATELY NOT CONSULTED, and that is the whole point. Tile
+## picking used to be a physics ray against layer 1, so any wall between the
+## camera and the tile ate the click — and because `_apply_wall_occlusion` hides
+## the meshes of camera-near walls but keeps their collision bodies, the player
+## could plainly SEE a tile they were unable to click on. At a fixed isometric
+## pitch with only four yaws there is frequently no angle that clears the
+## obstruction, so the tile was simply unreachable by mouse.
+##
+## Projection cannot be blocked by anything, which removes the whole class of
+## problem. It grants no reach: the destination still has to be in the reachable
+## set (`GridManager.reachable_costs`, which excludes walls and occupied tiles)
+## and still has to be walkable to (`find_path`), so this changes what the cursor
+## can NAME, never where a unit can go.
+##
+## Topmost deck first, so a platform is picked over the floor beneath it — which
+## is what the eye expects when the two overlap on screen.
+func tile_under_ray(from: Vector3, dir: Vector3) -> Vector3i:
+	if absf(dir.y) < 0.0001:
+		return Vector3i(0, -9999, 0)  # ray parallel to the decks; nothing to hit
+	var levels := _floors.keys()
+	levels.sort()
+	levels.reverse()
+	for level: int in levels:
+		var distance := (level * FLOOR_HEIGHT - from.y) / dir.y
+		if distance <= 0.0:
+			continue  # plane is behind the camera
+		var point := from + dir * distance
+		var tile := Vector3i(roundi(point.x / TILE_SIZE), level, roundi(point.z / TILE_SIZE))
+		if tiles.has(tile):
+			return tile
+	return Vector3i(0, -9999, 0)
 
 
 func get_tile(pos: Vector3i) -> GridTileData:
@@ -119,17 +163,24 @@ func neighbors(pos: Vector3i) -> Array[Vector3i]:
 	return out
 
 
-func get_reachable_tiles(from: Vector3i, max_tiles: int) -> Array[Vector3i]:
-	# BFS, uniform cost 1, excluding impassable/occupied tiles. Sec 4.0.
-	#
-	# A diagonal costs the same one tile a cardinal does, which is what keeps
-	# this a BFS rather than a Dijkstra: the moment a diagonal costs 1.5 the
-	# frontier stops popping in non-decreasing depth and every caller that treats
-	# `max_tiles` as a whole number of AP-worth of movement needs rewriting too.
-	# The price is the familiar one — N tiles reaches a SQUARE of side 2N+1, so
-	# the diagonals reach ~1.41x further in world distance than the cardinals.
-	# `UnitStats.move_run` is sized against that square.
-	var reached: Array[Vector3i] = []
+## Every tile within `max_tiles` steps, mapped to the number of steps it takes to
+## get there. Excludes `from` itself.
+##
+## BFS, uniform cost 1, excluding impassable/occupied tiles. Sec 4.0.
+##
+# A diagonal costs the same one tile a cardinal does, which is what keeps
+# this a BFS rather than a Dijkstra: the moment a diagonal costs 1.5 the
+# frontier stops popping in non-decreasing depth and every caller that treats
+# `max_tiles` as a whole number of AP-worth of movement needs rewriting too.
+# The price is the familiar one — N tiles reaches a SQUARE of side 2N+1, so
+# the diagonals reach ~1.41x further in world distance than the cardinals.
+#
+# The DEPTHS are what the movement preview needs, not just the set: movement is
+# 1 AP per tile now (Unit.MOVE_AP_PER_TILE), so a tile's depth here IS its price,
+# and the overlay can price every candidate destination without pathing to each
+# one separately.
+func reachable_costs(from: Vector3i, max_tiles: int) -> Dictionary:
+	var costs := {}
 	var visited := {from: 0}
 	var frontier: Array[Vector3i] = [from]
 	while not frontier.is_empty():
@@ -141,8 +192,15 @@ func get_reachable_tiles(from: Vector3i, max_tiles: int) -> Array[Vector3i]:
 			if visited.has(n) or not is_free(n):
 				continue
 			visited[n] = depth + 1
-			reached.append(n)
+			costs[n] = depth + 1
 			frontier.append(n)
+	return costs
+
+
+func get_reachable_tiles(from: Vector3i, max_tiles: int) -> Array[Vector3i]:
+	var reached: Array[Vector3i] = []
+	for tile: Vector3i in reachable_costs(from, max_tiles):
+		reached.append(tile)
 	return reached
 
 

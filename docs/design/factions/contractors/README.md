@@ -49,7 +49,8 @@ gear, mismatched wear patterns, no unit insignia (see
   system and how each stat resolves.
 - [`design-choices/initiative-pool.md`](design-choices/initiative-pool.md) — how contractors
   participate in the shared draw pool, and why their Initiative is visible.
-- [`design-choices/action-economy.md`](design-choices/action-economy.md) — the 2 AP action table
+- [`design-choices/ap-and-stat-baselines.md`](design-choices/ap-and-stat-baselines.md) — the granular AP pool, action costs, and the HP/Initiative baselines
+- [`design-choices/action-economy.md`](design-choices/action-economy.md) — the superseded 2 AP action table, kept for its reasoning
   and ammo/reload tradeoffs.
 - [`design-choices/injury-and-recovery.md`](design-choices/injury-and-recovery.md) — the
   no-permadeath model and its open economy questions.

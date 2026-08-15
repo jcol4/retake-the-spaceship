@@ -4,7 +4,7 @@
 
 | Base Accuracy | Damage | Mag Size | Reserve | Total | Optimal Range | Beyond it |
 |---|---|---|---|---|---|---|
-| 20 | 22 | 6 | 15 loose shells | 21 | 3 tiles | −15% accuracy per tile |
+| 20 | 14 | 6 | 15 loose shells | 21 | 3 tiles | −15% accuracy per tile |
 
 ## Role
 

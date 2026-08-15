@@ -20,11 +20,11 @@ LMG or a Heavy Weapons soldier running an SMG are legal loadouts, just off-arche
 
 | Weapon | Base Accuracy | Damage | Mag Size | Reserve | Total | Optimal Range | Beyond it | Move Speed | Suggested class |
 |---|---|---|---|---|---|---|---|---|---|
-| [Assault Rifle](assault-rifle.md) | 30 | 12 | 3 | 15 (5 mags) | 18 | — | — | 100% | [Assault](../units/assault/) (baseline) |
-| [Shotgun](shotgun.md) | 20 | 22 | 6 | 15 (loose shells) | 21 | 3 tiles | −15%/tile | 100% | [Assault](../units/assault/) (aggressive) |
-| [SMG](smg.md) | 35 | 8 | 4 | 20 (5 mags) | 24 | 6 tiles | −6%/tile | 100% | [Support](../units/support/) |
-| [LMG](lmg.md) | 28 | 14 | 6 | 12 (2 mags) | 18 | — | — | 75% | [Heavy Weapons](../units/heavy-weapons/) |
-| [Battle Rifle](battle-rifle.md) | 35 | 16 | 3 | 12 (4 mags) | 15 | — | — | 100% | [Sniper](../units/sniper/) |
+| [Assault Rifle](assault-rifle.md) | 30 | 8 | 3 | 15 (5 mags) | 18 | — | — | 100% | [Assault](../units/assault/) (baseline) |
+| [Shotgun](shotgun.md) | 20 | 14 | 6 | 15 (loose shells) | 21 | 3 tiles | −15%/tile | 100% | [Assault](../units/assault/) (aggressive) |
+| [SMG](smg.md) | 35 | 6 | 4 | 20 (5 mags) | 24 | 6 tiles | −6%/tile | 100% | [Support](../units/support/) |
+| [LMG](lmg.md) | 28 | 9 | 6 | 12 (2 mags) | 18 | — | — | 75% | [Heavy Weapons](../units/heavy-weapons/) |
+| [Battle Rifle](battle-rifle.md) | 35 | 10 | 3 | 12 (4 mags) | 15 | — | — | 100% | [Sniper](../units/sniper/) |
 
 Three new per-weapon axes beyond base accuracy/damage, all added during stat tuning to give the
 five weapons a distinct *feel* rather than just different numbers on the same three stats:

@@ -1,0 +1,44 @@
+[gd_scene format=3 uid="uid://clictorunit01"]
+
+[ext_resource type="Script" path="res://scripts/lictor_unit.gd" id="1_script"]
+[ext_resource type="Script" path="res://scripts/unit_visual.gd" id="2_visual"]
+
+[sub_resource type="CapsuleShape3D" id="capsule_shape"]
+radius = 0.45
+height = 2.0
+
+[node name="LictorUnit" type="Node3D" groups=["enemy_units", "units"]]
+script = ExtResource("1_script")
+; Slow. It is a gun platform — it repositions to keep line of sight on the crate
+; it is dismantling, and does not otherwise want to be anywhere else.
+move_speed = 2.0
+; Thin for this roster, and that IS the counterplay. A unit that removes the
+; player's cover has to be answerable, and the answer is shooting it before it
+; finishes — which only works if the plate is not Sagittarii-thick.
+; Rescaled with weapon damage (~0.65x) rather than with HP, like the rest of the
+; roster's plate.
+armor_value = 2
+salvage_value = 5
+; Triple weapon damage against a cover edge it deliberately fires on. Six damage
+; a shot is nothing to a unit; at x3 into a crate it is a tier per burst.
+cover_damage_multiplier = 3.0
+
+[node name="Visual" type="Node3D" parent="."]
+script = ExtResource("2_visual")
+layers = Array[StringName]([&"body", &"head", &"status"])
+variant = &"sagittarii"
+placeholder_style = &"machine"
+has_light = false
+
+[node name="Body" type="StaticBody3D" parent="."]
+collision_layer = 2
+collision_mask = 0
+
+[node name="Collision" type="CollisionShape3D" parent="Body"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+shape = SubResource("capsule_shape")
+
+[node name="NameLabel" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.5, 0)
+billboard = 1
+text = "Lictor"

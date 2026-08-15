@@ -62,7 +62,10 @@ var _turns_without_contact: int = 0
 
 
 func _init() -> void:
-	is_player_controlled = false
+	# The alien tier's own side. Subclasses on another faction override this in
+	# their own `_init` — GDScript runs the base constructor first, so setting it
+	# here is a default rather than a decision imposed on them (CerberusUnit).
+	faction = Faction.Id.ALIENS
 	has_flashlight = false  # aliens rely on their own senses, not a rig light
 
 
@@ -73,6 +76,22 @@ func _ready() -> void:
 	# crosses, rather than only what it happens to end up pointing at.
 	LightingManager.lighting_changed.connect(_on_lighting_changed)
 	_refresh_label()
+
+
+func report_action(text: String) -> void:
+	action_logged.emit(text)
+
+
+## Which compartment this unit is standing in right now, or -1 when the deck has
+## no room graph or the unit is outside it.
+##
+## Asked PER CALL rather than cached at spawn, unlike the robots' `security_zone`.
+## A machine holds a post and answers to one place for the whole mission; an
+## alien wanders, and an alert it raises belongs to the room it is in when it
+## raises it.
+func _room_here() -> int:
+	var map := get_tree().get_first_node_in_group("map")
+	return map.room_at(grid_pos) if map else -1
 
 
 func take_turn() -> void:
@@ -90,7 +109,7 @@ func take_turn() -> void:
 			pass  # UNAWARE rests at its nest (Sec 11.1) — drawn, but does nothing
 
 
-## Chance to spend the full 2 AP on an Aimed Shot instead of a quick 1 AP Shoot,
+## Chance to pay the Aimed Shot premium instead of taking a cheaper snap shot,
 ## when there's AP to spare for it. Keeps aliens from *always* eating the AP
 ## cost just because they can — a wounded/AP-starved one still snap-shoots.
 const AIMED_SHOT_CHANCE := 0.6
@@ -101,31 +120,80 @@ const LEG_TARGET_CHANCE := 0.4  # vs. a quarry still able to disengage
 
 func _combat_turn() -> void:
 	# The ranged loop. Overridden wholesale by melee types (SwarmUnit).
+	var shoot_cost := action_cost(UnitStats.Action.SHOOT)
+	var reload_cost := action_cost(UnitStats.Action.RELOAD)
 	while ap > 0 and not is_downed:
 		var quarry := acquire_target()
 		if quarry == null:
 			return
 		var in_range := GridManager.chebyshev_dist(grid_pos, quarry.grid_pos) <= ATTACK_RANGE
 		if in_range and GridManager.has_line_of_sight(self, quarry) and can_shoot():
-			if ap >= 2 and randf() < AIMED_SHOT_CHANCE:
-				await _take_aimed_shot(quarry)
-			else:
-				spend_ap(1)
-				var result: Combat.ShotResult = await fire_at(quarry, Combat.ShotAction.SHOOT)
-				action_logged.emit("%s fired at %s (%d%% acc): %s" % [stats.display_name, quarry.stats.display_name, result.accuracy, Combat.describe(result)])
+			# Affordability is checked BEFORE the coin flip and the loop bails when
+			# nothing is affordable, which the old flat 1/2 AP costs never needed:
+			# a snap shot can now cost more than a whole small pool, and without the
+			# bail an alien that cannot pay for anything spins here forever.
+			if not await _take_best_shot(quarry, shoot_cost):
+				ap = 0
+				return
 			if quarry.is_downed:
 				action_logged.emit("%s is DOWN!" % quarry.stats.display_name)
 		elif not can_shoot():
-			spend_ap(1)
+			if ap < reload_cost:
+				ap = 0
+				return
+			spend_ap(reload_cost)
 			await do_reload()
 			action_logged.emit("%s reloaded" % stats.display_name)
 		else:
-			await _move_toward(quarry)
+			# Holds back the price of a snap shot where doing so still leaves a
+			# step to take. Movement used to be a flat 1 AP whatever the distance,
+			# so closing and firing in one activation was automatic; at 1 AP per
+			# TILE an alien that walks its whole pool can never shoot, and the
+			# ranged tier would quietly stop being a ranged tier.
+			await _move_toward(quarry, shoot_cost)
 
 
-func _take_aimed_shot(quarry: Unit) -> void:
-	var part := _choose_aimed_part(quarry)
-	spend_ap(2)
+## Fires the best shot this unit can currently afford at `quarry`. Returns false
+## when it can afford none, which is the caller's signal to end the activation.
+## Chance a unit that CAN suppress chooses to, over shooting. Low, because the
+## base AI has no squad to exploit the pin — suppression pays off when an ally
+## uses the window, and that reasoning belongs to the GOAP planner, not here.
+## Non-zero so the mechanic is exercised by the ordinary roster rather than only
+## by the factions that plan.
+const SUPPRESS_CHANCE := 0.2
+
+
+func _take_best_shot(quarry: Unit, shoot_cost: int) -> bool:
+	var suppress_cost := action_cost(UnitStats.Action.SUPPRESS)
+	# Never re-pins a unit already pinned by somebody: the accuracy and AP
+	# penalties do not stack, so the second burst buys nothing at all.
+	if ap >= suppress_cost and can_suppress() and not quarry.is_suppressed() \
+			and randf() < SUPPRESS_CHANCE:
+		await do_suppress(quarry)
+		action_logged.emit("%s lays down suppressing fire on %s" % [
+			stats.display_name, quarry.stats.display_name])
+		return true
+	# Qualified on the CHEAPEST zone, so the roll happens on the same terms the
+	# player's Aimed Shot button is gated by.
+	if ap >= min_aimed_shot_cost() and randf() < AIMED_SHOT_CHANCE:
+		var part := _choose_aimed_part(quarry)
+		# The zone it picked may cost more than the one it qualified on — Sec 4.3a
+		# prices the head two AP above the torso. Fall back to the torso rather
+		# than abandoning an aimed shot it has already committed to.
+		if ap < aimed_shot_cost(part):
+			part = Combat.BodyPart.TORSO
+		await _take_aimed_shot(quarry, part)
+		return true
+	if ap < shoot_cost:
+		return false
+	spend_ap(shoot_cost)
+	var result: Combat.ShotResult = await fire_at(quarry, Combat.ShotAction.SHOOT)
+	action_logged.emit("%s fired at %s (%d%% acc): %s" % [stats.display_name, quarry.stats.display_name, result.accuracy, Combat.describe(result)])
+	return true
+
+
+func _take_aimed_shot(quarry: Unit, part: int) -> void:
+	spend_ap(aimed_shot_cost(part))
 	var result: Combat.ShotResult = await fire_at(quarry, Combat.ShotAction.AIMED_SHOT, part)
 	action_logged.emit("%s aims at %s's %s (%d%% acc): %s" % [
 		stats.display_name, quarry.stats.display_name, Combat.body_part_name(part), result.accuracy, Combat.describe(result),
@@ -168,8 +236,13 @@ func _investigate() -> void:
 		if path.is_empty():
 			_give_up()  # blocked, or something is standing on the spot
 			return
-		spend_ap(1)
-		await move_along(path.slice(0, mini(_move_budget(), path.size())))
+		var budget := _move_budget()
+		if budget < 1:
+			ap = 0  # cannot afford a single tile — stop rather than spin
+			return
+		var walked := path.slice(0, mini(budget, path.size()))
+		spend_ap(move_cost_for(walked.size()))
+		await move_along(walked)
 		action_logged.emit("%s moves to investigate %s" % [stats.display_name, grid_pos])
 		_look_for_targets()
 		if alert_state == AlertState.COMBAT:
@@ -211,10 +284,11 @@ func _look_for_targets() -> void:
 		return
 	var best: Unit = null
 	var best_dist := 999999
-	for node in get_tree().get_nodes_in_group("player_units"):
-		var unit := node as Unit
-		if unit == null:
-			continue
+	# Everything this unit would engage, rather than the `player_units` group it
+	# used to scan. Identical today — aliens and robots are hostile only to the
+	# contractors — but it is now a question about sides instead of an assumption
+	# that the player is the only other side there is.
+	for unit in hostiles():
 		var d := GridManager.chebyshev_dist(grid_pos, unit.grid_pos)
 		if d >= best_dist or not _can_see(unit):
 			continue
@@ -247,11 +321,40 @@ func _on_lighting_changed() -> void:
 	var holder := LightingManager.flashlight_source(grid_pos)
 	if holder == null or holder.is_downed:
 		return
+	# The beam has to belong to somebody this unit would actually fight.
+	#
+	# Free for the aliens, who carry no light at all (`has_flashlight = false`
+	# below), and that is exactly why the check was missing: for as long as every
+	# unit with this state machine was unlit, the only beam that could ever land
+	# on one belonged to the player. The rival mercs broke that — they are human,
+	# they carry torches, and their own torch lights their own tile. Without this
+	# guard a merc reads its own beam as an intruder's, enters Combat against
+	# itself and opens fire on itself; a squadmate's beam does the same.
+	if not is_hostile_to(holder):
+		return
 	if lit >= beam_aggro_threshold:
 		_enter_combat(holder, "%s is caught in %s's light!" % [stats.display_name, holder.stats.display_name])
 	elif alert_state == AlertState.UNAWARE:
 		rouse(holder.grid_pos)
 		action_logged.emit("%s stirs — something moved at the edge of the light" % stats.display_name)
+
+
+## Sound (Sec 5.4) — the one detection channel every faction shares, and the only
+## one that needs neither light nor line of sight. Deliberately identical in
+## shape to `CerberusUnit.hear_noise`, which used to be the only implementation:
+## a robot hears gunfire because its microphones do not care about the dark, and
+## an alien hears it for the more obvious reason.
+##
+## Sited on `EnemyUnit` rather than on the robot subclass so that every unit with
+## an awareness state machine gets it — which is what makes "stay quiet" a plan
+## against the whole board rather than against one faction.
+func hear_noise(at: Vector3i) -> void:
+	if is_downed or alert_state == AlertState.COMBAT:
+		return
+	var was := alert_state
+	rouse(at)
+	if alert_state != was:
+		action_logged.emit("%s hears something at %s" % [stats.display_name, at])
 
 
 func rouse(at: Vector3i) -> void:
@@ -284,6 +387,16 @@ func _lose_target() -> void:
 	_turns_without_contact = 0
 
 
+## Drops back to UNAWARE without the "finds nothing" narration. Used by the
+## hivemind's de-escalation sweep (Sec 6), which settles a whole deck at once —
+## one line per alien would bury the log under a paragraph nobody reads.
+func settle() -> void:
+	if is_downed or alert_state == AlertState.COMBAT:
+		return
+	_has_last_known = false
+	_set_state(AlertState.UNAWARE)
+
+
 func _give_up() -> void:
 	_has_last_known = false
 	_set_state(AlertState.UNAWARE)
@@ -291,16 +404,35 @@ func _give_up() -> void:
 
 
 func _propagate_alert() -> void:
-	# Sec 11.2: alerts are local, never ship-wide. The design scopes them to a
-	# room/nest cluster via the 10.4 room graph, which belongs to the procedural
-	# generator and doesn't exist yet — so this is a radius stopgap. Neighbours
-	# are only roused, never handed the target: they heard something kick off,
-	# they didn't see who.
+	# Sec 11.2: alerts are local, never ship-wide. Neighbours are only roused,
+	# never handed the target: they heard something kick off, they didn't see who.
+	#
+	# SCOPED BY COMPARTMENT, not by radius. The design always said room/nest
+	# cluster; the radius was a stopgap from when the room graph did not exist.
+	# It does now (`MapData.compute_rooms`, read through `MapBuilder.room_at`),
+	# and the difference is not cosmetic — a radius leaks straight through
+	# bulkheads, so "isolating rooms via doors is a valid, intentional player
+	# strategy" was not actually true while an alert could pass through a wall.
+	#
+	# Falls back to the radius when either unit is in no compartment at all,
+	# which is the honest answer for a unit standing somewhere the graph does not
+	# describe rather than a silent failure to alert anybody.
+	var here := _room_here()
 	for node in get_tree().get_nodes_in_group("enemy_units"):
 		var other := node as EnemyUnit
 		if other == null or other == self:
 			continue
-		if GridManager.chebyshev_dist(grid_pos, other.grid_pos) <= alert_propagation_range:
+		# Same side only. The `enemy_units` group holds the security robots too,
+		# so without this an alien's scream rouses a machine that is not on its
+		# side — invisible while everything hostile was lumped together as "not
+		# the player", and plainly wrong once the factions have names.
+		if other.faction != faction:
+			continue
+		var there := other._room_here()
+		var reached := here >= 0 and there >= 0 and here == there
+		if not reached and (here < 0 or there < 0):
+			reached = GridManager.chebyshev_dist(grid_pos, other.grid_pos) <= alert_propagation_range
+		if reached:
 			other.rouse(last_known_pos)
 
 
@@ -338,17 +470,27 @@ func _refresh_label() -> void:
 	_name_label.modulate = STATE_COLOR[alert_state]
 
 
-func _move_budget() -> int:
-	# Tiles walked per 1 AP move. The per-type override point (Sec 11.8): Fodder
-	# crawls at a fixed rate well under what its Fitness would otherwise allow.
-	return move_run()
+## Tiles this unit walks in one move step, and the per-type override point (Sec
+## 11.8). No longer "tiles per 1 AP": movement is 1 AP per tile for everyone
+## (rework doc Sec 4.1), so pace is a property of the AP POOL — a type that
+## should crawl is given a small Fitness value (Sec 4.5), not a private rate.
+##
+## `reserve_ap` is what the caller wants left over for the action it intends to
+## take afterwards. Held back only when doing so still leaves at least one tile
+## to walk; a unit that cannot both move and act spends everything on moving,
+## which is the right answer for something out of range of anything.
+func _move_budget(reserve_ap: int = 0) -> int:
+	var spendable := ap - reserve_ap
+	if spendable < move_ap_per_tile():
+		spendable = ap
+	return spendable / move_ap_per_tile()
 
 
-func _move_toward(unit: Unit) -> void:
-	await _move_to_tile(unit.grid_pos, true)
+func _move_toward(unit: Unit, reserve_ap: int = 0) -> void:
+	await _move_to_tile(unit.grid_pos, true, reserve_ap)
 
 
-func _move_to_tile(dest: Vector3i, stop_short: bool) -> void:
+func _move_to_tile(dest: Vector3i, stop_short: bool, reserve_ap: int = 0) -> void:
 	# Path all the way to `dest` (allowed occupied), then walk the first
 	# _move_budget() steps of it — routes around walls instead of greedy
 	# straight-line chasing. `stop_short` drops the final tile, for closing on a
@@ -356,10 +498,11 @@ func _move_to_tile(dest: Vector3i, stop_short: bool) -> void:
 	var full_path := GridManager.find_path(grid_pos, dest, 999, true)
 	if stop_short and not full_path.is_empty():
 		full_path.resize(full_path.size() - 1)  # never step onto the target itself
-	if full_path.is_empty():
-		ap = 0  # adjacent already or fully blocked — stop burning AP
+	var budget := _move_budget(reserve_ap)
+	if full_path.is_empty() or budget < 1:
+		ap = 0  # adjacent already, fully blocked, or a tile is unaffordable
 		return
-	var path := full_path.slice(0, mini(_move_budget(), full_path.size()))
-	spend_ap(1)
+	var path := full_path.slice(0, mini(budget, full_path.size()))
+	spend_ap(move_cost_for(path.size()))
 	await move_along(path)
 	action_logged.emit("%s moved to %s" % [stats.display_name, path[-1]])

@@ -1,0 +1,59 @@
+[gd_scene format=3 uid="uid://d2c4kf5k12x41"]
+
+[ext_resource type="Script" path="res://scripts/brawler_unit.gd" id="1_script"]
+[ext_resource type="Script" path="res://scripts/unit_visual.gd" id="2_visual"]
+
+; Taller and broader than the swarm's 1.8 x 0.42: the brawler is rendered from a
+; 2.05 m model, and a body volume cut to the smaller figure would leave its head
+; outside its own collider.
+[sub_resource type="CapsuleShape3D" id="capsule_shape"]
+radius = 0.45
+height = 2.05
+
+[node name="BrawlerUnit" type="Node3D" groups=["enemy_units", "units"]]
+script = ExtResource("1_script")
+
+; ONE gait, and it is the walk — see Unit.walks_only. The brawler is animated to
+; a single 32-frame shamble and has no sprint being held in reserve, so the
+; default "run unless it is a single tile" rule has nothing to choose between.
+walks_only = true
+
+; 0.9 m/s, and it is NOT a free dial. The walk cycle is drawn covering ~1.43 m of
+; ground per cycle and build_sprite_frames.gd VARIANT_LOOP_TIME plays that cycle
+; over 1.6 s; 1.43 / 1.6 is this number, so the feet stay planted where they are
+; drawn. Change it and the same edit is owed to that table, or the brawler
+; moonwalks. A fifth of the soldier's 4.5 and below even his 1.02 m/s walk: this
+; thing is outrunnable in the open, on purpose (Sec 11.3).
+move_speed = 0.9
+
+; ONE layer, for the swarm's reasons: no weapon (there is no ranged attack to
+; hold one for), no helmet, and the head is not split out — the figure is
+; rendered flat into `body`, and an empty `head` layer would fall back to
+; placeholder art and paint a disc over its face.
+;
+; canvas_height mirrors render_sprites.py CANVAS_HEIGHT; foot_anchor is MEASURED
+; from the rendered PNGs (the lowest opaque row across every pose), not derived
+; from it. See render_sprites.py FLOOR_MARGIN for why the two are different
+; numbers and what anchoring on the world origin costs.
+[node name="Visual" type="Node3D" parent="."]
+script = ExtResource("2_visual")
+layers = Array[StringName]([&"body"])
+variant = &"brawler"
+canvas_height = 2.56
+foot_anchor = Vector2(0.5, 0.95420799)
+has_light = false
+
+; Layer 2, mask 0 — a body volume rather than a gameplay surface, matching the
+; swarm: LOS and lighting occlusion both raycast layer 1 map geometry only.
+[node name="Body" type="StaticBody3D" parent="."]
+collision_layer = 2
+collision_mask = 0
+
+[node name="Collision" type="CollisionShape3D" parent="Body"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.025, 0)
+shape = SubResource("capsule_shape")
+
+[node name="NameLabel" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.45, 0)
+billboard = 1
+text = "Brawler"

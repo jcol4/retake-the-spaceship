@@ -2,7 +2,7 @@
 
 | Base Accuracy | Damage | Mag Size | Reserve | Total | Optimal Range | Beyond it |
 |---|---|---|---|---|---|---|
-| 35 | 8 | 4 | 20 (5 mags) | 24 | 6 tiles | −6% accuracy per tile |
+| 35 | 6 | 4 | 20 (5 mags) | 24 | 6 tiles | −6% accuracy per tile |
 
 ## Role
 

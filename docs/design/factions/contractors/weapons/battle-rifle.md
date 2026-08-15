@@ -4,7 +4,7 @@
 
 | Base Accuracy | Damage | Mag Size | Reserve | Total |
 |---|---|---|---|---|
-| 35 | 16 | 3 | 12 (4 mags) | 15 |
+| 35 | 10 | 3 | 12 (4 mags) | 15 |
 
 ## Role
 

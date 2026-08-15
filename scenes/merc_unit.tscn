@@ -1,0 +1,52 @@
+[gd_scene format=3 uid="uid://cmercunit01"]
+
+[ext_resource type="Script" path="res://scripts/merc_unit.gd" id="1_script"]
+[ext_resource type="Script" path="res://scripts/unit_visual.gd" id="2_visual"]
+
+[sub_resource type="CapsuleShape3D" id="capsule_shape"]
+radius = 0.35
+height = 1.8
+
+[node name="MercUnit" type="Node3D" groups=["enemy_units", "units"]]
+script = ExtResource("1_script")
+
+; The `enemy_units` group is NOT what makes this unit hostile — `faction` is (see
+; Faction). The group is kept because it is still what alert propagation walks,
+; and dropping it would leave a merc squad unable to rouse itself. That coupling
+; is a known wart, flagged in EnemyUnit._propagate_alert and owned by the
+; zone-scoped propagation pass.
+
+; Sprite and visual config are deliberately the PLAYER's, because the player's
+; rendered art is already called `merc` — the contractor sprite set was authored
+; under that name long before this faction existed. So the rival crew costs no
+; new art: same variant, same layer, same measured canvas/anchor numbers, which
+; are copied from player_unit.tscn and must be kept in step with it (they are
+; measured off the rendered PNGs, not derived — see render_sprites.py).
+;
+; What separates the two on screen is `faction_tint`, multiplied into the tile
+; light rather than replacing it, so a merc in the dark still reads as dark. The
+; warm rust reads at XCOM camera distance and collides with nothing: the security
+; robots' status lights are the only other tinted thing on the field, and those
+; are green/amber/red on a self-lit layer.
+[node name="Visual" type="Node3D" parent="."]
+script = ExtResource("2_visual")
+layers = Array[StringName]([&"body"])
+variant = &"merc"
+canvas_height = 2.56
+foot_anchor = Vector2(0.5, 0.96484375)
+has_light = true
+faction_tint = Color(1, 0.66, 0.48, 1)
+
+; Layer 2, mask 0 — a body volume for mouse picking, not a gameplay surface.
+[node name="Body" type="StaticBody3D" parent="."]
+collision_layer = 2
+collision_mask = 0
+
+[node name="Collision" type="CollisionShape3D" parent="Body"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+shape = SubResource("capsule_shape")
+
+[node name="NameLabel" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.2, 0)
+billboard = 1
+text = "Merc"

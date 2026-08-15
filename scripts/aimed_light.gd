@@ -2,17 +2,17 @@ class_name AimedLight
 extends SpotLight3D
 ## A weapon light that sits on the muzzle but points where the UNIT faces.
 ##
-## Those are two different directions once the animation set is mocap. The
-## carry poses hold the rifle across the body — measured at 85 degrees off
-## forward in idle and 80 in run — so a light rigidly parented to the muzzle
-## sprays sideways while the unit is plainly looking ahead.
+## Those are two different directions whenever the carry pose holds the rifle
+## across the body, which every pose in the set does — it was measured at 85
+## degrees off forward in idle and 80 in run back when the poses were mocap, and
+## the drawn art inherited the same carry. A light rigidly parented to the muzzle
+## therefore sprays sideways while the unit is plainly looking ahead.
 ##
 ## That is not merely ugly. LightingManager computes which tiles a unit lights
 ## from `-unit.global_transform.basis.z` (lighting_manager.gd), i.e. from unit
 ## facing, and those tiles decide which aliens notice the unit. A beam pointing
-## somewhere else makes the screen disagree with the rules — the exact thing
-## character_base.tscn's original comment set out to guarantee ("what you see
-## lit is what the unit can actually see by").
+## somewhere else makes the screen disagree with the rules, and the rule this
+## exists to hold is that what you see lit is what the unit can actually see by.
 ##
 ## So: position follows the weapon, orientation follows the unit. The beam still
 ## visibly leaves the barrel, and it always agrees with the simulation.

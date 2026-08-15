@@ -20,18 +20,26 @@ enum Terrain {
 	PLATFORM,  # solid block; its *top* is the walkable tile, one deck up
 }
 enum Cover { NONE, LIGHT, HEAVY }
-enum Fixture { NONE, OVERHEAD, MONITOR, FLICKER }
+## The first three are light sources; ALARM is not — it emits no light and is
+## grouped here only because it is, like them, a thing bolted to a tile rather
+## than a property of the tile itself. See MapBuilder._build_cell, which routes
+## it away from `_add_light`.
+enum Fixture { NONE, OVERHEAD, MONITOR, FLICKER, ALARM }
 ## Spawn markers. The four Cerberus entries are per-TYPE rather than one shared
 ## ROBOT kind, unlike the aliens' ENEMY/SWARM split: a security roster is placed
 ## deliberately — this doorway gets a sentry, that hall gets the heavy — where an
 ## infestation is placed in bulk. Encoding the type in the map is what lets a
 ## level author express that at all.
-enum Spawn { NONE, PLAYER, ENEMY, SWARM, AUXILIUM, SAGITTARII, PROCTOR, SECURUS }
+enum Spawn {
+	NONE, PLAYER, ENEMY, SWARM, BRAWLER,
+	AUXILIUM, SAGITTARII, PROCTOR, SECURUS, LICTOR,
+	MERC, HUNTER,
+}
 
 ## The Cerberus half of `Spawn`, in roster order. Iterated by MapBuilder and by
 ## the spawner in main.gd so adding a fifth robot is one entry here plus a glyph.
 const CERBERUS_SPAWNS: Array[int] = [
-	Spawn.AUXILIUM, Spawn.SAGITTARII, Spawn.PROCTOR, Spawn.SECURUS,
+	Spawn.AUXILIUM, Spawn.SAGITTARII, Spawn.PROCTOR, Spawn.SECURUS, Spawn.LICTOR,
 ]
 
 ## Which boundary of a tile an edge is. Cover lives on these rather than on the

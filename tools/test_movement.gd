@@ -93,7 +93,7 @@ func _check_diagonal_cost() -> void:
 func _check_reachable_is_square() -> void:
 	_open_floor()
 	# N tiles reaches a SQUARE of side 2N+1, less the tile stood on. The diamond
-	# that four-way movement reached is what `UnitStats.move_run` was scaled up
+	# that four-way movement reached is what the old move allowance was scaled up
 	# against, so this is the check that says the scaling can come back down.
 	var reached: Array = _grid.get_reachable_tiles(Vector3i.ZERO, 2)
 	_check(reached.size() == 24, "2 tiles reaches a 5x5 square minus self (got %d)"

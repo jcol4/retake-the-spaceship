@@ -32,6 +32,9 @@ var data: MapData
 var player_spawns: Array[Vector3i] = []
 var enemy_spawns: Array[Vector3i] = []
 var swarm_spawns: Array[Vector3i] = []
+var brawler_spawns: Array[Vector3i] = []
+var merc_spawns: Array[Vector3i] = []
+var hunter_spawns: Array[Vector3i] = []
 ## MapData.Spawn kind -> Array[Vector3i], for the four security-robot types. One
 ## dictionary rather than four named arrays because the roster is expected to
 ## change and the spawner iterates it either way.
@@ -65,6 +68,29 @@ var _cover_heavy_mat: StandardMaterial3D
 
 func build(map_data: MapData) -> void:
 	data = map_data
+	# Findable by units that need the compartment graph at runtime rather than at
+	# spawn. The robots are handed a zone once and hold a post; the aliens roam,
+	# so they have to ask which room they are standing in NOW — see
+	# EnemyUnit._propagate_alert.
+	if not is_in_group("map"):
+		add_to_group("map")
+	# Free whatever a PREVIOUS build left behind. Everything under this node is
+	# generated — walls, floors, cover props, lights — so clearing the lot is the
+	# whole cleanup.
+	#
+	# Its absence was a real bug with a nasty signature: `GridManager.clear()`
+	# below wipes the logical grid, so a rebuilt deck LOOKED correct in every
+	# tile query while the old deck's collision bodies were still physically in
+	# the scene. Raycasts — line of sight, lighting occlusion — kept hitting
+	# walls from a map that no longer existed. It cost an afternoon: a stale wall
+	# from a 20x14 deck sat inside a 40x26 one and read convincingly as "heavy
+	# cover blocks line of sight", which is not true and never was.
+	#
+	# Harmless while `build` was called exactly once per session. Not harmless
+	# for a mission restart, a deck reload, or a test that stages a second map.
+	for child in get_children():
+		remove_child(child)
+		child.queue_free()
 	_make_materials()
 	_wall_meshes.clear()
 	_occlusion_step = Vector3i.ZERO  # forces a recompute against the new layout
@@ -87,6 +113,9 @@ func build(map_data: MapData) -> void:
 	player_spawns = data.spawns(MapData.Spawn.PLAYER)
 	enemy_spawns = data.spawns(MapData.Spawn.ENEMY)
 	swarm_spawns = data.spawns(MapData.Spawn.SWARM)
+	brawler_spawns = data.spawns(MapData.Spawn.BRAWLER)
+	merc_spawns = data.spawns(MapData.Spawn.MERC)
+	hunter_spawns = data.spawns(MapData.Spawn.HUNTER)
 	cerberus_spawns.clear()
 	for kind: int in MapData.CERBERUS_SPAWNS:
 		cerberus_spawns[kind] = data.spawns(kind)
@@ -109,7 +138,13 @@ func _build_cell(pos: Vector3i, cell: MapData.Cell) -> void:
 			return
 	GridManager.add_tile(pos, world)
 	_add_floor_quad(world, _stair_mat if cell.stair else _floor_mat)
-	if cell.fixture != MapData.Fixture.NONE:
+	if cell.fixture == MapData.Fixture.ALARM:
+		# Not a light. Recorded on the tile so `Unit.move_along` can trip it by
+		# walking, which is the only way it ever fires.
+		var t: GridTileData = GridManager.get_tile(pos)
+		if t:
+			t.alarm = true
+	elif cell.fixture != MapData.Fixture.NONE:
 		_add_light(world, cell.fixture)
 
 
@@ -353,6 +388,18 @@ func _revealed_regions() -> Dictionary:
 ## Authored zones are the intended follow-up and need no code here:
 ## `CerberusUnit.security_zone` is exported, so a hand-placed level can already
 ## overwrite whatever this returns.
+## Which COMPARTMENT a tile belongs to, or -1 for none.
+##
+## Distinct from `zone_at` above, and the difference is the whole reason both
+## exist: a security zone is deliberately coarser than a room ("everything behind
+## one checkpoint") because that is the scope a robot network broadcasts across.
+## The aliens' alerts are scoped to a room/nest cluster instead (Sec 11.2), which
+## is tighter — and tighter is the point, because it is what makes shutting a
+## door on a compartment actually contain what is inside it.
+func room_at(grid_pos: Vector3i) -> int:
+	return data.room_index_at(grid_pos) if data != null else -1
+
+
 func zone_at(grid_pos: Vector3i) -> int:
 	if data == null:
 		return SecurityNetwork.NO_ZONE

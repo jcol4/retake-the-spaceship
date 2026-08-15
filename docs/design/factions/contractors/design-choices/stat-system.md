@@ -8,12 +8,18 @@
 A SPECIAL-inspired system, deliberately trimmed to four stats (no Charisma — no dialogue/social
 system exists) and using **percentile values (0–99)** in the style of the original *X-COM*.
 
-| Stat | Governs |
-|---|---|
-| Perception | Ranged accuracy contribution to Shoot, Aimed Shot, and Overwatch; max vision/detection range |
-| Reflexes | Ranged accuracy contribution to Shoot and Overwatch only; contributes to Initiative |
-| Fitness | Max HP; movement range (Run/Sprint) |
-| Luck | Crit chance/severity; reroll/dodge chances |
+| Stat | Major role | Minor roles |
+|---|---|---|
+| Perception | Ranged accuracy for Shoot, Aimed Shot and Overwatch | max vision/detection range |
+| Reflexes | **AP cost discount** on Shoot/Melee/Grenade/Reload/Aimed Shot | Initiative; accuracy for Shoot and Overwatch only |
+| Fitness | **AP pool size** | Max HP |
+| Luck | Crit chance/severity; reroll/dodge chances | — |
+
+> Reflexes' and Fitness' major roles changed on 2026-08-10 — see
+> [`ap-and-stat-baselines.md`](ap-and-stat-baselines.md). Both were previously the reverse of what
+> this table now says: Fitness *was* Max HP and the movement allowance, and Reflexes was 60% of
+> Initiative. The point of the split is that each stat now owns exactly one major lever, so no two
+> compete to be the one that matters.
 
 ## Why Perception and Reflexes are split the way they are
 
@@ -28,14 +34,19 @@ in its Aimed Shot accuracy.
 ## Formulas (from `unit_stats.gd`)
 
 ```
-max_hp = fitness
-move_run = 4 + fitness / 20
-move_sprint = move_run * 2
-initiative = reflexes * 0.6 + class_base_initiative * 0.3 + equipment_initiative * 0.1
+ap_pool     = floor(6 + 0.075 * fitness)
+action_cost = max(1, ceil(base_cost - k_reflexes * reflexes))
+max_hp      = floor(base_hp   + 0.08 * fitness + level_bonus_hp)     # base_hp   15 for a soldier
+initiative  = floor(base_init + 0.2 * reflexes + equipment_initiative + level_bonus_init)
 ```
 
-These match GDD Sections 4.6.3 and 4.1 exactly — the code is the current source of truth for the
-tunable constants (0.6/0.3/0.1 weighting, +1 HP/Fitness, +1 tile/20 Fitness).
+Movement is not in this list any more: it costs a flat 1 AP per tile for every unit regardless of
+stats. The level bonus terms are named and currently **zero** — the leveling system is not designed
+yet, and the placeholder exists so the formula shape is right when it is.
+
+These supersede GDD Sections 4.6.3 and 4.1; the code remains the source of truth for the tunable
+constants, and [`ap-and-stat-baselines.md`](ap-and-stat-baselines.md) is where the reasoning and the
+per-action cost table live.
 
 ## Class-based rolling, not free allocation
 

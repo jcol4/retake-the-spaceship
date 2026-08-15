@@ -1,63 +1,39 @@
-[gd_scene load_steps=8 format=3 uid="uid://cmainscene01"]
+[gd_scene format=3 uid="uid://cmainscene01"]
 
-[ext_resource type="Script" path="res://scripts/main.gd" id="1_script"]
+[ext_resource type="Script" uid="uid://c5nu5ksv4ry0m" path="res://scripts/main.gd" id="1_script"]
 [ext_resource type="PackedScene" uid="uid://ctestmap01" path="res://scenes/test_map.tscn" id="2_map"]
 [ext_resource type="PackedScene" uid="uid://ccamerarig01" path="res://scenes/camera_rig.tscn" id="3_camera"]
 [ext_resource type="PackedScene" uid="uid://chudscene01" path="res://scenes/hud.tscn" id="4_hud"]
-[ext_resource type="Script" path="res://scripts/highlight_manager.gd" id="5_highlights"]
-[ext_resource type="Script" path="res://scripts/vfx_manager.gd" id="6_vfx"]
+[ext_resource type="Script" uid="uid://7b0dg1soq6lm" path="res://scripts/highlight_manager.gd" id="5_highlights"]
+[ext_resource type="Script" uid="uid://bqolg2hdutqgi" path="res://scripts/vfx_manager.gd" id="6_vfx"]
 
 [sub_resource type="Environment" id="env"]
 ambient_light_source = 2
 ambient_light_color = Color(0.5, 0.52, 0.58, 1)
-; Ambient governs ONLY whether architecture silhouettes read. Character
-; legibility does not depend on it: sprites are UNSHADED and modulated from
-; their tile's light_value instead, so they stay readable in a corridor this
-; value leaves nearly black. Not the pre-migration 0.015 either — at that value
-; an unlit corridor is literally black, which was survivable under free orbit
-; and is not under a camera the player cannot rotate to re-read the space with.
-; Paired with LightingManager.AMBIENT_FLOOR so the rules agree with the screen.
-;
-; Judged on screen against 0.1 and 0.25 once the ortho camera was in. 0.1 was
-; the plan's proposal and is too dark under it: bulkheads went black, and with
-; the camera no longer free to orbit there is no way left to re-read the space.
-; 0.25 reads as a lit room. 0.2 silhouettes structure while the flashlight
-; beams still carry the scene, which is the whole point of the lighting design.
 ambient_light_energy = 0.2
-volumetric_fog_enabled = true
-volumetric_fog_density = 0.01
-volumetric_fog_albedo = Color(1, 1, 1, 1)
-volumetric_fog_emission = Color(0, 0, 0, 1)
-volumetric_fog_anisotropy = 0.2
-; Bloom on anything already over 1.0 — in practice the flashlight beams, the
-; lens dots and the muzzle flash. Additive rather than the softlight default:
-; on a scene this dark, softlight has almost nothing to work against.
 glow_enabled = true
+glow_levels/2 = 0.7
 glow_intensity = 0.5
-glow_strength = 1.0
-glow_bloom = 0.0
 glow_blend_mode = 0
 glow_hdr_threshold = 1.1
-glow_levels/2 = 0.7
+volumetric_fog_enabled = true
+volumetric_fog_density = 0.01
 
-[node name="Main" type="Node3D"]
+[node name="Main" type="Node3D" unique_id=1240610455]
 script = ExtResource("1_script")
 
-[node name="TestMap" parent="." instance=ExtResource("2_map")]
+[node name="TestMap" parent="." unique_id=269266477 instance=ExtResource("2_map")]
+layout_path = "res://maps/coordination_deck.txt"
 
-[node name="CameraRig" parent="." instance=ExtResource("3_camera")]
+[node name="CameraRig" parent="." unique_id=1417240977 instance=ExtResource("3_camera")]
 
-[node name="HUD" parent="." instance=ExtResource("4_hud")]
+[node name="HUD" parent="." unique_id=2109207381 instance=ExtResource("4_hud")]
 
-[node name="Highlights" type="Node3D" parent="."]
+[node name="Highlights" type="Node3D" parent="." unique_id=1665119541]
 script = ExtResource("5_highlights")
 
-[node name="Vfx" type="Node3D" parent="."]
+[node name="Vfx" type="Node3D" parent="." unique_id=2136032713]
 script = ExtResource("6_vfx")
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1519451508]
 environment = SubResource("env")
-
-; The Sun DirectionalLight3D is deliberately gone. There is no sun inside a
-; hull, and a directional shadow map over an interior costs real frame time for
-; a read that means nothing. Fixtures and flashlights are the only light now.

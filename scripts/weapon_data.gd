@@ -19,6 +19,10 @@ extends Resource
 # specific range penalty" — just the global curve.
 @export var optimal_range: int = 999
 @export var falloff_rate: int = 0
-# Multiplies UnitStats.move_run()/move_sprint() — a heavier weapon can slow its
-# carrier down. 1.0 means no penalty.
-@export var move_multiplier: float = 1.0
+# No move_multiplier. A heavier weapon used to scale the carrier's Run/Sprint
+# tile allowance, and the granular AP rework deleted the allowance — movement is
+# a flat 1 AP per tile for every unit (Unit.MOVE_AP_PER_TILE). Retired rather
+# than re-expressed: the LMG's 0.75 was the only non-1.0 value the table ever
+# held, and the two candidate homes both cost more than it was worth (a pool cut
+# would quietly take shots and reloads away too; a per-tile surcharge would put a
+# weapon in the one place the rework wanted kept stat-free).

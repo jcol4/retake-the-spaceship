@@ -1,10 +1,18 @@
 extends Node3D
-## Pools flat quad meshes for the tile overlays: the two-band move range (blue
-## for 1 AP, yellow for the 2 AP sprint band), the path preview and its AP cost
-## drawn on top, and the shootable-target markers with their hit chances.
+## Pools flat quad meshes for the tile overlays: the move range graded by AP cost,
+## the path preview and its cost drawn on top, and the shootable-target markers
+## with their hit chances.
+##
+## The range used to be TWO bands, blue for a 1 AP run and yellow for the 2 AP
+## sprint, because a move was one of two fixed-price actions. Movement is priced
+## per tile now (Unit.MOVE_AP_PER_TILE), so the cost is continuous and the bands
+## are gone: one set of quads, lerped CHEAP_COLOR -> DEAR_COLOR by what each tile
+## costs against the pool. That keeps the old overlay's at-a-glance "near is
+## cheap, far is dear" read while giving every candidate destination its own
+## price rather than rounding all of them into two buckets.
 
-const RUN_COLOR := Color(0.2, 0.7, 1.0, 0.45)
-const SPRINT_COLOR := Color(1.0, 0.78, 0.1, 0.38)
+const CHEAP_COLOR := Color(0.2, 0.7, 1.0, 0.45)
+const DEAR_COLOR := Color(1.0, 0.78, 0.1, 0.38)
 # Path and destination stay white so they read against either band.
 const PATH_COLOR := Color(1.0, 1.0, 1.0, 0.8)
 const DEST_COLOR := Color(1.0, 1.0, 1.0, 0.9)
@@ -15,8 +23,11 @@ const TARGET_COLOR := Color(1.0, 0.25, 0.2, 0.6)
 const THROW_COLOR := Color(0.3, 0.9, 0.5, 0.30)
 const BLAST_COLOR := Color(0.55, 1.0, 0.75, 0.65)
 const TARGET_TEXT_COLOR := Color(1.0, 0.55, 0.45)
-const RUN_TEXT_COLOR := Color(0.55, 0.85, 1.0)
-const SPRINT_TEXT_COLOR := Color(1.0, 0.85, 0.3)
+const COST_TEXT_COLOR := Color(0.55, 0.85, 1.0)
+## The path label when the move would leave the unit with nothing — the read the
+## player most needs before committing, since a move that empties the pool ends
+## the activation.
+const COST_TEXT_COLOR_SPENT := Color(1.0, 0.85, 0.3)
 const DARK_TINT_STRENGTH := 0.7  # max darken fraction at 0% tile light
 
 # Stacked Y offsets so the layers never z-fight each other or the floor.
@@ -34,8 +45,8 @@ const PATH_SIZE := 0.4
 const DEST_SIZE := 0.8
 const TARGET_SIZE := 1.0
 
-var _run_pool: Array[MeshInstance3D] = []
-var _sprint_pool: Array[MeshInstance3D] = []
+var _range_pool: Array[MeshInstance3D] = []
+var _blast_pool: Array[MeshInstance3D] = []
 var _path_pool: Array[MeshInstance3D] = []
 var _target_pool: Array[MeshInstance3D] = []
 var _target_tiles: Array[Vector3i] = []
@@ -49,24 +60,30 @@ func _ready() -> void:
 	add_to_group("highlights")
 	_dest_quad = _make_quad(DEST_COLOR, DEST_SIZE)
 	_target_label = _make_label(TARGET_TEXT_COLOR)
-	_cost_label = _make_label(RUN_TEXT_COLOR)
+	_cost_label = _make_label(COST_TEXT_COLOR)
 
 
-func show_move_range(run_tiles: Array[Vector3i], sprint_tiles: Array[Vector3i]) -> void:
-	# `sprint_tiles` is the outer band only — the tiles that cost the second AP.
-	# Pass it empty when the unit cannot afford 2 AP.
-	_hide_all(_run_pool)
-	_hide_all(_sprint_pool)
-	for i in run_tiles.size():
-		var quad := _at(_run_pool, i, RUN_COLOR, RANGE_SIZE)
-		quad.global_position = GridManager.grid_to_world(run_tiles[i]) + Vector3(0, RANGE_Y, 0)
-		_tint_by_light(quad, RUN_COLOR, run_tiles[i])
+## `tile_costs` maps each reachable tile to the number of TILES walked to reach
+## it (GridManager.reachable_costs); `ap_per_tile` converts that to AP, and
+## `ap_available` is what the unit has to spend — the two together are what grade
+## the band, so a unit with an injured leg sees its shorter reach priced honestly
+## rather than redrawn at the same colours.
+func show_move_range(tile_costs: Dictionary, ap_per_tile: int, ap_available: int) -> void:
+	_hide_all(_range_pool)
+	_hide_all(_blast_pool)
+	var i := 0
+	for tile: Vector3i in tile_costs:
+		var cost: int = tile_costs[tile] * ap_per_tile
+		# Against the pool, not against the reachable radius: the gradient then
+		# means "fraction of what you have left", which is the question the player
+		# is actually asking, and it stays stable as AP drains within a turn.
+		var dearness := float(cost) / float(maxi(ap_available, 1))
+		var color := CHEAP_COLOR.lerp(DEAR_COLOR, clampf(dearness, 0.0, 1.0))
+		var quad := _at(_range_pool, i, color, RANGE_SIZE)
+		quad.global_position = GridManager.grid_to_world(tile) + Vector3(0, RANGE_Y, 0)
+		_tint_by_light(quad, color, tile)
 		quad.visible = true
-	for i in sprint_tiles.size():
-		var quad := _at(_sprint_pool, i, SPRINT_COLOR, RANGE_SIZE)
-		quad.global_position = GridManager.grid_to_world(sprint_tiles[i]) + Vector3(0, RANGE_Y, 0)
-		_tint_by_light(quad, SPRINT_COLOR, sprint_tiles[i])
-		quad.visible = true
+		i += 1
 
 
 func _tint_by_light(quad: MeshInstance3D, base_color: Color, tile: Vector3i) -> void:
@@ -78,7 +95,7 @@ func _tint_by_light(quad: MeshInstance3D, base_color: Color, tile: Vector3i) -> 
 	mat.albedo_color = base_color.darkened((1.0 - lit) * DARK_TINT_STRENGTH)
 
 
-func show_path(path: Array[Vector3i], ap_cost: int) -> void:
+func show_path(path: Array[Vector3i], ap_cost: int, ap_left: int) -> void:
 	# `path` excludes the unit's own tile (see GridManager.find_path); the last
 	# entry is the destination and gets the bigger marker plus the AP cost.
 	clear_path()
@@ -92,8 +109,11 @@ func show_path(path: Array[Vector3i], ap_cost: int) -> void:
 	_dest_quad.global_position = dest + Vector3(0, DEST_Y, 0)
 	_dest_quad.visible = true
 	if ap_cost > 0:
-		_cost_label.text = "%d AP" % ap_cost
-		_cost_label.modulate = RUN_TEXT_COLOR if ap_cost == 1 else SPRINT_TEXT_COLOR
+		# Sec 4.6: what it costs AND what it leaves. The remainder is the number
+		# the next decision is made against — under a pool, "4 AP" on its own does
+		# not say whether this move still leaves a shot.
+		_cost_label.text = "%d AP  ·  %d left" % [ap_cost, ap_left]
+		_cost_label.modulate = COST_TEXT_COLOR_SPENT if ap_left <= 0 else COST_TEXT_COLOR
 		_cost_label.global_position = dest + Vector3(0, COST_LABEL_Y, 0)
 		_cost_label.visible = true
 
@@ -101,21 +121,21 @@ func show_path(path: Array[Vector3i], ap_cost: int) -> void:
 ## Where a grenade can land, and what the burst would cover if thrown at the tile
 ## under the cursor.
 ##
-## Reuses the two move-range pools rather than adding a third and fourth: only
-## one mode is ever armed at a time, so the pools are free, and the colours are
-## set per call anyway (see `_tint_by_light`, which already rewrites albedo on
-## every reuse). Green rather than the move bands' blue/yellow, because "I can
-## throw here" and "I can walk here" must never be confused at a glance.
+## Reuses the move-range pool rather than adding a third: only one mode is ever
+## armed at a time, so the pool is free, and the colours are set per call anyway
+## (see `_tint_by_light`, which already rewrites albedo on every reuse). Green
+## rather than the move range's blue/amber gradient, because "I can throw here"
+## and "I can walk here" must never be confused at a glance.
 func show_throw_range(tiles: Array[Vector3i], blast: Array[Vector3i] = []) -> void:
-	_hide_all(_run_pool)
-	_hide_all(_sprint_pool)
+	_hide_all(_range_pool)
+	_hide_all(_blast_pool)
 	for i in tiles.size():
-		var quad := _at(_run_pool, i, THROW_COLOR, RANGE_SIZE)
+		var quad := _at(_range_pool, i, THROW_COLOR, RANGE_SIZE)
 		quad.global_position = GridManager.grid_to_world(tiles[i]) + Vector3(0, RANGE_Y, 0)
 		_recolor(quad, THROW_COLOR)
 		quad.visible = true
 	for i in blast.size():
-		var quad := _at(_sprint_pool, i, BLAST_COLOR, RANGE_SIZE)
+		var quad := _at(_blast_pool, i, BLAST_COLOR, RANGE_SIZE)
 		# Above the range band, so the burst footprint reads on top of it.
 		quad.global_position = GridManager.grid_to_world(blast[i]) + Vector3(0, PATH_Y, 0)
 		_recolor(quad, BLAST_COLOR)
@@ -165,8 +185,8 @@ func clear_path() -> void:
 
 
 func clear_highlights() -> void:
-	_hide_all(_run_pool)
-	_hide_all(_sprint_pool)
+	_hide_all(_range_pool)
+	_hide_all(_blast_pool)
 	clear_path()
 	clear_targets()
 

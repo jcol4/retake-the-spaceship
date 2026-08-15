@@ -3,7 +3,7 @@ extends Unit
 ## Input handling while this unit is the active (pool-drawn) unit.
 ## The HUD sets `pending_action`; clicks in the world resolve it.
 
-enum Mode { NONE, MOVE, SHOOT, AIMED_SHOT, FACE, EMP }
+enum Mode { NONE, MOVE, SHOOT, AIMED_SHOT, SUPPRESS, FACE, EMP }
 
 # EMP grenade (security-robots/design-choices/armor-and-destruction.md). The
 # faction's counter-lever, and the reason a robot-heavy mission rewards a
@@ -11,8 +11,9 @@ enum Mode { NONE, MOVE, SHOOT, AIMED_SHOT, FACE, EMP }
 # takes a machine's Armor off for a window and burns its next activation.
 #
 # Implemented as a throw rather than as an equipped weapon because it is neither
-# — it is the Throw Grenade action of Sec 4.2, the first item to actually use it.
-const EMP_AP_COST := 1
+# — it is the Throw Grenade action of Sec 4.2, the first item to actually use it,
+# and it is priced as one (UnitStats.Action.GRENADE) rather than carrying an AP
+# cost of its own.
 const EMP_THROW_RANGE := 6  # tiles, Chebyshev
 const EMP_BLAST_RADIUS := 1  # 3x3, centred on the tile clicked
 const EMP_STUN_TURNS := 2  # roster default; each unit's own resistance scales it
@@ -37,10 +38,11 @@ var mode: Mode = Mode.NONE
 ## every armored unit on a deck — which is what keeps positioning the primary
 ## plan and EMP the thing that rescues it.
 var emp_charges: int = 1
-# Move is one action whose cost depends on how far the destination is: the
-# inner band is a 1 AP run, the outer band a 2 AP sprint (Sec 4.2).
-var _run_tiles: Array[Vector3i] = []
-var _sprint_tiles: Array[Vector3i] = []
+## Destination tile -> tiles walked to reach it. Move is priced per tile now
+## (rework doc Sec 4.1), so this doubles as the AP cost of every candidate
+## destination once multiplied by `move_ap_per_tile()` — there is no Run band and
+## no Sprint band any more, just a single reachable set the unit can afford.
+var _move_costs: Dictionary = {}
 var _hover_tile: Vector3i = NO_TILE
 ## Cached while EMP is armed. Each entry costs a raycast, and the set cannot
 ## change while the mode is up — a unit cannot move without disarming first — so
@@ -52,7 +54,16 @@ var _preview_cost: int = 0
 
 
 func _init() -> void:
-	is_player_controlled = true
+	faction = Faction.Id.CONTRACTORS
+
+
+## Routes GOAP's narration into this unit's own log signal.
+##
+## Only ever used by the headless smoke test, which drives soldiers with the same
+## planner the rival mercs use — see `main.gd._auto_play`. A human-played soldier
+## never reaches this, because a human is the planner.
+func report_action(text: String) -> void:
+	action_logged.emit(text)
 
 
 func _ready() -> void:
@@ -67,22 +78,21 @@ func set_mode(new_mode: Mode) -> void:
 	_hover_tile = NO_TILE
 	_preview_path = []
 	_preview_cost = 0
-	_run_tiles = []
-	_sprint_tiles = []
+	_move_costs = {}
 	_throw_tiles = []
 	var highlights := get_tree().get_first_node_in_group("highlights")
 	if highlights:
 		highlights.clear_highlights()
 	match mode:
 		Mode.MOVE:
-			_run_tiles = GridManager.get_reachable_tiles(grid_pos, move_run())
-			if ap >= 2:
-				# Only offer the sprint band when the second AP is actually there.
-				_sprint_tiles = _outer_band(
-					_run_tiles, GridManager.get_reachable_tiles(grid_pos, move_sprint()))
+			# One band, bounded by what the pool actually affords. The old inner/
+			# outer split existed because a move was one of two fixed-price
+			# actions; now the price is the distance, so a second band would just
+			# be an arbitrary line drawn across a continuous cost.
+			_move_costs = GridManager.reachable_costs(grid_pos, move_tiles_affordable())
 			if highlights:
-				highlights.show_move_range(_run_tiles, _sprint_tiles)
-		Mode.SHOOT, Mode.AIMED_SHOT:
+				highlights.show_move_range(_move_costs, move_ap_per_tile(), ap)
+		Mode.SHOOT, Mode.AIMED_SHOT, Mode.SUPPRESS:
 			if highlights:
 				_show_targets(highlights)
 		Mode.EMP:
@@ -92,25 +102,11 @@ func set_mode(new_mode: Mode) -> void:
 	set_process(mode != Mode.NONE)
 
 
-func _outer_band(inner: Array[Vector3i], full: Array[Vector3i]) -> Array[Vector3i]:
-	var seen := {}
-	for tile in inner:
-		seen[tile] = true
-	var out: Array[Vector3i] = []
-	for tile in full:
-		if not seen.has(tile):
-			out.append(tile)
-	return out
-
-
 func _cost_for(tile: Vector3i) -> int:
-	# 0 means "not a legal destination", including affordable-range tiles the
-	# unit lacks the AP for, since those bands are never populated.
-	if tile in _run_tiles:
-		return 1
-	if tile in _sprint_tiles:
-		return 2
-	return 0
+	# 0 means "not a legal destination". Tiles the unit cannot afford are never in
+	# `_move_costs` in the first place — the set is built against the affordable
+	# radius — so absence covers both "out of range" and "out of AP".
+	return move_cost_for(_move_costs.get(tile, 0))
 
 
 func _show_targets(highlights: Node) -> void:
@@ -121,19 +117,12 @@ func _show_targets(highlights: Node) -> void:
 	var tiles: Array[Vector3i] = []
 	var accuracies: Array[int] = []
 	var action := Combat.ShotAction.SHOOT if mode == Mode.SHOOT else Combat.ShotAction.AIMED_SHOT
-	for node in get_tree().get_nodes_in_group("enemy_units"):
-		var enemy := node as Unit
-		if enemy == null or enemy.is_downed:
-			continue
+	for enemy in hostiles():
 		if not GridManager.has_line_of_sight(self, enemy):
 			continue
 		tiles.append(enemy.grid_pos)
 		accuracies.append(Combat.compute_accuracy(self, enemy, action, Combat.BodyPart.TORSO))
 	highlights.show_targets(tiles, accuracies)
-
-
-func _range_for(cost: int) -> int:
-	return move_run() if cost == 1 else move_sprint()
 
 
 func _process(_delta: float) -> void:
@@ -147,7 +136,7 @@ func _process(_delta: float) -> void:
 	match mode:
 		Mode.MOVE:
 			_update_path_preview(highlights)
-		Mode.SHOOT, Mode.AIMED_SHOT:
+		Mode.SHOOT, Mode.AIMED_SHOT, Mode.SUPPRESS:
 			_update_target_hover(highlights)
 		Mode.EMP:
 			_update_blast_preview(highlights)
@@ -161,8 +150,10 @@ func _update_path_preview(highlights: Node) -> void:
 	_preview_path = []
 	_preview_cost = _cost_for(tile)
 	if _preview_cost > 0:
-		_preview_path = GridManager.find_path(grid_pos, tile, _range_for(_preview_cost))
-	highlights.show_path(_preview_path, _preview_cost)
+		_preview_path = GridManager.find_path(grid_pos, tile, move_tiles_affordable())
+	# Sec 4.6: the preview reports what the move LEAVES, not just what it takes —
+	# with a pool this is the number the next decision is made against.
+	highlights.show_path(_preview_path, _preview_cost, ap - _preview_cost)
 
 
 func _update_target_hover(highlights: Node) -> void:
@@ -170,7 +161,7 @@ func _update_target_hover(highlights: Node) -> void:
 	var hit := _raycast_mouse()
 	if not hit.is_empty():
 		var unit := _unit_from_collider(hit["collider"])
-		if unit and not unit.is_player_controlled and not unit.is_downed:
+		if unit and is_hostile_to(unit) and not unit.is_downed:
 			tile = unit.grid_pos
 	if tile == _hover_tile:
 		return
@@ -220,16 +211,24 @@ func _update_blast_preview(highlights: Node) -> void:
 
 ## Like `_tile_under_mouse`, but a unit standing on the tile does not disqualify
 ## it — a grenade is aimed AT things, where a move is aimed at empty deck.
+##
+## Units are still picked by raycast, because a sprite is a thing on screen and
+## hitting it should mean hitting it. Only the fallback — the bare deck — uses
+## projection, so a throw can be aimed at a tile a wall would otherwise hide.
+## Whether the throw is legal is unchanged: `_throw_tiles` still requires a clear
+## line from the thrower.
 func _tile_under_mouse_any() -> Vector3i:
 	var hit := _raycast_mouse()
-	if hit.is_empty():
-		return NO_TILE
-	var unit := _unit_from_collider(hit["collider"])
-	return unit.grid_pos if unit else GridManager.world_to_grid(hit["position"])
+	if not hit.is_empty():
+		var unit := _unit_from_collider(hit["collider"])
+		if unit:
+			return unit.grid_pos
+	return _tile_under_mouse()
 
 
 func _try_throw_emp(target: Vector3i) -> void:
-	if ap < EMP_AP_COST or emp_charges <= 0 or is_busy:
+	var cost := action_cost(UnitStats.Action.GRENADE)
+	if ap < cost or emp_charges <= 0 or is_busy:
 		return
 	# Re-validated against the same cached set the overlay was drawn from, so what
 	# the player clicked and what they were shown can never disagree.
@@ -237,7 +236,7 @@ func _try_throw_emp(target: Vector3i) -> void:
 		action_logged.emit("%s: no throwing line to %s" % [stats.display_name, target])
 		return
 	emp_charges -= 1
-	spend_ap(EMP_AP_COST)
+	spend_ap(cost)
 	set_mode(Mode.NONE)
 	await face_toward(GridManager.grid_to_world(target))
 	await visual.play_action(UnitVisual.GRENADE)
@@ -270,6 +269,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not event.is_action_pressed("select_unit"):
 		return
+	# Handled BEFORE the raycast, and that is the fix: a move click used to need
+	# the ray to land on something, then took the tile it landed on. A wall in the
+	# way therefore resolved to the wall's own tile — never a legal destination —
+	# so the click did nothing at all. Projection needs no hit.
+	if mode == Mode.MOVE:
+		_try_move(_tile_under_mouse())
+		return
 	var hit := _raycast_mouse()
 	if hit.is_empty():
 		return
@@ -284,10 +290,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		_try_face(hit["position"])
 		return
 	var unit := _unit_from_collider(hit["collider"])
-	if unit and not unit.is_player_controlled and mode in [Mode.SHOOT, Mode.AIMED_SHOT]:
+	if unit and is_hostile_to(unit) and mode in [Mode.SHOOT, Mode.AIMED_SHOT, Mode.SUPPRESS]:
 		_try_shoot(unit)
-	elif unit == null and mode == Mode.MOVE:
-		_try_move(GridManager.world_to_grid(hit["position"]))
 
 
 func _accepting_input() -> bool:
@@ -305,12 +309,23 @@ func _raycast_mouse() -> Dictionary:
 	return get_world_3d().direct_space_state.intersect_ray(query)
 
 
+## The tile the cursor is over, found by projection rather than by raycast — so
+## a wall between the camera and the tile no longer eats the pick. See
+## GridManager.tile_under_ray.
+##
+## The old version also returned NO_TILE whenever a unit was under the cursor, to
+## clear the preview. That rule is now redundant rather than dropped: a tile with
+## somebody standing on it is not in `_move_costs` (the flood excludes occupied
+## tiles), so `_cost_for` answers 0 and the preview clears for exactly the same
+## reason it did before.
 func _tile_under_mouse() -> Vector3i:
-	var hit := _raycast_mouse()
-	# A unit under the cursor means no destination — clear the preview.
-	if hit.is_empty() or _unit_from_collider(hit["collider"]) != null:
+	var camera := get_viewport().get_camera_3d()
+	if camera == null:
 		return NO_TILE
-	return GridManager.world_to_grid(hit["position"])
+	var mouse := get_viewport().get_mouse_position()
+	var tile := GridManager.tile_under_ray(
+		camera.project_ray_origin(mouse), camera.project_ray_normal(mouse))
+	return tile if GridManager.has_tile(tile) else NO_TILE
 
 
 func _unit_from_collider(collider: Object) -> Unit:
@@ -328,35 +343,40 @@ func _try_move(target: Vector3i) -> void:
 		return
 	var path := _preview_path
 	if path.is_empty() or path[-1] != target:
-		path = GridManager.find_path(grid_pos, target, _range_for(cost))
+		path = GridManager.find_path(grid_pos, target, move_tiles_affordable())
 	if path.is_empty():
 		return
-	var verb := "moved" if cost == 1 else "sprinted"
 	spend_ap(cost)  # before the walk, so the HUD greys the buttons immediately
 	set_mode(Mode.NONE)
 	await move_along(path)
-	action_logged.emit("%s %s to %s (%d AP)" % [stats.display_name, verb, target, cost])
+	action_logged.emit("%s moved to %s (%d tiles, %d AP)" % [
+		stats.display_name, target, path.size(), cost])
 	_check_activation_end()
 
 
 func _try_shoot(target: Unit) -> void:
+	if mode == Mode.SUPPRESS:
+		await _try_suppress(target)
+		return
 	if mode == Mode.AIMED_SHOT:
 		# Doesn't fire yet — Aimed Shot needs a zone first. The HUD listens for
 		# this and opens the VATS-style menu; `fire_aimed_shot` below finishes
-		# the job once the player picks one.
-		if ap < 2 or not can_shoot():
+		# the job once the player picks one. Gated on the CHEAPEST zone, since
+		# which one is being paid for is exactly what that menu is for.
+		if ap < min_aimed_shot_cost() or not can_shoot():
 			return
 		if not GridManager.has_line_of_sight(self, target):
 			action_logged.emit("%s: no line of sight to %s" % [stats.display_name, target.stats.display_name])
 			return
 		aimed_shot_target_picked.emit(target)
 		return
-	if ap < 1 or not can_shoot():
+	var cost := action_cost(UnitStats.Action.SHOOT)
+	if ap < cost or not can_shoot():
 		return
 	if not GridManager.has_line_of_sight(self, target):
 		action_logged.emit("%s: no line of sight to %s" % [stats.display_name, target.stats.display_name])
 		return
-	spend_ap(1)
+	spend_ap(cost)
 	var result: Combat.ShotResult = await fire_at(target, Combat.ShotAction.SHOOT)
 	action_logged.emit("%s fired at %s (%d%% acc): %s" % [stats.display_name, target.stats.display_name, result.accuracy, Combat.describe(result)])
 	_log_shot_aftermath(target, result)
@@ -367,13 +387,16 @@ func _try_shoot(target: Unit) -> void:
 func fire_aimed_shot(target: Unit, body_part: int) -> void:
 	# Called by the HUD once the player picks a zone from the VATS-style menu
 	# opened after `aimed_shot_target_picked`. Re-validates everything, since
-	# AP/LOS/ammo could all have changed while that menu was up.
-	if ap < 2 or not can_shoot() or target.is_downed:
+	# AP/LOS/ammo could all have changed while that menu was up — and the price
+	# is per zone (Sec 4.3a), so the zone picked is what decides affordability,
+	# not the Torso baseline `_try_shoot` gated on.
+	var cost := aimed_shot_cost(body_part)
+	if ap < cost or not can_shoot() or target.is_downed:
 		return
 	if not GridManager.has_line_of_sight(self, target):
 		action_logged.emit("%s: no line of sight to %s" % [stats.display_name, target.stats.display_name])
 		return
-	spend_ap(2)
+	spend_ap(cost)
 	var result: Combat.ShotResult = await fire_at(target, Combat.ShotAction.AIMED_SHOT, body_part)
 	var zone_tag := " [%s]" % Combat.body_part_name(body_part)
 	action_logged.emit("%s fired at %s%s (%d%% acc): %s" % [stats.display_name, target.stats.display_name, zone_tag, result.accuracy, Combat.describe(result)])
@@ -400,23 +423,47 @@ func _log_shot_aftermath(target: Unit, result: Combat.ShotResult) -> void:
 			action_logged.emit("Heavy cover on the %s is shot down to light cover" % where)
 
 
-func try_hunker() -> void:
-	if ap < 1 or is_busy:
+## Pins `target` under covering fire. Ends the activation, like Hunker and
+## Overwatch — see Unit.do_suppress.
+func _try_suppress(target: Unit) -> void:
+	var cost := action_cost(UnitStats.Action.SUPPRESS)
+	if ap < cost or not can_suppress() or target.is_downed or is_busy:
 		return
+	if not GridManager.has_line_of_sight(self, target):
+		action_logged.emit("%s: no line of sight to %s" % [stats.display_name, target.stats.display_name])
+		return
+	set_mode(Mode.NONE)
+	await do_suppress(target)
+	action_logged.emit("%s lays down suppressing fire on %s (%d rounds)" % [
+		stats.display_name, target.stats.display_name, Unit.SUPPRESS_AMMO_COST])
+	_check_activation_end()
+
+
+func try_hunker() -> void:
+	if ap < action_cost(UnitStats.Action.HUNKER) or is_busy:
+		return
+	# No spend_ap here: hunkering ends the activation, and do_hunker burns the
+	# whole remaining AP itself so the AI cannot take the pose more cheaply than
+	# the player does. See Unit._end_activation_ap.
 	do_hunker()
-	spend_ap(1)
 	set_mode(Mode.NONE)
 	action_logged.emit("%s hunkered down" % stats.display_name)
 	_check_activation_end()
 
 
-func try_overwatch() -> void:
+## `reserve_ap` is how much of what is left goes into the reserved shot (Sec
+## 4.4); -1 commits all of it, which is what the HUD passes. Overwatch ends the
+## activation either way, so a partial reserve forfeits the difference rather
+## than banking it — it will start meaning something once the reserve-to-accuracy
+## formula lands (Sec 6 item 1), and the parameter exists so that lands as a
+## formula change rather than a signature change.
+func try_overwatch(reserve_ap: int = -1) -> void:
 	if ap < 1 or is_busy or not can_shoot():
 		return
-	do_overwatch()
-	spend_ap(1)
+	do_overwatch(reserve_ap)  # burns the remaining AP itself — see try_hunker above
 	set_mode(Mode.NONE)
-	action_logged.emit("%s is on overwatch" % stats.display_name)
+	action_logged.emit("%s is on overwatch (%d AP reserved)" % [
+		stats.display_name, overwatch_reserve])
 	_check_activation_end()
 
 
@@ -441,9 +488,10 @@ func try_toggle_flashlight() -> void:
 
 
 func try_reload() -> void:
-	if ap < 1 or is_busy or not can_reload():
+	var cost := action_cost(UnitStats.Action.RELOAD)
+	if ap < cost or is_busy or not can_reload():
 		return
-	spend_ap(1)  # before the animation, so the HUD greys the buttons immediately
+	spend_ap(cost)  # before the animation, so the HUD greys the buttons immediately
 	set_mode(Mode.NONE)
 	await do_reload()
 	action_logged.emit("%s reloaded" % stats.display_name)

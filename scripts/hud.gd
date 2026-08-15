@@ -6,7 +6,8 @@ extends CanvasLayer
 @onready var banner: Label = $Banner
 @onready var buttons := {
 	"move": $Actions/Move,
-	"shoot": $Actions/Shoot, "aimed_shot": $Actions/AimedShot, "emp": $Actions/Emp,
+	"shoot": $Actions/Shoot, "aimed_shot": $Actions/AimedShot,
+	"suppress": $Actions/Suppress, "emp": $Actions/Emp,
 	"hunker": $Actions/Hunker, "overwatch": $Actions/Overwatch,
 	"reload": $Actions/Reload, "face": $Actions/Face,
 	"flashlight": $Actions/Flashlight, "end_turn": $Actions/EndTurn,
@@ -32,6 +33,7 @@ func _ready() -> void:
 	buttons["move"].pressed.connect(_set_mode.bind(PlayerUnit.Mode.MOVE))
 	buttons["shoot"].pressed.connect(_set_mode.bind(PlayerUnit.Mode.SHOOT))
 	buttons["aimed_shot"].pressed.connect(_set_mode.bind(PlayerUnit.Mode.AIMED_SHOT))
+	buttons["suppress"].pressed.connect(_set_mode.bind(PlayerUnit.Mode.SUPPRESS))
 	buttons["emp"].pressed.connect(_set_mode.bind(PlayerUnit.Mode.EMP))
 	for part in body_part_buttons:
 		body_part_buttons[part].pressed.connect(_on_menu_pick.bind(part))
@@ -75,16 +77,27 @@ func _refresh(unit: Unit) -> void:
 			reserved = "   OVERWATCH"
 		elif player.hunkered:
 			reserved = "   HUNKERED"
+		# Read BEFORE the postures above would matter, because it is the one the
+		# player most needs and the only one imposed from outside: a pinned
+		# soldier is down AP and shooting at -40%, and nothing else on this panel
+		# would explain why.
+		if player.is_suppressed():
+			reserved = "   SUPPRESSED by %s" % player.suppressed_by.stats.display_name
+		if player.suppressing != null:
+			reserved += "   (suppressing %s)" % player.suppressing.stats.display_name
 		var injuries := player.injured_summary()
 		var injury_line := "\nInjuries: %s" % injuries if injuries != "None" else ""
 		var weapon_name := player.stats.weapon.display_name if player.stats.weapon else "Unarmed"
 		var reserve_text := "∞" if player.reserve < 0 else str(player.reserve)
 		# Own units only — enemy Initiative stays hidden (Sec 4.1).
-		unit_info.text = "%s  [%s]   %s\nHP %d/%d   AP %d   Ammo %d/%d   Reserve %s\nInitiative %.0f%s\nFlashlight %s   Standing on %d%% light%s" % [
+		# AP shows the POOL alongside what's left: the pool is per-soldier now
+		# (Fitness-derived, Sec 4.2), so a bare "AP 5" doesn't say whether that is
+		# a full activation or the tail of one.
+		unit_info.text = "%s  [%s]   %s\nHP %d/%d   AP %d/%d   Ammo %d/%d   Reserve %s\nInitiative %d%s\nFlashlight %s   Standing on %d%% light%s" % [
 			player.stats.display_name,
 			UnitStats.UnitClass.keys()[player.stats.unit_class],
 			weapon_name,
-			player.current_hp, player.stats.max_hp(), player.ap,
+			player.current_hp, player.stats.max_hp(), player.ap, player.ap_pool(),
 			player.ammo, player.stats.mag_size, reserve_text,
 			player.stats.initiative(), reserved,
 			"ON" if player.flashlight_on else "OFF",
@@ -96,21 +109,48 @@ func _refresh(unit: Unit) -> void:
 	else:
 		unit_info.text = "—"
 	var is_player := player != null
-	buttons["move"].disabled = not is_player or player.ap < 1
-	buttons["shoot"].disabled = not is_player or player.ap < 1 or (is_player and not player.can_shoot())
-	buttons["aimed_shot"].disabled = not is_player or player.ap < 2 or (is_player and not player.can_shoot())
-	# Charges are per soldier, so the label has to say how many are left — an
-	# always-on "EMP (1)" reads as the AP cost and hides the real constraint.
+	# Every price is per-soldier now (Reflexes discounts them, Sec 4.3), so the
+	# buttons carry their own cost rather than the player memorising a fixed
+	# table — the same number the gate below is testing against.
 	if is_player:
-		buttons["emp"].text = "EMP (1)  x%d" % player.emp_charges
-	buttons["emp"].disabled = not is_player or player.ap < PlayerUnit.EMP_AP_COST or player.emp_charges <= 0
-	buttons["hunker"].disabled = not is_player or player.ap < 1
-	buttons["overwatch"].disabled = not is_player or player.ap < 1 or (is_player and not player.can_shoot())
-	buttons["reload"].disabled = not is_player or player.ap < 1 or (is_player and not player.can_reload())
+		_label_cost(buttons["shoot"], "Shoot", player.action_cost(UnitStats.Action.SHOOT))
+		_label_cost(buttons["aimed_shot"], "Aimed Shot", player.min_aimed_shot_cost())
+		# Carries the AMMO cost too, because that is the binding constraint far
+		# more often than the AP is — a soldier with two rounds left cannot
+		# suppress at any price.
+		buttons["suppress"].text = "Suppress (%d)  %dr" % [
+			player.action_cost(UnitStats.Action.SUPPRESS), Unit.SUPPRESS_AMMO_COST]
+		_label_cost(buttons["hunker"], "Hunker", player.action_cost(UnitStats.Action.HUNKER))
+		_label_cost(buttons["reload"], "Reload", player.action_cost(UnitStats.Action.RELOAD))
+		# Charges are per soldier, so the label has to say how many are left too —
+		# an EMP button showing only its AP cost hides the real constraint.
+		buttons["emp"].text = "EMP (%d)  x%d" % [
+			player.action_cost(UnitStats.Action.GRENADE), player.emp_charges]
+	buttons["move"].disabled = not is_player or player.ap < player.move_ap_per_tile()
+	buttons["shoot"].disabled = not is_player \
+		or player.ap < player.action_cost(UnitStats.Action.SHOOT) or not player.can_shoot()
+	# Gated on the Torso, the cheapest zone — the per-zone prices are on the menu
+	# itself, where the zone is actually chosen.
+	buttons["aimed_shot"].disabled = not is_player \
+		or player.ap < player.min_aimed_shot_cost() or not player.can_shoot()
+	buttons["suppress"].disabled = not is_player \
+		or player.ap < player.action_cost(UnitStats.Action.SUPPRESS) or not player.can_suppress()
+	buttons["emp"].disabled = not is_player \
+		or player.ap < player.action_cost(UnitStats.Action.GRENADE) or player.emp_charges <= 0
+	buttons["hunker"].disabled = not is_player or player.ap < player.action_cost(UnitStats.Action.HUNKER)
+	# Overwatch alone has no fixed price: it commits whatever is left (Sec 4.4),
+	# so any AP at all is enough to take it.
+	buttons["overwatch"].disabled = not is_player or player.ap < 1 or not player.can_shoot()
+	buttons["reload"].disabled = not is_player \
+		or player.ap < player.action_cost(UnitStats.Action.RELOAD) or not player.can_reload()
 	# Both free actions (Sec 4.2) — no AP gate on either.
 	buttons["face"].disabled = not is_player
 	buttons["flashlight"].disabled = not is_player
 	buttons["end_turn"].disabled = not is_player
+
+
+func _label_cost(button: Button, label: String, cost: int) -> void:
+	button.text = "%s (%d)" % [label, cost]
 
 
 func _set_mode(mode: PlayerUnit.Mode) -> void:
@@ -125,9 +165,16 @@ func _on_aimed_shot_target_picked(target: Unit) -> void:
 	if player == null:
 		return
 	_aimed_shot_target = target
+	# The zone menu is now a price list as well as an odds list: Sec 4.3a makes a
+	# head shot cost more AP than a torso one, on top of costing accuracy, so the
+	# player cannot choose between zones without seeing both numbers. Zones the
+	# remaining pool cannot cover are disabled rather than hidden — knowing the
+	# head was 7 AP away is the information that shapes the NEXT activation.
 	for part in body_part_buttons:
 		var acc := Combat.compute_accuracy(player, target, Combat.ShotAction.AIMED_SHOT, part)
-		body_part_buttons[part].text = "%s (%d%%)" % [Combat.body_part_name(part), acc]
+		var cost := player.aimed_shot_cost(part)
+		body_part_buttons[part].text = "%s — %d AP (%d%%)" % [Combat.body_part_name(part), cost, acc]
+		body_part_buttons[part].disabled = player.ap < cost
 	aimed_shot_menu.visible = true
 
 

@@ -43,4 +43,8 @@ clearing units currently on the field (Section 7.1).
 
 - Exact bonus-damage multiplier for grenades/Heavy Weapons against cover doesn't apply to nests
   directly, but nest HP interacts with the same damage system — no nest-specific damage rules are
-  defined yet beyond its flat 50 HP.
+  defined yet beyond its flat 50 HP. **That 50 predates the lethality rescale**
+  (`../../contractors/design-choices/ap-and-stat-baselines.md` §6.0) and was never repriced with the
+  rest of the board, because no Nest exists to reprice. Read literally it is now roughly *twice the
+  toughest unit in the game* — so whoever builds the Nest picks a number against the current scale
+  rather than porting this one across.

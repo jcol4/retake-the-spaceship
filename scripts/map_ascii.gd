@@ -18,12 +18,18 @@ extends RefCounted
 ## Grid legend (one glyph per tile):
 ##   ' ' void      '.' floor     '#' wall      'R' raised platform
 ##   'P' player spawn          'E' enemy spawn         'S' swarm spawn
+##   'B' brawler spawn — the swarm's heavy, same melee loop, twice the HP
 ##   Security robots, one glyph per model, taken from the first letter of the
 ##   MODEL CODE rather than of the name — the names collide with glyphs that are
 ##   already spoken for (S is the swarm, s is a stair), the codes do not:
 ##   'Q' QRN-4 Auxilium        'M' MKV-9 Sagittarii
 ##   'X' XVT-7 Proctor         'J' JXM-2 Securus
+##   'V' rival merc spawn — 'M' was already the Sagittarii's, so this takes the
+##       free letter out of "rival"
+##   'A' Agile Hunter spawn (Sec 11.5) — its own initial, still free rather than bumping an established glyph
 ##   'o' overhead light        'm' monitor light       'f' flickering light
+##   '!' alarm panel — emits no light; tripped by anything non-alien walking onto
+##       it, and fires once (Sec 6)
 ##   's' stair tile, LOWERCASE — links to the platform directly north of it,
 ##       and is a different thing entirely from an uppercase 'S'
 ##
@@ -52,13 +58,25 @@ const GLYPHS := {
 	"P": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.PLAYER, false],
 	"E": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.ENEMY, false],
 	"S": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.SWARM, false],
+	"B": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.BRAWLER, false],
 	"Q": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.AUXILIUM, false],
 	"M": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.SAGITTARII, false],
 	"X": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.PROCTOR, false],
 	"J": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.SECURUS, false],
+	# Rival merc. NOT "M" — that belongs to the MKV Sagittarii, and the robot
+	# glyphs were assigned off model codes precisely because names collide. "V"
+	# is the free letter out of "rival".
+	"V": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.MERC, false],
+	# Agile Hunter (Sec 11.5). 'A' for the name's own initial — free, unlike the
+	# melee tier's 'S'/'B', which were taken before it existed.
+	"A": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.HUNTER, false],
+	"F": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.LICTOR, false],
 	"o": [MapData.Terrain.FLOOR, MapData.Fixture.OVERHEAD, MapData.Spawn.NONE, false],
 	"m": [MapData.Terrain.FLOOR, MapData.Fixture.MONITOR, MapData.Spawn.NONE, false],
 	"f": [MapData.Terrain.FLOOR, MapData.Fixture.FLICKER, MapData.Spawn.NONE, false],
+	# Alarm panel (Sec 6 trigger 2). Lowercase like the other fixtures, since it
+	# is a thing on a tile rather than something that spawns on one.
+	"!": [MapData.Terrain.FLOOR, MapData.Fixture.ALARM, MapData.Spawn.NONE, false],
 	"s": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.NONE, true],
 }
 
@@ -166,14 +184,19 @@ static func _glyph_for(cell: MapData.Cell) -> String:
 		MapData.Spawn.PLAYER: return "P"
 		MapData.Spawn.ENEMY: return "E"
 		MapData.Spawn.SWARM: return "S"
+		MapData.Spawn.BRAWLER: return "B"
 		MapData.Spawn.AUXILIUM: return "Q"
 		MapData.Spawn.SAGITTARII: return "M"
 		MapData.Spawn.PROCTOR: return "X"
 		MapData.Spawn.SECURUS: return "J"
+		MapData.Spawn.MERC: return "V"
+		MapData.Spawn.HUNTER: return "A"
+		MapData.Spawn.LICTOR: return "F"
 	match cell.fixture:
 		MapData.Fixture.OVERHEAD: return "o"
 		MapData.Fixture.MONITOR: return "m"
 		MapData.Fixture.FLICKER: return "f"
+		MapData.Fixture.ALARM: return "!"
 	if cell.stair:
 		return "s"
 	return "."

@@ -13,7 +13,9 @@ script = ExtResource("1_script")
 ; travel. The number is cosmetic (Unit.move_speed) — the tile budget is what the
 ; AP economy reads — but it is what sells "this thing holds ground".
 move_speed = 2.2
-armor_value = 4
+; Rescaled with weapon damage (~0.65x) rather than with HP — armor comes off a
+; damage roll, so it tracks the damage scale.
+armor_value = 3
 holds_position = true
 post_leash = 3
 salvage_value = 2

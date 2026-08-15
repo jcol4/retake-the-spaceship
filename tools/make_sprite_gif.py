@@ -45,7 +45,7 @@ DIRECTIONS = ["ne", "n", "nw", "w", "sw", "s", "se", "e"]
 ## exactly the wrong thing to hand someone judging a cycle's cadence.
 LOOP_TIME = {
     "run": 2 * 0.333, "walk": 1.4, "idle": 2.0,
-    "crouch_idle": 1.6, "overwatch_hold": 1.6, "aim_hold": 1.6,
+    "overwatch_hold": 1.6, "aim_hold": 1.6,
 }
 ONE_SHOT_TIME = {
     ## The three burst phases. A pose missing from this table silently falls to

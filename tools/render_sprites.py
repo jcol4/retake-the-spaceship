@@ -213,7 +213,41 @@ REST_FACING_IS_BLENDER_PLUS_Y = True
 ## here (see POSE_BUCKET_ZERO), so re-rendering them needs no special handling.
 BUCKET_ZERO_DEGREES = 90.0
 
-## Per-pose overrides, for an action posed at a different facing from the rest.
+## Per-VARIANT bases, for a character built in a different .blend from the merc.
+##
+## The base is a fact about a RIG, not about the pipeline -- it says which way
+## the artist happened to point the model -- so a second character has no reason
+## to share the merc's.
+##
+## `brawler` (zombie_anim.blend) is 180. Reading it off the model is what got
+## this wrong the first time and is worth recording: the mesh measures deeper
+## toward +Y than -Y (nose and toes protrude forward), which says it faces
+## Blender +Y and therefore needs no correction. That measurement is of the mesh
+## in WORLD space, and the armature it hangs off carries a stored 180-degree
+## rotation -- which this renderer OVERWRITES with the bucket angle. So the
+## model does face +Y as saved, and does not once the turntable has set the
+## rotation the render actually uses.
+##
+## Settled the only way it can be, by looking at rendered frames rather than at
+## the rig: the PROFILE facings are the ones that read unambiguously. `e` came
+## out striding screen-LEFT and `w` screen-RIGHT -- exactly swapped, which is
+## four buckets, which is this 180. A hunched figure's front and back are
+## genuinely hard to tell apart head-on, so `n` and `s` are the wrong frames to
+## judge this from; `e` and `w` are not.
+##
+## Everything BUCKET_ZERO_DEGREES says about how to judge this value applies here
+## unchanged: eight facings are self-consistent at any base, so a wrong one is
+## invisible in the PNGs and shows up only as a unit that walks east while its
+## sprite shambles north-east. Judge it on a MOVING UNIT, and re-aim by renaming
+## files one bucket rather than by re-rendering.
+VARIANT_BUCKET_ZERO = {
+    "brawler": 180.0,
+}
+
+## Per-pose overrides, keyed by variant then pose, for an action posed at a
+## different facing from the rest of ITS OWN rig. Values are DELTAS from the
+## variant's base, so they compose with VARIANT_BUCKET_ZERO instead of silently
+## re-stating it.
 ##
 ## `run` is authored a quarter turn ANTICLOCKWISE of every other action in
 ## merc_anim.blend, so it needs 90 degrees clockwise on top of the base to line
@@ -230,13 +264,51 @@ BUCKET_ZERO_DEGREES = 90.0
 ## the others and delete this entry. Worth doing if the rig is ever reworked;
 ## not worth invalidating a correct sprite set for on its own.
 POSE_BUCKET_ZERO = {
-    "run": BUCKET_ZERO_DEGREES + 90.0,
+    "merc": {"run": 90.0},
+}
+
+## Which ACTION a pose is rendered from, where the two differ. Keyed by variant
+## then pose.
+##
+## The zombie is animated to exactly two actions and is not going to grow more:
+## its `melee` is the idle stance, by direction -- the swing reads from the
+## lunge the unit makes to reach its target, not from the drawing. Aliasing it
+## here rather than leaving `melee` unrendered is what makes that a DECISION.
+## Left unrendered, `build_sprite_frames.gd` fills the gap with `_pick`'s last
+## resort -- literally the first texture it scanned -- so the attack would play
+## whatever facing happened to sort first, and would change the day a pose is
+## added. Eight renders buys a `melee/<dir>` that is right in every facing.
+POSE_ACTION = {
+    "brawler": {"melee": "idle"},
+}
+
+## Frames to sample for a pose, overriding the duration-derived count. Keyed by
+## variant then pose.
+##
+## Two different jobs, and both are per-variant by nature:
+##
+##   1. A pose whose action is a PLACEHOLDER. The zombie's `idle` is a 25-frame
+##      T-pose that exists to hang a length off, not to be watched, so sampling
+##      the 24 frames its 2.0 s duration asks for would ship 24 copies of one
+##      drawing. 1 frame says "this pose is a still", and costs nothing in
+##      timing -- see LOOP_TIME.
+##   2. A cycle whose frame count must divide its footfalls. `walk` is drawn as
+##      32 Blender frames with contacts on 1 and 17, so an even sample lands
+##      both on a frame and an odd one puts the second contact between two.
+VARIANT_FRAMES = {
+    "brawler": {"idle": 1, "melee": 1, "walk": 16},
 }
 
 
-def bucket_zero(pose):
-    """Degrees at which `pose` faces bucket 0."""
-    return POSE_BUCKET_ZERO.get(pose, BUCKET_ZERO_DEGREES)
+def bucket_zero(pose, variant):
+    """Degrees at which `pose` faces bucket 0, for this variant's rig."""
+    base = VARIANT_BUCKET_ZERO.get(variant, BUCKET_ZERO_DEGREES)
+    return base + POSE_BUCKET_ZERO.get(variant, {}).get(pose, 0.0)
+
+
+def source_action(pose, variant):
+    """The Blender action `pose` is rendered from. Usually the same name."""
+    return POSE_ACTION.get(variant, {}).get(pose, pose)
 
 # --- Poses -------------------------------------------------------------------
 #
@@ -245,9 +317,9 @@ def bucket_zero(pose):
 # action is simply not rendered -- `build_sprite_frames.gd` falls back to the
 # nearest pose that does exist, so a half-animated character still runs.
 POSES = [
-    "idle", "run", "walk", "crouch_idle", "overwatch_hold", "aim_hold",
+    "idle", "run", "walk", "overwatch_hold", "aim_hold",
     "begin_shoot", "fire_shoot", "end_shoot",
-    "run_stop", "stand_to_crouch", "crouch_to_stand", "melee",
+    "run_stop", "melee",
     "reload", "throw_grenade", "interact", "hit_react", "downed",
     "alert_scream", "idle_fidget",
     # Cover variants -- a unit posed as using the cover on its tile edge. Each is
@@ -274,7 +346,7 @@ LOOP_TIME = {
     "run": 2 * 0.333,
     "walk": 1.4,
     "idle": 2.0,
-    "crouch_idle": 1.6, "overwatch_hold": 1.6, "aim_hold": 1.6,
+    "overwatch_hold": 1.6, "aim_hold": 1.6,
     "idle_low": 2.4, "idle_high": 2.4,
 }
 DEFAULT_LOOP_TIME = 1.6
@@ -450,8 +522,13 @@ def find_character(explicit=None):
              % ", ".join(o.name for o in armatures))
 
 
-def frame_count(pose):
+def frame_count(pose, variant):
     """How many frames to sample for `pose`, from its in-game duration."""
+    override = VARIANT_FRAMES.get(variant, {}).get(pose)
+    if override:
+        # NOT clamped to MIN_FRAMES: 1 is a legitimate answer here and is the
+        # whole point of the override for a placeholder pose.
+        return max(1, override)
     if pose in LOOP_TIME or pose not in ONE_SHOT_TIME:
         duration = LOOP_TIME.get(pose, DEFAULT_LOOP_TIME)
     else:
@@ -587,10 +664,12 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
         character.animation_data_create()
 
     actions = {a.name: a for a in bpy.data.actions}
-    todo = [p for p in POSES if p in actions]
+    # Matched through the alias table, so a pose drawn from another pose's
+    # action (POSE_ACTION) counts as present.
+    todo = [p for p in POSES if source_action(p, variant) in actions]
     if only_poses:
         todo = [p for p in todo if p in only_poses]
-    missing = [p for p in POSES if p not in actions]
+    missing = [p for p in POSES if source_action(p, variant) not in actions]
     if missing:
         print("[render_sprites] no action for: %s (will fall back in Godot)"
               % ", ".join(missing))
@@ -603,22 +682,25 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
     # sprite in the game, and a render log that does not state it cannot be used
     # to tell two renders apart after the fact.
     print("[render_sprites] bucket 0 (%s) renders at %.1f deg; each bucket +45"
-          % (DIRECTIONS[0], BUCKET_ZERO_DEGREES))
-    for pose, deg in sorted(POSE_BUCKET_ZERO.items()):
+          % (DIRECTIONS[0], VARIANT_BUCKET_ZERO.get(variant, BUCKET_ZERO_DEGREES)))
+    for pose in sorted(POSE_BUCKET_ZERO.get(variant, {})):
         print("[render_sprites]   except %r, authored at a different facing: "
-              "%.1f deg" % (pose, deg))
+              "%.1f deg" % (pose, bucket_zero(pose, variant)))
+    for pose, action_name in sorted(POSE_ACTION.get(variant, {}).items()):
+        print("[render_sprites]   %r is rendered from the %r action"
+              % (pose, action_name))
     written = 0
     meshes = renderable_meshes()
     lowest_ndc = 1.0
 
     for pose in todo:
-        action = actions[pose]
+        action = actions[source_action(pose, variant)]
         character.animation_data.action = action
         # Per POSE, not once per run: an action authored at a different facing
         # needs its own zero (POSE_BUCKET_ZERO).
-        original_rotation = math.radians(bucket_zero(pose))
+        original_rotation = math.radians(bucket_zero(pose, variant))
         muted = mute_object_transform_curves(action)
-        count = frame_count(pose)
+        count = frame_count(pose, variant)
         looping = pose in LOOP_TIME
         frames = sample_frames(action, count, looping)
 
@@ -669,7 +751,8 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
     # Left facing bucket 0 of the SHARED base, not of whichever pose happened to
     # be rendered last. Cosmetic -- the .blend is never written -- but a tidier
     # state to hand back, and it no longer depends on the loop variable.
-    character.rotation_euler.z = math.radians(BUCKET_ZERO_DEGREES)
+    character.rotation_euler.z = math.radians(
+        VARIANT_BUCKET_ZERO.get(variant, BUCKET_ZERO_DEGREES))
     print("[render_sprites] wrote %d images to %s" % (written, out_dir))
     report_anchor(lowest_ndc)
     print("[render_sprites] now run build_sprite_frames.gd with SF_VARIANT=%s "

@@ -2,7 +2,7 @@
 
 | Base Accuracy | Damage | Mag Size | Reserve | Total | Move Speed |
 |---|---|---|---|---|---|
-| 28 | 14 | 6 | 12 (2 mags) | 18 | 75% |
+| 28 | 9 | 6 | 12 (2 mags) | 18 | 75% |
 
 ## Role
 

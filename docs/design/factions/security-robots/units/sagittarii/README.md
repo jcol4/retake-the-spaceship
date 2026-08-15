@@ -46,15 +46,22 @@ exposure to it" problem.
 
 | | |
 |---|---|
-| HP / Armor | 65 / 8 |
-| Weapon | MKV Support Cannon — 30 accuracy, 16 damage, 5-round magazine |
+| HP / Armor | 20 / 5 |
+| Weapon | MKV Support Cannon — 30 accuracy, 10 damage, 5-round magazine |
 | Movement | 2 tiles per AP (`move_tiles_per_ap`), `move_speed` 1.8 |
 | Cover-ignoring | `light_cover_penalty_mult` 0.5 — half the Light Cover penalty, Heavy untouched |
 | Salvage | 4 |
 
-Armor 8 is what makes it the EMP target rather than a damage race, and the arithmetic is meant
-to be visible in the combat log: an Assault Rifle's 12 damage delivers **4** against the plate
-and **12** into a zeroed-armor window. Three magazines, or one grenade and one magazine.
+Armor 5 is what makes it the EMP target rather than a damage race, and the arithmetic is meant
+to be visible in the combat log: an Assault Rifle's 8 damage delivers **3** against the plate
+and **8** into a zeroed-armor window. Seven rounds through the plate against three into the
+window — so the EMP is still worth more than twice its weight in ammunition, which is the whole
+argument for carrying one.
+
+The lethality rescale (`ap-and-stat-baselines.md` §6.0) moved both sides of that sum but not its
+shape: HP came down ~3.5× and Armor came down with *damage* at ~0.65×, deliberately, because Armor
+is subtracted from a roll. Left at 8 against the new damage scale it would have swallowed most of a
+rifle round and the EMP would have gone from worth a kit slot to mandatory.
 
 The cover reduction is asked of the *shooter* (`Unit.cover_penalty_for`) rather than read from
 a flat table, so the HUD's previewed hit chance and the shot that actually fires come from one

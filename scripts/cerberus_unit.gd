@@ -102,12 +102,43 @@ var emp_turns: int = 0
 var _priority_call: bool = false  # this alert came from a Proctor's call-in
 
 
+## Which security zone's blackboard this unit plans on. Cerberus squads ARE
+## zones (doc Sec 4.6's "patrol group"), which needed no new concept — the
+## faction already broadcasts by zone, so the group that shares an alert is
+## exactly the group that should share a plan.
+var _brain: GoapBrain = null
+
+
+func _init() -> void:
+	# Not the aliens, despite extending their base class. Sharing an awareness
+	# state machine with something is not sharing a side with it, and under the
+	# old boolean the two were indistinguishable — both simply "not the player".
+	faction = Faction.Id.SECURITY
+
+
 func _ready() -> void:
 	super()
 	add_to_group("cerberus_units")
 	post_pos = grid_pos
 	downed.connect(_on_destroyed)
+	_brain = Doctrines.cerberus_brain(Doctrines.blackboard_for("zone_%d" % security_zone))
+	downed.connect(func(_u: Unit) -> void: _brain.blackboard.release_all(self))
 	_refresh_status_light()
+
+
+## The faction's no-flank doctrine, planned rather than scripted.
+##
+## Overrides the inherited ranged loop for every robot EXCEPT the two that
+## replace fighting outright — Proctor withdraws and Securus closes to contact,
+## and both override `_combat_turn` themselves, so neither reaches this.
+func _combat_turn() -> void:
+	var quarry := acquire_target()
+	if quarry == null:
+		return
+	if avoids_combat or _brain == null:
+		await super()
+		return
+	await _brain.run(self, quarry)
 
 
 # --- What makes it a machine -------------------------------------------------
@@ -284,11 +315,11 @@ func apply_body_part_damage(_part: int, _amount: int) -> bool:
 ## chases without limit, which for a checkpoint unit turns "trip it and run" into
 ## "trip it and it follows you across the deck" — removing the bypass option that
 ## is this faction's most distinctive player choice.
-func _move_toward(unit: Unit) -> void:
+func _move_toward(unit: Unit, reserve_ap: int = 0) -> void:
 	if holds_position and GridManager.chebyshev_dist(post_pos, unit.grid_pos) > post_leash:
 		ap = 0  # hold the line instead of burning AP walking off it
 		return
-	await super(unit)
+	await super(unit, reserve_ap)
 
 
 func _give_up() -> void:

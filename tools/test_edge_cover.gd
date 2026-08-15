@@ -123,11 +123,17 @@ func _check_posture() -> void:
 		"but looking along the crate rather than over it does not")
 
 	# Hunkering must NOT suppress the cover pose: the hunker settles into the
-	# cover art, so a unit reporting no pose here would drop to the generic
-	# standing-in-the-open crouch instead.
+	# cover art, so a unit reporting no pose here would stand back up on screen
+	# at the exact moment it ducked.
 	unit.rotation.y = PI
 	unit.hunkered = true
 	_check(unit.cover_pose() == &"low", "a hunkered unit in cover keeps the cover pose")
+	# ...and looking along the crate rather than over it, where the tile supplies
+	# no family at all, the hunker supplies one itself. Otherwise the action
+	# resolves to the standing idle and reads as having done nothing.
+	unit.rotation.y = PI - PI / 2.0
+	_check(unit.cover_pose() == &"low", "a hunker with no usable cover still poses low")
+	unit.rotation.y = PI
 	unit.hunkered = false
 	# Being downed does suppress it — a body on the deck is its own read.
 	unit.is_downed = true

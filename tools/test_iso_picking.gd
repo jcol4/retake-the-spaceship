@@ -13,9 +13,16 @@ extends SceneTree
 ## under orthographic the origin slides across the near plane and the normal is
 ## constant. Both are projection-correct in Godot 4, and this is what says so.
 ##
-## A tile whose ray is blocked by geometry is EXPECTED to resolve to the wall in
-## front of it — that is the occlusion problem, not a picking bug — so those are
-## classified out with a clear-line test rather than counted as failures.
+## A tile whose ray is blocked by geometry USED to be expected to resolve to the
+## wall in front of it, and was classified out. That is now a failure: picking
+## projects onto the deck planes instead of raycasting (GridManager.tile_under_ray),
+## so a wall between the camera and a tile no longer eats the pick. Obstructed
+## tiles are still counted — the count is what proves the case is being exercised
+## — but they are asserted rather than excused.
+##
+## The one legitimate mismatch left is a tile on a HIGHER deck winning: a platform
+## is a solid block genuinely drawn in front of the floor behind it, so naming the
+## platform is naming what the player sees.
 ##
 ## Everything is untyped and called dynamically: a --script tool is compiled
 ## before autoloads register, so naming GridManager or MapBuilder in a type hint
@@ -104,6 +111,7 @@ func _check_picking(map, cam: Camera3D, yaw_degrees: float) -> void:
 	var tested := 0
 	var offscreen := 0
 	var occluded := 0
+	var raised := 0
 	var wrong: Array[String] = []
 
 	for pos in data.walkable_positions():
@@ -112,28 +120,36 @@ func _check_picking(map, cam: Camera3D, yaw_degrees: float) -> void:
 		if screen.x < 0.0 or screen.y < 0.0 or screen.x >= viewport_size.x or screen.y >= viewport_size.y:
 			offscreen += 1
 			continue
-		# The exact two calls PlayerUnit._raycast_mouse makes.
+		# The exact call PlayerUnit._tile_under_mouse makes.
 		var from := cam.project_ray_origin(screen)
-		var to := from + cam.project_ray_normal(screen) * 500.0
-		var query := PhysicsRayQueryParameters3D.create(from, to, 1 | 2)
-		var hit: Dictionary = space.intersect_ray(query)
-		if hit.is_empty():
-			wrong.append("%s: ray hit nothing" % pos)
-			continue
-		# A wall standing between the camera and this tile is the wall-occlusion
-		# problem (Phase 4), not a picking bug. Lift the target a hair so the ray
-		# does not graze the ground body it is aimed at.
+		var dir := cam.project_ray_normal(screen)
+		# A wall between the camera and this tile is now COUNTED rather than
+		# skipped, and that inversion is the regression guard. Picking used to be
+		# a physics ray, so an obstructed tile could not be clicked at all — and
+		# because camera-near wall meshes are hidden while their collision stays,
+		# the player could see a tile they were unable to select, with no camera
+		# yaw that helped. Every one of these must now pick correctly.
 		if not _grid.has_clear_line(map, from, centre + Vector3(0, EPSILON, 0)):
 			occluded += 1
-			continue
-		var picked = _grid.world_to_grid(hit["position"])
+		var picked = _grid.tile_under_ray(from, dir)
 		if picked != pos:
-			wrong.append("%s picked as %s" % [pos, picked])
+			# A tile on a HIGHER deck winning is correct, not a miss. A platform is
+			# a solid block drawn in front of the floor behind it, so the cursor
+			# naming the platform is the cursor naming what the player can see —
+			# and `tile_under_ray` scans decks top-down for exactly that reason.
+			# Anything else is a genuine mis-pick.
+			if picked.y > pos.y:
+				raised += 1
+			else:
+				wrong.append("%s picked as %s" % [pos, picked])
 		tested += 1
 
 	_check(tested > 0, "yaw %.0f: some tiles were pickable at all (%d)" % [yaw_degrees, tested])
-	_check(wrong.is_empty(), "yaw %.0f: %d/%d unoccluded tiles pick correctly (%d occluded, %d off screen)"
-		% [yaw_degrees, tested - wrong.size(), tested, occluded, offscreen])
+	_check(occluded > 0,
+		"yaw %.0f: and %d of them sit behind geometry, so this is a real test" % [yaw_degrees, occluded])
+	_check(wrong.is_empty(),
+		"yaw %.0f: %d/%d on-screen tiles pick correctly, obstructed or not (%d hidden by a platform, %d off screen)"
+		% [yaw_degrees, tested - wrong.size(), tested, raised, offscreen])
 	for w in wrong.slice(0, 8):
 		print("      %s" % w)
 

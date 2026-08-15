@@ -17,9 +17,10 @@ extends CerberusUnit
 
 func _hold_post() -> void:
 	# Reserves the shot rather than idling. Costs the AP an idle activation would
-	# have wasted, so a bypassed Auxilium is never free to walk past twice.
+	# have wasted, so a bypassed Auxilium is never free to walk past twice — all
+	# of it, in fact: do_overwatch ends the activation outright, so reserving the
+	# shot forfeits any remainder. See Unit._end_activation_ap.
 	if on_overwatch or not can_shoot():
 		return
-	spend_ap(1)
 	do_overwatch()
 	action_logged.emit("%s holds its post on overwatch" % stats.display_name)

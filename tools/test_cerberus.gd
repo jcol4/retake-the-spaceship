@@ -65,11 +65,29 @@ func _initialize() -> void:
 
 
 func _check_deck() -> void:
-	# One of each model, so every branch below has something real behind it and
-	# the glyph table is exercised by the deck the game actually ships with.
+	# NONE, currently: the test deck is staged to judge the alien melee tier on
+	# its own and places no robots at all.
+	#
+	# This used to assert one of each, on the reasoning that the glyph table is
+	# better exercised by the deck the game ships with than by a fixture. That is
+	# still true and the coverage did not go with it — test_map_roundtrip.gd's
+	# _check_spawn_glyphs owns it now, on a layout the test controls, which is
+	# what stops deck staging from silently deciding what gets tested.
+	#
+	# Nothing below depends on the deck's roster: every check that needs a robot
+	# spawns its own at a chosen tile. So this is a statement about the map, and
+	# it is asserted rather than dropped so that putting robots back is a
+	# deliberate edit here.
+	#
+	# The Lictor IS on the deck now, deliberately: the security faction's
+	# cover-breaking doctrine is worth exercising in the map the game actually
+	# loads rather than only in fixtures, and one gun platform in the far room
+	# does not turn an alien-tier deck into a robot fight.
 	for kind in MapData.CERBERUS_SPAWNS:
+		if kind == MapData.Spawn.LICTOR:
+			continue
 		var spawns: Array = _map.cerberus_spawns.get(kind, [])
-		_check(spawns.size() == 1, "%s: 1 spawn on the test deck (got %d)" % [
+		_check(spawns.is_empty(), "%s: no spawn on the test deck (got %d)" % [
 			_presets.display_name(kind), spawns.size()])
 
 
@@ -239,7 +257,10 @@ func _check_standing_post() -> void:
 	sentry.begin_activation()
 	await sentry.take_turn()
 	_check(sentry.on_overwatch, "a quiet Auxilium reserves its shot rather than idling")
-	_check(sentry.ap < sentry.MAX_AP, "and pays the AP for it")
+	# Overwatch commits whatever is left (rework doc Sec 4.4) and ends the
+	# activation, so the sentry ends its turn on zero rather than merely down a
+	# point — asserted against the pool, which is per-unit now.
+	_check(sentry.ap == 0 and sentry.ap_pool() > 0, "and pays the AP for it")
 
 	# Leashed: a target further from its post than post_leash is not chased.
 	var bait = await _spawn(PLAYER, LEFT)

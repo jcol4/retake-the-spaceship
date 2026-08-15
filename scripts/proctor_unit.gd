@@ -78,6 +78,8 @@ func _combat_turn() -> void:
 ## standing still is already the best available answer.
 func _withdraw_from(threat: Unit) -> bool:
 	var budget := _move_budget()
+	if budget < 1:
+		return false
 	var best := grid_pos
 	var best_dist := GridManager.chebyshev_dist(grid_pos, threat.grid_pos)
 	for tile in GridManager.get_reachable_tiles(grid_pos, budget):
@@ -90,6 +92,6 @@ func _withdraw_from(threat: Unit) -> bool:
 	var path := GridManager.find_path(grid_pos, best, budget)
 	if path.is_empty():
 		return false
-	spend_ap(1)
+	spend_ap(move_cost_for(path.size()))
 	await move_along(path)
 	return true

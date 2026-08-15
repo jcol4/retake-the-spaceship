@@ -5,12 +5,16 @@
 # Blender's own auto-backup of the previous save, not something to track
 *.blend1
 
-# Mixamo source FBX. The animation clips in art_src/anims/ ARE tracked (a few
-# hundred KB each, and they're what a rebuild actually needs) -- this ignores
-# only the character FBX sitting at the top of art_src/, which runs to 142 MB
-# for a single body and is re-downloadable from mixamo.com in a minute.
-# Note the single-level glob: art_src/*.fbx does not reach into anims/.
+# Downloaded character FBX. Nothing in the pipeline reads one any more -- the
+# rigs live in the art_src/*.blend files, which ARE tracked and are what a
+# rebuild needs -- so this exists only to stop a fresh multi-hundred-MB download
+# being committed if one is ever dropped in here to re-rig from.
 art_src/*.fbx
+
+# Python bytecode for the tools/ scripts. Was tracked, and had outlived three of
+# the scripts it was compiled from -- a cache of files that no longer exist.
+__pycache__/
+*.pyc
 
 # Render output: contact sheets, preview strips and gifs produced by the
 # tools/ scripts (make_sprite_gif.py defaults --out here). ~27 MB across 146

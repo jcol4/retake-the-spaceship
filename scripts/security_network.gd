@@ -85,12 +85,28 @@ func broadcast(zone: int, at: Vector3i, priority: bool = false, except: Node = n
 	return reached
 
 
-## A gunshot, an explosion, or anything else loud. Reaches robots by distance
+## A gunshot, an explosion, or anything else loud. Reaches units by distance
 ## rather than by zone — sound does not travel over the network, it travels
 ## through the deck — and, unlike sight, does not care about line of sight.
+##
+## REACHES EVERY LISTENING FACTION, not just the robots. Sec 5.4 always described
+## sound as the one channel both factions share, deliberately, so that "stay
+## quiet" is a universally useful plan rather than a counter to exactly one enemy
+## type. Only the robots implemented it while the aliens' half was deferred, and
+## the practical effect was that a firefight was silent to everything organic on
+## the deck — a squad could empty magazines beside a nest without waking it.
+##
+## Kept on `SecurityNetwork` rather than moved somewhere faction-neutral because
+## every caller already reports here, and a second parallel noise API would be
+## exactly the duplication the escalation design warns against.
 func report_noise(at: Vector3i, source: Node = null, radius: int = NOISE_RADIUS) -> void:
-	for node in get_tree().get_nodes_in_group("cerberus_units"):
+	for node in get_tree().get_nodes_in_group("units"):
 		if node == source or node.is_downed:
+			continue
+		# Duck-typed: only units with an awareness state machine can hear. Player
+		# units have none and are simply skipped, which is correct — the squad
+		# hears through the player, not through a stat.
+		if not node.has_method("hear_noise"):
 			continue
 		if GridManager.chebyshev_dist(node.grid_pos, at) <= radius:
 			node.hear_noise(at)
