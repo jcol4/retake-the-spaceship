@@ -192,6 +192,12 @@ REST_FACING_IS_BLENDER_PLUS_Y = True
 ## the exception and is currently 2 buckets (90 degrees) from it -- see the
 ## warning below before re-rendering it.
 ##
+## An upstream fix to the .blend was tried (re-authoring the `run` action at the
+## same facing as the rest of the rig) and did NOT hold -- a re-render still came
+## out rotated, confirmed against a moving unit in game, not just the PNGs. So
+## the correction below stays live; do not delete it on the strength of a .blend
+## edit alone, only on the strength of a moving unit on screen.
+##
 ## This value can only be settled IN THE GAME. Four have been tried: 0 from the
 ## axis convention, 90 from the .blend's stored rotation, then 135 and 180 from
 ## reading rendered frames at full resolution. Every one of them produced a
@@ -260,9 +266,13 @@ VARIANT_BUCKET_ZERO = {
 ## pose, and that is exactly the failure this file already warns is invisible in
 ## its own output.
 ##
-## The cleaner fix is upstream -- rotate the `run` action in the .blend to match
-## the others and delete this entry. Worth doing if the rig is ever reworked;
-## not worth invalidating a correct sprite set for on its own.
+## An attempt was made to fix this upstream instead -- rotate the `run` action in
+## the .blend to match the others and delete this entry, which is still the
+## cleaner fix in principle. It did not work: a re-render off the "fixed" .blend
+## still came out rotated when checked against a moving unit in game. Whatever
+## was edited was not the thing actually driving the discrepancy, so the
+## correction stays here until a re-render is verified in-game, not just as a
+## static PNG.
 POSE_BUCKET_ZERO = {
     "merc": {"run": 90.0},
 }
@@ -359,7 +369,7 @@ ONE_SHOT_TIME = {
     ## Must equal unit_visual.gd COVER_RAISE_TIME and COVER_SETTLE_TIME.
     "begin_shoot_low": 0.75, "end_shoot_low": 0.45,
     "begin_shoot_high": 0.75, "end_shoot_high": 0.45,
-    "melee": 1.20, "reload": 1.20, "throw_grenade": 1.00, "interact": 1.00,
+    "melee": 1.20, "reload": 3.75, "throw_grenade": 1.00, "interact": 1.00,
     "hit_react": 0.47, "downed": 0.80, "alert_scream": 2.80,
 }
 DEFAULT_ONE_SHOT_TIME = 0.4
@@ -553,7 +563,26 @@ def sample_frames(action, count, looping):
     return [start + span * (i / (count - 1)) for i in range(count)]
 
 
-def mute_object_transform_curves(action):
+def _character_channelbags(action, character):
+    """Channelbags in `action` whose slot is the one driving `character`.
+
+    Blender 4.4 made Actions LAYERED: one Action can carry fcurves for several
+    datablocks at once, partitioned into channelbags by SLOT, rather than
+    exposing one flat `action.fcurves` list the way older Blenders did (that
+    property is simply gone in 5.2 -- iterating `action.fcurves` now raises
+    AttributeError). A channelbag belonging to some other object's slot is not
+    this pipeline's business even when it shares the action; only the slot
+    `character.animation_data.action_slot` points at is.
+    """
+    slot = character.animation_data.action_slot if character.animation_data else None
+    if slot is None:
+        return []
+    return [cb for layer in action.layers for strip in layer.strips
+            for cb in getattr(strip, "channelbags", ())
+            if cb.slot_handle == slot.handle]
+
+
+def mute_object_transform_curves(action, character):
     """Silences any OBJECT-level transform channels on `action`, and says so.
 
     The eight facings are produced by rotating the character object between
@@ -573,14 +602,15 @@ def mute_object_transform_curves(action):
     written, but the same action may be rendered again in one run.
     """
     muted = []
-    for fcurve in action.fcurves:
-        path = fcurve.data_path or ""
-        if path.startswith("pose.bones"):
-            continue
-        if path in ("location", "rotation_euler", "rotation_quaternion", "scale"):
-            if not fcurve.mute:
-                fcurve.mute = True
-                muted.append(fcurve)
+    for cb in _character_channelbags(action, character):
+        for fcurve in cb.fcurves:
+            path = fcurve.data_path or ""
+            if path.startswith("pose.bones"):
+                continue
+            if path in ("location", "rotation_euler", "rotation_quaternion", "scale"):
+                if not fcurve.mute:
+                    fcurve.mute = True
+                    muted.append(fcurve)
     if muted:
         print("[render_sprites] %r animates the OBJECT transform (%s) -- muted "
               "for rendering, or every direction would come out identical"
@@ -699,7 +729,7 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
         # Per POSE, not once per run: an action authored at a different facing
         # needs its own zero (POSE_BUCKET_ZERO).
         original_rotation = math.radians(bucket_zero(pose, variant))
-        muted = mute_object_transform_curves(action)
+        muted = mute_object_transform_curves(action, character)
         count = frame_count(pose, variant)
         looping = pose in LOOP_TIME
         frames = sample_frames(action, count, looping)

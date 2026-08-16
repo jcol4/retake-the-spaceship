@@ -52,6 +52,15 @@ var _revealed: Dictionary = {}
 ## What `_revealed` was when the wall pass last ran, so that pass can be skipped
 ## while it would produce the same answer.
 var _last_revealed: Dictionary = {}
+## Room index the cursor is currently over, or -1. A UI convenience distinct
+## from `_revealed`: it opens the near-side wall so the player can see the
+## shape of a room they are about to move into, but it is deliberately NOT
+## folded into `_revealed` itself, because that dictionary also gates
+## `_apply_unit_visibility` — hovering must never be a way to spot an enemy
+## you have not actually earned sight of with a unit.
+var _hover_room := -1
+## What `_hover_room` was when the wall pass last ran, mirroring `_last_revealed`.
+var _last_hover_room := -1
 var _fade_tween: Tween = null
 var _fading_out: Array[MeshInstance3D] = []
 var _fading_in: Array[MeshInstance3D] = []
@@ -287,14 +296,20 @@ func _add_floor_quad(world: Vector3, mat: StandardMaterial3D) -> void:
 ##      exactly the near-side boundary of each compartment, and a wall backed by
 ##      another wall or by the void outside the hull is far-side structure that
 ##      has to stay up or the deck opens onto nothing; and
-##   2. that floor belongs to a REVEALED region — one holding a player unit, or a
-##      corridor joined to one.
+##   2. that floor belongs to a REVEALED region — one holding a player unit, a
+##      corridor joined to one, OR the single room the cursor is currently
+##      hovering (`_hover_room`, set in `_room_under_cursor`).
 ##
 ## Rule 2 is what the geometric placeholder could not do: it knows an empty room
 ## has no interior worth opening, so the far side of the deck stays sealed and
 ## the cutaway reads as the squad's own field of view rather than as x-ray. It
 ## needs the compartment graph, which MapData.compute_rooms now derives for
 ## hand-authored decks as well as generated ones.
+##
+## The cursor half of rule 2 is a UI convenience, not fog of war: it is folded
+## into `_hides_interior` directly rather than into `_revealed`, so hovering a
+## room opens its wall but does NOT feed `_apply_unit_visibility` — a peek
+## must never be a way to spot an enemy no unit has actually seen.
 ##
 ## Platforms and cover props are deliberately left alone. Platform tops are
 ## walkable, so hiding one would leave units standing on nothing, and cover is
@@ -324,14 +339,29 @@ func _process(_delta: float) -> void:
 	var cam := get_viewport().get_camera_3d()
 	if cam == null:
 		return  # main.tscn builds the map before the rig exists; retried next frame
+	_hover_room = _room_under_cursor(cam)
 	var step := _away_step(-cam.global_transform.basis.z)
 	# One Vector3i compare per frame while nothing is moving. The wall pass below
 	# is heavier, so it is only paid when its answer changes.
-	if step == _occlusion_step and _revealed == _last_revealed:
+	if step == _occlusion_step and _revealed == _last_revealed and _hover_room == _last_hover_room:
 		return
 	_occlusion_step = step
 	_last_revealed = _revealed.duplicate()
+	_last_hover_room = _hover_room
 	_apply_wall_occlusion(step)
+
+
+## The compartment the mouse is currently over, or -1 off the map entirely.
+## Plane-projection rather than a physics raycast, for the same reason
+## GridManager.tile_under_ray exists at all: a wall between the camera and the
+## floor must not be able to hide the very room it is a candidate to open.
+func _room_under_cursor(cam: Camera3D) -> int:
+	var mouse := get_viewport().get_mouse_position()
+	var tile := GridManager.tile_under_ray(
+		cam.project_ray_origin(mouse), cam.project_ray_normal(mouse))
+	if not GridManager.has_tile(tile):
+		return -1
+	return data.room_index_at(tile)
 
 
 ## Q12: a unit's sprite is drawn only in a room holding a player unit.
@@ -498,7 +528,10 @@ func _hides_interior(pos: Vector3i, step: Vector3i) -> bool:
 		return false
 	for i in range(1, OCCLUSION_DEPTH + 1):
 		var behind := pos + step * i
-		if data.is_walkable(behind) and _revealed.has(data.room_index_at(behind)):
+		if not data.is_walkable(behind):
+			continue
+		var room := data.room_index_at(behind)
+		if _revealed.has(room) or (_hover_room >= 0 and room == _hover_room):
 			return true
 	return false
 

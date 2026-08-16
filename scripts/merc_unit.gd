@@ -72,6 +72,87 @@ func _combat_turn() -> void:
 	await _brain.run(self, quarry)
 
 
+## Whether an UNAWARE merc walks the squad's patrol instead of holding still.
+## Exported so an authored ambush can still plant one at a fixed post by
+## turning it off.
+@export var patrols: bool = true
+
+## How close a member has to get to the squad's shared destination before it
+## counts as "arrived" and picks the next one. Not zero: the destination is
+## picked blind, and demanding an exact tile means one squadmate boxed out of
+## it by another (or by a piece of cover) stalls the whole squad's route
+## instead of just tightening the cluster.
+const PATROL_ARRIVE_RADIUS := 2
+## How many random tiles to try before giving up on finding a reachable one
+## this activation. A miss is rare — most of a generated deck is one connected
+## component — and cheap to retry; it is not worth a smarter sampler for it.
+const PATROL_PICK_ATTEMPTS := 5
+
+
+## The GOAP framework's per-unit combat plan makes a squad fight like a squad;
+## this is the other half — a squad that is not fighting should not read as
+## furniture. One destination for the whole squad, not one route per merc: it
+## is written to the shared blackboard (the same object `SquadCoordinator`
+## already negotiates roles on) so every member walks toward the same point
+## and the squad drifts across the deck as a cluster instead of each merc
+## wandering off on its own errand.
+func _idle_turn() -> void:
+	if not patrols or _brain == null:
+		return
+	var dest := _squad_patrol_dest()
+	if dest == grid_pos:
+		return  # nowhere reachable was found this activation
+	await _move_to_tile(dest, false)
+	# Same beat as `_investigate`: check again after moving, not just at the
+	# top of the activation, so turning a corner mid-patrol into a sightline
+	# the player is standing in reacts on the spot instead of walking another
+	# leg first and only noticing next time this merc is drawn.
+	_look_for_targets()
+	if alert_state == AlertState.COMBAT:
+		await _combat_turn()
+
+
+## Reads the squad's shared destination, or has this unit pick the squad's
+## NEXT one if it has just arrived at the current one (within
+## `PATROL_ARRIVE_RADIUS`) or none has been set yet. Whichever member happens
+## to close the distance during its own activation is the one that re-rolls
+## for everybody — there is no separate "squad leader", the same way there
+## isn't one for role assignment.
+func _squad_patrol_dest() -> Vector3i:
+	var board := _brain.blackboard
+	var have_dest: bool = board.fact("patrol_dest_set", false)
+	if have_dest:
+		var dest: Vector3i = board.fact("patrol_dest", Vector3i.ZERO)
+		if GridManager.chebyshev_dist(grid_pos, dest) > PATROL_ARRIVE_RADIUS:
+			return dest
+	var picked := _pick_patrol_point()
+	if picked == grid_pos:
+		return grid_pos  # nothing reachable found this activation — try again next time
+	board.set_fact("patrol_dest", picked)
+	board.set_fact("patrol_dest_set", true)
+	return picked
+
+
+## A random walkable tile anywhere on the deck, map-wide rather than
+## room-scoped — a merc squad is a roaming patrol, not a sentry post, and nothing
+## here keys off `squad_id`'s room the way spawning does. Retries a few times
+## against a genuinely unreachable pick (a sealed compartment, most likely)
+## before settling for "stay put", which just means this unit tries again next
+## activation rather than the squad ever getting stuck.
+func _pick_patrol_point() -> Vector3i:
+	var map := get_tree().get_first_node_in_group("map")
+	if map == null:
+		return grid_pos
+	var tiles: Array = map.data.walkable_positions()
+	if tiles.is_empty():
+		return grid_pos
+	for _i in PATROL_PICK_ATTEMPTS:
+		var candidate: Vector3i = tiles[randi() % tiles.size()]
+		if candidate != grid_pos and not GridManager.find_path(grid_pos, candidate, 999).is_empty():
+			return candidate
+	return grid_pos
+
+
 ## Set on a merc that is being roused BY its own squad, so it does not turn
 ## round and relay the same contact back. Without it one sighting bounces around
 ## the squad emitting a radio call per member per hop.

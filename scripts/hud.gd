@@ -23,6 +23,11 @@ extends CanvasLayer
 }
 @onready var aimed_shot_cancel: Button = $AimedShotMenu/Panel/VBox/Cancel
 
+@onready var settings_button: Button = $SettingsButton
+@onready var settings_panel: Control = $SettingsPanel
+@onready var fullscreen_check: CheckButton = $SettingsPanel/Panel/VBox/FullscreenCheck
+@onready var settings_close: Button = $SettingsPanel/Panel/VBox/Close
+
 var _aimed_shot_target: Unit = null
 
 
@@ -44,6 +49,9 @@ func _ready() -> void:
 	buttons["face"].pressed.connect(_set_mode.bind(PlayerUnit.Mode.FACE))
 	buttons["flashlight"].pressed.connect(_on_flashlight)
 	buttons["end_turn"].pressed.connect(_on_end_turn)
+	settings_button.pressed.connect(_on_settings_pressed)
+	settings_close.pressed.connect(_on_settings_close)
+	fullscreen_check.toggled.connect(_on_fullscreen_toggled)
 	_refresh(null)
 
 
@@ -234,6 +242,19 @@ func _on_end_turn() -> void:
 	if player:
 		player.end_activation()
 		_refresh(null)
+
+
+func _on_settings_pressed() -> void:
+	fullscreen_check.button_pressed = GameSettings.fullscreen
+	settings_panel.visible = true
+
+
+func _on_settings_close() -> void:
+	settings_panel.visible = false
+
+
+func _on_fullscreen_toggled(pressed: bool) -> void:
+	GameSettings.set_fullscreen(pressed)
 
 
 func _on_mission_ended(player_won: bool) -> void:

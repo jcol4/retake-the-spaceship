@@ -248,19 +248,13 @@ func move_along(path: Array[Vector3i]) -> void:
 	GridManager.set_occupant(grid_pos, null)
 	last_moved_turn = TurnManager.turn_number
 	is_busy = true
-	# A one-tile hop walks rather than runs, where the character has both gaits:
-	# a soldier crossing a single tile does not break into a sprint. Everything
-	# else the deceleration system used to decide here died with the 3D rig —
-	# a sprite has no stride to skate, so a tile is a tile.
-	# `walks_only` overrides the length test rather than extending it: a shambler
-	# walks a ten-tile path for the same reason it walks a one-tile one, which is
-	# that it has no other gait.
-	var walking := visual.has_walk() and (walks_only or path.size() == 1)
-	# WALK_SPEED is the SOLDIER's walk — the speed his cycle was measured at — so
-	# it is the right answer only for a unit that is walking as its slow option.
-	# A unit whose walk is its only gait carries its own, and that is what
-	# `move_speed` means for it.
-	var speed := move_speed if walks_only else (UnitVisual.WALK_SPEED if walking else move_speed)
+	# `walks_only` units (a shambler, say) have no other gait — they walk a
+	# ten-tile path for the same reason they'd walk a one-tile one. Everyone
+	# else runs regardless of distance: the soldier's short-hop walk cycle was
+	# never more than a Mixamo mocap placeholder, was never drawn, and is not
+	# being drawn — a tile is a tile, and the run is the only gait he has.
+	var walking := walks_only
+	var speed := move_speed
 	# Cleared for the duration of the move: a unit crossing the deck is not using
 	# the cover it started behind, and leaving the family set would have it run
 	# the whole way in a crouch the moment `run_low` art exists.

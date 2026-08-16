@@ -23,7 +23,7 @@ volumetric_fog_density = 0.01
 script = ExtResource("1_script")
 
 [node name="TestMap" parent="." unique_id=269266477 instance=ExtResource("2_map")]
-layout_path = "res://maps/coordination_deck.txt"
+layout_path = "res://maps/merc_duel_deck.txt"
 
 [node name="CameraRig" parent="." unique_id=1417240977 instance=ExtResource("3_camera")]
 

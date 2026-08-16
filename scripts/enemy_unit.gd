@@ -106,7 +106,15 @@ func take_turn() -> void:
 		AlertState.ALERT:
 			await _investigate()
 		_:
-			pass  # UNAWARE rests at its nest (Sec 11.1) — drawn, but does nothing
+			await _idle_turn()  # UNAWARE rests at its nest (Sec 11.1) by default
+
+
+## Per-type hook for what an UNAWARE unit spends its activation on, beyond
+## resting. Default no-op, matching the aliens' nest behaviour. MercUnit
+## overrides this to patrol; CerberusUnit doesn't need it — Standing Post is
+## handled entirely by its own `take_turn` override, after `super()` returns.
+func _idle_turn() -> void:
+	pass
 
 
 ## Chance to pay the Aimed Shot premium instead of taking a cheaper snap shot,

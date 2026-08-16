@@ -60,23 +60,26 @@ script = ExtResource("1_script")
 ; a canvas cut to the character (1.92 m) with the feet flush to the bottom edge
 ; (anchor 1.0). Rendered art is neither — see render_sprites.py CANVAS_HEIGHT.
 ;
-; 0.96484375 is MEASURED, not derived: it is 1 - 9/256, where 9 is the lowest
-; alpha row across all 568 rendered PNGs (worst case body_merc_run_n_1.png).
+; 0.984375 is MEASURED, not derived: it is 1 - 6/256, where 6 is the lowest
+; alpha row across all 1248 rendered PNGs (worst case body_merc_run_w_0.png).
 ; It is deliberately NOT 1 - FLOOR_MARGIN / CANVAS_HEIGHT, which would put the
 ; anchor on the world origin at row 45. The origin is not the lowest point of
-; the art — a planted forward foot projects 36 px below it — and since the
+; the art — a planted forward foot projects below it — and since the
 ; sprite is a vertical billboard with ALPHA_CUT_DISCARD it writes depth, so
-; those 36 px fall under the floor mesh and are occluded. Feet through the
+; those extra px fall under the floor mesh and are occluded. Feet through the
 ; floor, which is exactly what anchoring on the origin looked like.
 ;
 ; Re-measure when a pose with a longer reach lands; a crouch or a dive would
-; push the lowest row down and this number with it.
+; push the lowest row down and this number with it. It moved from 0.96484375
+; (row 9, the old body_merc_run_n_1.png) when `run` was re-rendered with its
+; facing fixed: correctly oriented, its stride reaches further down-frame than
+; the misrotated version ever did.
 [node name="Visual" type="Node3D" parent="."]
 script = ExtResource("3_visual")
 layers = Array[StringName]([&"body"])
 variant = &"merc"
 canvas_height = 2.56
-foot_anchor = Vector2(0.5, 0.96484375)
+foot_anchor = Vector2(0.5, 0.984375)
 has_light = true
 
 [node name="Body" type="StaticBody3D" parent="."]

@@ -80,7 +80,7 @@ const ONE_SHOT_TIME := {
 	## with the standing art.
 	"begin_shoot_low": 0.75, "end_shoot_low": 0.45,
 	"begin_shoot_high": 0.75, "end_shoot_high": 0.45,
-	"melee": 1.20, "reload": 1.20, "throw_grenade": 1.00, "interact": 1.00,
+	"melee": 1.20, "reload": 3.75, "throw_grenade": 1.00, "interact": 1.00,
 	"hit_react": 0.47, "downed": 0.80, "alert_scream": 2.80,
 }
 const DEFAULT_ONE_SHOT_TIME := 0.4
@@ -95,9 +95,11 @@ const DEFAULT_ONE_SHOT_TIME := 0.4
 ##
 ## `run` is the one that is forced rather than chosen: unit_visual.gd emits a
 ## footstep every FOOTSTEP_GAP (0.333 s), so a two-step cycle must take 0.666 s
-## or the sound and the footplant drift apart. `walk` follows from WALK_SPEED
-## (1.02 m/s) over a ~0.7 m stride. The rest are held by nothing external and are
-## simply chosen to read well.
+## or the sound and the footplant drift apart. `walk` below is a leftover from a
+## soldier walk cycle that was never drawn and is not being drawn (the soldier
+## has one gait, RUN, at any distance — see Unit.move_along); the brawler is the
+## only `walks_only` character today and overrides it in VARIANT_LOOP_TIME below.
+## The rest are held by nothing external and are simply chosen to read well.
 const LOOP_TIME := {
 	"run": 2 * 0.333,  # = unit_visual.gd's 2 x FOOTSTEP_GAP
 	"walk": 1.4,

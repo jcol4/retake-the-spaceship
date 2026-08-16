@@ -29,7 +29,8 @@ signal footstep
 # back to the current stance when they finish.
 const IDLE := &"idle"
 const RUN := &"run"
-## Short moves walk. See WALK_SPEED and Unit.move_along for when.
+## Used only by `walks_only` units (the brawler), which have no other gait.
+## See Unit.move_along.
 const WALK := &"walk"
 const OVERWATCH := &"overwatch_hold"
 # There is no standalone crouch. Being down low is a COVER FAMILY, not a stance:
@@ -117,7 +118,7 @@ const FALLBACK_TIME := {
 	FIRE_SHOOT: BURST_CADENCE,
 	END_SHOOT: SETTLE_TIME,
 	MELEE: 1.20,
-	RELOAD: 1.20,
+	RELOAD: 3.75,
 	GRENADE: 1.00,
 	INTERACT: 1.00,
 	HIT_REACT: 0.47,
@@ -156,21 +157,11 @@ const SETTLE_TIME := 0.20
 const COVER_RAISE_TIME := 0.75
 const COVER_SETTLE_TIME := 0.45
 
-## Metres per second for the WALK stance, replacing Unit.move_speed on the moves
-## that take it — a soldier crossing a single tile, who has both gaits and picks
-## the slow one.
-##
-## The AUTHORING CONTRACT for that cycle, the way move_speed is the run's: draw
-## the walk to read at 1.02 m/s rather than fitting the speed to whatever gets
-## drawn. It began as the old mocap Walking clip's measured speed and is kept
-## because build_sprite_frames.gd's `walk` LOOP_TIME (1.4 s over a ~0.7 m stride)
-## was derived from it — moving one without the other slides the feet.
-##
-## NOTHING REACHES IT TODAY, and that is a gap in the art rather than dead code:
-## the merc has no `walk` action, so `has_walk` is false and he always runs; the
-## brawler has one but is `walks_only` and carries its own speed in move_speed
-## (see Unit.move_along). This goes live the day a merc walk cycle is drawn.
-const WALK_SPEED := 1.02
+## The WALK stance is still used, but only by `walks_only` units (the brawler),
+## which carry their own speed in Unit.move_speed rather than a shared
+## constant. The soldier/merc has no walk cycle — that was a Mixamo mocap
+## placeholder that was never drawn and is not being drawn — so he has one
+## gait, RUN, at any distance. See Unit.move_along.
 
 # --- Direction ---------------------------------------------------------------
 #
@@ -676,13 +667,6 @@ func play_stance_exit(action: StringName, next: StringName) -> void:
 	# become.
 	_stance = next
 	await play_action(action)
-
-
-## Whether this character can walk a short move rather than run it. False for
-## anything with no walk art, which keeps those units on the single gait they
-## have.
-func has_walk() -> bool:
-	return not _instant() and _has_any(WALK)
 
 
 func play_burst(rounds: int) -> void:

@@ -33,7 +33,7 @@ script = ExtResource("2_visual")
 layers = Array[StringName]([&"body"])
 variant = &"merc"
 canvas_height = 2.56
-foot_anchor = Vector2(0.5, 0.96484375)
+foot_anchor = Vector2(0.5, 0.984375)
 has_light = true
 faction_tint = Color(1, 0.66, 0.48, 1)
 
