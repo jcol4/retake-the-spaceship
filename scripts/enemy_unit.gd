@@ -365,6 +365,36 @@ func hear_noise(at: Vector3i) -> void:
 		action_logged.emit("%s hears something at %s" % [stats.display_name, at])
 
 
+## Being shot at, called by `Unit._report_incoming` on the unit an attack was
+## aimed at — hit or miss, fatal or not.
+##
+## The strongest stimulus in the game and the only one with NO range limit, which
+## is the point: sight is capped at `detection_range` and gated on light, the beam
+## channel needs a beam, and gunfire noise carries `NOISE_RADIUS` tiles. A bullet
+## that reaches you has already crossed whatever distance there was, so gating
+## this on range would be asking whether the shot was close enough to have been
+## fired — which it plainly was.
+##
+## It hands over the shooter as a confirmed target rather than merely rousing,
+## because unlike a noise this is not ambiguous about who or where. That is NOT a
+## permanent lock: `_check_contact` runs on every later activation, so a unit put
+## into Combat by a shot it never saw coming still drops back to Alert after
+## `lose_contact_turns` if it cannot actually find the shooter. Killing the lights
+## and breaking line of sight remains the counterplay — this only guarantees the
+## reaction, not the outcome.
+func come_under_fire(shooter: Unit) -> void:
+	if is_downed or shooter == null or not is_hostile_to(shooter):
+		return
+	# Already in a fight: keep the target it has rather than snapping to whoever
+	# fired most recently. Two shooters would otherwise have this unit pivoting
+	# between them every time either pulled a trigger, and it would close with
+	# neither.
+	if alert_state == AlertState.COMBAT and target != null and not target.is_downed:
+		return
+	_enter_combat(shooter, "%s takes fire from %s!" % [
+		stats.display_name, shooter.stats.display_name])
+
+
 func rouse(at: Vector3i) -> void:
 	# Nudged by a neighbour's alert, or any stimulus short of a confirmed sighting.
 	if is_downed or alert_state != AlertState.UNAWARE:
@@ -382,7 +412,12 @@ func _enter_combat(new_target: Unit, reason: String) -> void:
 	_turns_without_contact = 0
 	_set_state(AlertState.COMBAT)
 	if was != AlertState.COMBAT:
-		action_logged.emit(reason)
+		# An empty reason enters combat SILENTLY. For a caller that is already
+		# narrating the whole event itself, a line per unit buries it rather than
+		# explaining it — MercUnit's radio relay puts a squad into combat in one go
+		# and reports it as one call.
+		if reason != "":
+			action_logged.emit(reason)
 		_propagate_alert()
 
 

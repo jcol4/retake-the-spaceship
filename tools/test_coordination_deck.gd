@@ -38,6 +38,13 @@ var _blackboard_cls
 var _doctrines
 var _coordinator
 var _combat
+## Loaded rather than named. Writing `_network.NOISE_RADIUS` inline makes
+## security_network.gd a COMPILE-time dependency of this tool, which is compiled
+## before autoloads register — it fails on GridManager, and the autoload node is
+## then left scriptless, so every later `SecurityNetwork.report_noise` inside the
+## engine dies with "Nonexistent function in base 'Node'". Reaching the constant
+## through a loaded handle keeps it a runtime lookup.
+var _network
 
 
 func _initialize() -> void:
@@ -47,6 +54,7 @@ func _initialize() -> void:
 	_doctrines = load("res://scripts/ai/doctrines.gd")
 	_coordinator = load("res://scripts/ai/squad_coordinator.gd")
 	_combat = load("res://scripts/combat.gd")
+	_network = load("res://scripts/security_network.gd")
 	_map = load("res://scenes/test_map.tscn").instantiate()
 	root.add_child(_map)
 	await process_frame
@@ -61,6 +69,7 @@ func _initialize() -> void:
 	await _check_squads_are_separated_by_compartment()
 	await _check_heavy_cover_blocks_line_of_sight()
 	await _check_a_squad_shares_contacts_over_the_radio()
+	await _check_shooting_one_merc_engages_the_whole_squad()
 	await _check_the_full_squad_sequence()
 
 	print("")
@@ -178,7 +187,116 @@ func _check_a_squad_shares_contacts_over_the_radio() -> void:
 		"and so is the one out in the corridor")
 	_check(other_squad.alert_state == other_squad.AlertState.UNAWARE,
 		"while the OTHER squad hears nothing — the radio net has an edge")
-	_free([spotter, far_wing, in_corridor, other_squad])
+
+	# A CONFIRMED sighting, on a squad that is now already ALERT from the stimulus
+	# above. This is the case the relay used to drop on the floor: it only spoke to
+	# squadmates that were UNAWARE, so the noise a moment earlier had spent the
+	# squad's one chance to be told anything and the actual contact reached nobody.
+	# The rest of the squad walked to a stale tile, found nothing, settled, and the
+	# player fought a six-man squad one merc at a time.
+	var quarry = await _spawn(PLAYER, Vector3i(7, 0, 8))
+	spotter._enter_combat(quarry, "spotter opens fire")
+
+	for merc in [far_wing, in_corridor]:
+		_check(merc.alert_state == merc.AlertState.COMBAT,
+			"a squadmate already ALERT is upgraded by the call, not skipped")
+		_check(merc.target == quarry,
+			"and is handed the contact itself — a radio names who, a scream cannot")
+	_check(other_squad.alert_state == other_squad.AlertState.UNAWARE,
+		"the other squad still hears nothing, sighting or not")
+
+	# Losing sight drops a merc back to ALERT mid-fight (`_check_contact`), and
+	# under a one-shot broadcast that was permanent — `_propagate_alert` had
+	# already fired for this engagement and would never fire again. `_combat_turn`
+	# now re-broadcasts every activation; that call is made directly here rather
+	# than by running the turn, which would drag in the planner and its animations.
+	in_corridor._lose_target()
+	_check(in_corridor.alert_state == in_corridor.AlertState.ALERT,
+		"a merc that loses contact falls back to ALERT")
+	spotter._relay_to_squad(quarry.grid_pos, quarry)
+	_check(in_corridor.alert_state == in_corridor.AlertState.COMBAT,
+		"and the next call pulls it back in — the net stays open all fight")
+
+	_free([spotter, far_wing, in_corridor, other_squad, quarry])
+
+
+## SHOOTING ONE MERC ENGAGES THE SQUAD — hit, miss, or clean kill.
+##
+## Staged deliberately OUT OF EARSHOT. Every merc here is further from the player
+## than `_network.NOISE_RADIUS`, so the gunshot-noise channel reaches none
+## of them and cannot be what produced the result. That isolation is the whole
+## value of the check: awareness used to come only from sight, beams and noise,
+## which meant a shot fired from 6 tiles away triggered literally nothing.
+func _check_shooting_one_merc_engages_the_whole_squad() -> void:
+	var shooter = await _spawn(PLAYER, TARGET_TILE)
+
+	# --- The shot lands, the man survives -----------------------------------
+	var squad := await _spawn_squad()
+	for merc in squad:
+		_check(_grid.chebyshev_dist(merc.grid_pos, shooter.grid_pos) > _network.NOISE_RADIUS,
+			"the squad is out of earshot (%d > %d) — noise cannot be the trigger" % [
+				_grid.chebyshev_dist(merc.grid_pos, shooter.grid_pos), _network.NOISE_RADIUS])
+	squad[0].come_under_fire(shooter)
+	_check_whole_squad_engaged(squad, shooter, "shot at")
+
+	# --- The shot MISSES ----------------------------------------------------
+	# Identical by construction: `_report_incoming` is called outside the `if
+	# result.hit` branch, so a miss is the same stimulus as a hit. Asserted anyway,
+	# because "we only react to damage" is the obvious way to write this and it
+	# would pass every other check in this file.
+	_free(squad)
+	squad = await _spawn_squad()
+	var before = squad[0].current_hp
+	squad[0].come_under_fire(shooter)
+	_check(squad[0].current_hp == before, "a miss does no damage")
+	_check_whole_squad_engaged(squad, shooter, "missed")
+
+	# --- The shot KILLS the man it was aimed at -----------------------------
+	# The case that matters most and the one a damage-driven implementation loses.
+	# Ordered exactly as `fire_at` orders it — `take_damage` first, the report
+	# after — so the victim really is downed by the time the call goes out.
+	_free(squad)
+	squad = await _spawn_squad()
+	var victim = squad[0]
+	victim.take_damage(9999)
+	_check(victim.is_downed, "the shot killed the merc it was aimed at")
+	shooter._report_incoming(victim)
+	var survivors: Array = [squad[1], squad[2]]
+	_check_whole_squad_engaged(survivors, shooter, "killed outright")
+
+	# --- End to end, through a REAL shot ------------------------------------
+	# Everything above calls the hook directly. This proves `fire_at` is actually
+	# wired to it, which no amount of direct calls can. Hit or miss is left to the
+	# dice on purpose: the assertion holds either way, and saying so is the point.
+	_free(squad)
+	squad = await _spawn_squad()
+	var result = await shooter.fire_at(squad[0], _combat.ShotAction.SHOOT)
+	_check_whole_squad_engaged(squad, shooter,
+		"a real shot that %s" % ("hit" if result.hit else "missed"))
+
+	_free(squad)
+	_free([shooter])
+
+
+## Three mercs on one squad, scattered across three compartments and all well
+## outside the player's earshot.
+func _spawn_squad() -> Array:
+	var squad: Array = []
+	for tile: Vector3i in [Vector3i(5, 0, 7), Vector3i(34, 0, 9), Vector3i(20, 0, 12)]:
+		var merc = await _spawn(MERC, tile)
+		merc.squad_id = "under_fire"
+		squad.append(merc)
+	return squad
+
+
+func _check_whole_squad_engaged(squad: Array, shooter, label: String) -> void:
+	var engaged := 0
+	for merc in squad:
+		if merc.alert_state == merc.AlertState.COMBAT and merc.target == shooter:
+			engaged += 1
+	_check(engaged == squad.size(),
+		"%s: all %d mercs are in COMBAT on the shooter (got %d)" % [
+			label, squad.size(), engaged])
 
 
 ## THE WHOLE POINT, staged end to end on the real deck.

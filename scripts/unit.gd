@@ -715,7 +715,9 @@ func do_suppress(target: Unit) -> void:
 	_end_activation_ap()
 	is_busy = true
 	await face_toward(target.global_position)
+	_arm_covering_fire(target)
 	await visual.play_burst(SUPPRESSION_BURST_ROUNDS)
+	_disarm_covering_fire()
 	is_busy = false
 	# Deliberately NOT awaited: the covering fire runs for as long as the
 	# suppression does, which is until this unit's next activation — awaiting it
@@ -731,6 +733,11 @@ func do_suppress(target: Unit) -> void:
 ## a loop that fired real shots on a wall-clock timer would let a unit kill
 ## things between activations.
 ##
+## It does SHOW everything, though: same tracers, same muzzle flash, same room
+## strobe as any other burst, via `_arm_covering_fire`. The distinction is
+## between what the shot resolves and what the shot looks like, and only the
+## first one is empty — rounds going downrange with no effect is the mechanic.
+##
 ## Skipped entirely when the unit is off screen or headless (`is_instant`), where
 ## there is nobody to show it to and the timer would just burn turn time.
 func _suppression_fire_loop() -> void:
@@ -742,7 +749,9 @@ func _suppression_fire_loop() -> void:
 		# suppression to have ended, or for either party to have died.
 		if suppressing == null or is_downed or is_busy or not is_inside_tree():
 			return
+		_arm_covering_fire(suppressing)
 		await visual.play_burst(SUPPRESSION_BURST_ROUNDS)
+		_disarm_covering_fire()
 
 
 ## Drops the suppression this unit is APPLYING, if any. Safe to call at any time
@@ -925,6 +934,7 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 			result.newly_injured = target.apply_body_part_damage(body_part, raw)
 			if result.stunned:
 				target.stunned = true
+	_report_incoming(target)
 	# Sec 5.4: gunfire is loud, and it leaves brass. The first is what the robot
 	# faction shares with the (deferred) alien sound channel; the second is what
 	# only a Proctor ever reads, turns later.
@@ -964,13 +974,41 @@ func melee_at(target: Unit) -> Combat.ShotResult:
 		var raw := result.damage
 		result.damage = target.take_damage(raw)
 		result.absorbed = raw - result.damage
+	# Outside the `if result.hit`, like the one in `fire_at`: a swing that missed
+	# still happened, and being swung at is the least ambiguous stimulus there is.
+	_report_incoming(target)
 	is_busy = false
 	return result
 
 
+## Tells `target` this unit just attacked it — the stimulus an attack creates in
+## the unit it was aimed AT, as opposed to the noise it makes for everyone else.
+## `SecurityNetwork.report_noise` is what the room hears; this is what the unit in
+## the crosshairs feels, and they are deliberately different channels: the noise
+## is positional and short-ranged, this one is personal and has no range at all.
+##
+## Called on a MISS as well as a hit, and on an attack that KILLS, because those
+## are exactly the two cases a damage-driven implementation loses. Awareness hung
+## entirely off sight, beams and noise until now, which meant being shot was in
+## itself not a stimulus: a unit hit in the back by a shooter it could not see
+## took the damage and stayed Unaware, and a shot that killed outright was the
+## quietest thing on the deck.
+##
+## Duck-typed exactly like `report_noise`: only units with an awareness state
+## machine can react, and player units are simply skipped.
+func _report_incoming(target: Unit) -> void:
+	if target != null and target.has_method("come_under_fire"):
+		target.come_under_fire(self)
+
+
 func _on_muzzle() -> void:
 	# One of these per round of the burst, fired by UnitVisual.play_burst.
-	if is_instant() or _pending_shot == null or _pending_target == null:
+	#
+	# Gated on the TARGET, not on the shot: covering fire arms one without the
+	# other (see `_arm_covering_fire`), and it draws the same tracers and the same
+	# flash as a real burst. A rifle going off looks like a rifle going off — the
+	# only thing the roll decides is where the rounds end up.
+	if is_instant() or _pending_target == null:
 		return
 	var round_index := _burst_round
 	_burst_round += 1
@@ -981,9 +1019,38 @@ func _on_muzzle() -> void:
 	# of the unit — the rifle is held off to the right, so a centreline tracer
 	# visibly left the chest.
 	var from := visual.muzzle_origin()
-	var lands := _pending_shot.hit and round_index not in _burst_strays
-	vfx.tracer(from, _pending_target.global_position, lands, _pending_shot.crit)
+	# No ShotResult means nothing was rolled, so nothing can land: every round of
+	# a covering burst is thrown wide, which is exactly what suppressing fire is.
+	# `tracer` already handles that case — a miss gets the wide cone, the cold
+	# colour and no impact flash.
+	var lands := _pending_shot != null and _pending_shot.hit and round_index not in _burst_strays
+	var crit := _pending_shot != null and _pending_shot.crit
+	vfx.tracer(from, _pending_target.global_position, lands, crit)
 	vfx.muzzle_flash(from)
+
+
+## Arms the muzzle hook for a burst that resolves NO shot — suppressing fire.
+##
+## Mirrors what `fire_at` sets up either side of its `play_burst`, minus the
+## `ShotResult`, and that omission is the signal rather than an oversight:
+## `_on_muzzle` reads a null shot as "these rounds were never going to hit
+## anybody" and throws them all wide.
+func _arm_covering_fire(target: Unit) -> void:
+	_pending_shot = null
+	_pending_target = target
+	_burst_round = 0
+	_burst_strays.clear()
+
+
+## Clears the arming above, UNLESS a real shot has taken it over meanwhile.
+##
+## That is reachable, not defensive: the pinned unit breaking cover fires this
+## suppressor's held shot (`TurnManager.check_suppression_break`), and the
+## cosmetic burst it interrupted must not blank the break shot's tracers when it
+## finishes a moment later.
+func _disarm_covering_fire() -> void:
+	if _pending_shot == null:
+		_pending_target = null
 
 
 ## Sec 6.3. ENDS the activation: see `_end_activation_ap` for why the leftover AP

@@ -63,6 +63,15 @@ func _combat_turn() -> void:
 	var quarry := acquire_target()
 	if quarry == null:
 		return
+	# Put the contact back out every activation, not only on the transition into
+	# Combat. `_propagate_alert` fires exactly once per engagement, which meant a
+	# squadmate that happened to be out of the loop for that single instant — busy
+	# investigating something older, or one that had lost contact and dropped back
+	# to Alert — was written off for the rest of the fight. A radio net is a channel
+	# that stays open, and this is the half of that which a one-shot broadcast
+	# cannot express. It costs nothing once the squad is engaged: `_receive_call`
+	# reports nobody reached and the bark stays quiet.
+	_relay_to_squad(quarry.grid_pos, quarry)
 	# The squad layer decides before this unit plans (fix D). Run from here rather
 	# than on a turn-start signal because a squad only means anything once one of
 	# its members has a target — and this is the first moment that is true.
@@ -174,7 +183,41 @@ var _being_relayed: bool = false
 ## isolate and pick off, and against mercs you cannot. Engaging any part of a
 ## merc squad engages the squad.
 func _propagate_alert() -> void:
-	_relay_to_squad(last_known_pos)
+	# Guarded here as well as in `rouse`, because a relayed merc that takes the
+	# handoff enters Combat, and `_enter_combat` propagates. Without this the
+	# squad's own call bounces back off every receiver it reaches.
+	if _being_relayed:
+		return
+	# A confirmed sighting goes out as a CONTACT — the target itself, not merely
+	# the tile it was standing on. That is the whole difference between a radio and
+	# a scream. The aliens' `_propagate_alert` withholds the target on purpose (a
+	# neighbour heard something kick off and saw nothing), but a merc on the net is
+	# being TOLD who to shoot, which is what makes "engaging any part of a merc
+	# squad engages the squad" true rather than aspirational.
+	_relay_to_squad(last_known_pos, target)
+
+
+## Shooting at ONE merc engages the WHOLE squad, and does so whether the shot
+## hit, missed, or killed the man it was aimed at.
+##
+## The live case needs no special handling — `super` puts this merc into Combat,
+## `_enter_combat` propagates, and the relay hands the shooter to every squadmate
+## as a confirmed contact. The DEAD case is the one a naive implementation loses,
+## and it is the case that matters most: a corpse cannot call anything in, so a
+## clean kill on the only merc who knew about you would make the shot that killed
+## him the quietest thing on the deck. The player would be rewarded for one-shot
+## kills with a squad that never reacted, which is the exact opposite of what a
+## squad on a radio should feel like.
+##
+## So the call goes out on his behalf. Read it as the squad hearing his channel
+## open and cut off, which tells them as much as anything he could have said.
+func come_under_fire(shooter: Unit) -> void:
+	if shooter == null or not is_hostile_to(shooter):
+		return
+	if is_downed:
+		_relay_to_squad(shooter.grid_pos, shooter)
+		return
+	super(shooter)
 
 
 ## Rousing this merc also puts its squad on notice — not just entering combat.
@@ -186,24 +229,78 @@ func rouse(at: Vector3i) -> void:
 	var was := alert_state
 	super(at)
 	if alert_state != was and not _being_relayed:
-		_relay_to_squad(at)
+		# No target to hand over: this merc has a stimulus, not a sighting, so the
+		# squad gets the same half-contact it did.
+		_relay_to_squad(at, null)
 
 
-func _relay_to_squad(at: Vector3i) -> void:
+## Puts a call out to every living squadmate. `contact` is the sighted unit when
+## there is one and null for a bare stimulus; handing it over is what upgrades the
+## receivers to Combat rather than merely stirring them.
+func _relay_to_squad(at: Vector3i, contact: Unit) -> void:
 	var reached := 0
 	for other: MercUnit in _squadmates():
-		if other == self or other.alert_state != AlertState.UNAWARE:
+		if other == self:
 			continue
 		# Flagged on the RECEIVER, not the sender: it is the unit being told that
 		# must not relay onward, and one hop from the unit that actually saw
 		# something is the whole of the traffic.
 		other._being_relayed = true
-		other.rouse(at)
+		if other._receive_call(at, contact):
+			reached += 1
 		other._being_relayed = false
-		reached += 1
-	if reached > 0:
-		action_logged.emit("%s: \"Contact at %s — all callsigns, moving.\"" % [
+	if reached == 0:
+		return  # nobody learned anything — the net stays quiet
+	if contact != null:
+		action_logged.emit("%s: \"Contact — %s at %s. All callsigns, engage.\"" % [
+			stats.display_name, contact.stats.display_name, at])
+	else:
+		action_logged.emit("%s: \"Something at %s — all callsigns, moving.\"" % [
 			stats.display_name, at])
+
+
+## Acts on a squadmate's radio call. Returns whether this merc learned anything
+## from it, so the caller can stay silent on a call that told nobody anything.
+##
+## Deliberately NOT gated on being UNAWARE, which is the shape `rouse` has and the
+## shape this used to have. That gate is right for a scream — a creature already
+## reacting to something does not need telling twice — and it is exactly wrong for
+## a radio, because the one call it throws away is the one that matters. A merc
+## roused by a distant noise is ALERT, so when a squadmate opened fire a moment
+## later the UNAWARE-only filter dropped the sighting on the floor and left it
+## walking to a tile the player had already left. It arrived, found nothing,
+## settled back to UNAWARE, and the player got to fight the squad one merc at a
+## time. Worse, the stimulus that caused it was usually the squad's own opening
+## shot: the louder the fight, the more reliably the rest of the squad sat it out.
+func _receive_call(at: Vector3i, contact: Unit) -> bool:
+	if is_downed:
+		return false
+	if contact != null and not contact.is_downed:
+		if alert_state == AlertState.COMBAT and target == contact:
+			return false  # already fighting the unit being called out
+		# Silent — the caller narrates the squad's whole response in one line.
+		#
+		# Note this hands over a target across the deck, with no sight of it and no
+		# line to it, which for any other faction would be a cheat. It is the merc
+		# hook working as designed, and it is self-correcting rather than absolute:
+		# every shooting action is gated on real LOS, and `_check_contact` walks a
+		# merc that cannot actually SEE what it was told about back down to ALERT
+		# after `lose_contact_turns`. So the radio buys the squad a heading, not
+		# x-ray vision, and killing the lights still breaks the lock.
+		_enter_combat(contact, "")
+		return true
+	if alert_state == AlertState.COMBAT:
+		return false  # a vague stimulus tells a unit already in a firefight nothing
+	if alert_state == AlertState.ALERT:
+		# Already stirred, but by something older. Redirect rather than ignore: the
+		# newer call is the better guess at where the trouble actually is.
+		if _has_last_known and last_known_pos == at:
+			return false
+		last_known_pos = at
+		_has_last_known = true
+		return true
+	rouse(at)
+	return alert_state != AlertState.UNAWARE
 
 
 ## Living members of this unit's squad, itself included. Keyed by `squad_id`
