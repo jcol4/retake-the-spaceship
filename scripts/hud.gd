@@ -192,7 +192,7 @@ func _on_menu_pick(part: int) -> void:
 	_hide_aimed_shot_menu()
 	if player == null or target == null:
 		return
-	await player.fire_aimed_shot(target, part)
+	await player._issue(&"fire_aimed_shot", [target, part])
 	_refresh(TurnManager.active_unit)
 
 
@@ -209,7 +209,7 @@ func _on_hunker() -> void:
 	_hide_aimed_shot_menu()
 	var player := _active_player()
 	if player:
-		player.try_hunker()
+		player._issue(&"try_hunker")
 		_refresh(player)
 
 
@@ -217,7 +217,7 @@ func _on_overwatch() -> void:
 	_hide_aimed_shot_menu()
 	var player := _active_player()
 	if player:
-		player.try_overwatch()
+		player._issue(&"try_overwatch")
 		_refresh(player)
 
 
@@ -225,14 +225,14 @@ func _on_reload() -> void:
 	_hide_aimed_shot_menu()
 	var player := _active_player()
 	if player:
-		player.try_reload()
+		player._issue(&"try_reload")
 		_refresh(player)
 
 
 func _on_flashlight() -> void:
 	var player := _active_player()
 	if player:
-		player.try_toggle_flashlight()
+		player._issue(&"try_toggle_flashlight")
 		_refresh(player)
 
 

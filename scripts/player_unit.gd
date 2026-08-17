@@ -178,14 +178,28 @@ func _throwable_tiles() -> Array[Vector3i]:
 	for dz in range(-EMP_THROW_RANGE, EMP_THROW_RANGE + 1):
 		for dx in range(-EMP_THROW_RANGE, EMP_THROW_RANGE + 1):
 			var tile := grid_pos + Vector3i(dx, 0, dz)
-			if not GridManager.has_tile(tile):
-				continue
-			if not GridManager.has_clear_line(self,
-					global_position + Vector3(0, 1.4, 0),
-					GridManager.grid_to_world(tile) + Vector3(0, 0.9, 0)):
-				continue
-			out.append(tile)
+			if _can_throw_emp_at(tile):
+				out.append(tile)
 	return out
+
+
+## The single source of truth for "is this tile a legal EMP target" — used both
+## to build the cached `_throw_tiles` overlay above and, critically, by
+## `_try_throw_emp` itself. That method runs on whichever peer is authoritative
+## for this unit (see `_issue`/`_rpc_command`), which in co-op is the HOST's
+## copy — a copy whose `_throw_tiles` cache was never populated, because the
+## host's own UI never armed EMP mode for a squadmate's merc. Re-deriving it
+## live instead of trusting the cache is what keeps a client's throw from being
+## rejected as "no line" every time.
+func _can_throw_emp_at(target: Vector3i) -> bool:
+	var delta := target - grid_pos
+	if absi(delta.x) > EMP_THROW_RANGE or absi(delta.z) > EMP_THROW_RANGE:
+		return false
+	if not GridManager.has_tile(target):
+		return false
+	return GridManager.has_clear_line(self,
+			global_position + Vector3(0, 1.4, 0),
+			GridManager.grid_to_world(target) + Vector3(0, 0.9, 0))
 
 
 func _blast_tiles(centre: Vector3i) -> Array[Vector3i]:
@@ -230,9 +244,10 @@ func _try_throw_emp(target: Vector3i) -> void:
 	var cost := action_cost(UnitStats.Action.GRENADE)
 	if ap < cost or emp_charges <= 0 or is_busy:
 		return
-	# Re-validated against the same cached set the overlay was drawn from, so what
-	# the player clicked and what they were shown can never disagree.
-	if not (target in _throw_tiles):
+	# Re-validated live (see `_can_throw_emp_at`) rather than against the cached
+	# overlay: this may be running on the host's copy of the unit, not the
+	# clicking peer's, so the local `_throw_tiles` cache can't be trusted.
+	if not _can_throw_emp_at(target):
 		action_logged.emit("%s: no throwing line to %s" % [stats.display_name, target])
 		return
 	emp_charges -= 1
@@ -274,7 +289,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	# way therefore resolved to the wall's own tile — never a legal destination —
 	# so the click did nothing at all. Projection needs no hit.
 	if mode == Mode.MOVE:
-		_try_move(_tile_under_mouse())
+		_issue(&"_try_move", [_tile_under_mouse()])
 		return
 	var hit := _raycast_mouse()
 	if hit.is_empty():
@@ -282,16 +297,60 @@ func _unhandled_input(event: InputEvent) -> void:
 	if mode == Mode.EMP:
 		# Ahead of the unit lookup, like FACE: landing it on the machine itself is
 		# the normal way to use this.
-		_try_throw_emp(_tile_under_mouse_any())
+		_issue(&"_try_throw_emp", [_tile_under_mouse_any()])
 		return
 	if mode == Mode.FACE:
 		# Deliberately ahead of the unit lookup: aiming the beam *at* something is
 		# the main reason to use this, so clicking an alien has to be allowed.
-		_try_face(hit["position"])
+		_issue(&"_try_face", [hit["position"]])
 		return
 	var unit := _unit_from_collider(hit["collider"])
 	if unit and is_hostile_to(unit) and mode in [Mode.SHOOT, Mode.AIMED_SHOT, Mode.SUPPRESS]:
+		# Called directly rather than via `_issue`: Aimed Shot's branch below
+		# only opens a local zone menu (see `aimed_shot_target_picked`) and must
+		# run on THIS peer, not get routed to the host. The branches that
+		# actually mutate shared state (fire, suppress) issue their own
+		# requests — see `_try_shoot`/`_try_suppress` below.
 		_try_shoot(unit)
+
+
+## Every method a click or HUD button can trigger on this unit. `_rpc_command`
+## dispatches by NAME (see below), so this allowlist is what stops a peer
+## sending an arbitrary method name and getting it `callv`'d.
+const _COMMANDS := [
+	"_try_move", "_do_shoot", "_try_suppress", "_try_throw_emp", "_try_face",
+	"try_hunker", "try_overwatch", "try_reload", "try_toggle_flashlight", "fire_aimed_shot",
+]
+
+
+## Every player command funnels through here instead of being called directly,
+## so that in co-op a client's own click sends the request to the HOST's copy
+## of this same unit — the one Combat/GridManager/RNG actually simulate —
+## rather than mutating a copy nobody else will ever see. Single-player, and
+## the host acting on its own units, skip the round trip and just run it.
+func _issue(method: StringName, args: Array = []) -> void:
+	if not multiplayer.has_multiplayer_peer() or multiplayer.is_server():
+		await callv(method, args)  # `await` is a no-op if the callee isn't a coroutine
+	else:
+		_rpc_command.rpc_id(1, method, args)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_command(method: StringName, args: Array) -> void:
+	if not multiplayer.is_server():
+		return
+	if method not in _COMMANDS:
+		push_warning("%s: rejected unknown command '%s'" % [stats.display_name, method])
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if owner_peer_id != 0 and sender != owner_peer_id:
+		push_warning("%s: rejected '%s' from peer %d (owned by %d)" % [
+			stats.display_name, method, sender, owner_peer_id])
+		return
+	if TurnManager.active_unit != self:
+		push_warning("%s: rejected '%s' — not this unit's activation" % [stats.display_name, method])
+		return
+	callv(method, args)
 
 
 func _accepting_input() -> bool:
@@ -341,14 +400,17 @@ func _unit_from_collider(collider: Object) -> Unit:
 	return null
 
 
+## Recomputes the path fresh rather than trusting `_preview_path`/`_move_costs`
+## (see `_cost_for`): those are the CLICKING peer's cached UI state, but in
+## co-op this runs on the host's copy of the unit, whose own cache was never
+## populated for a squadmate's merc. A pathfind per click is cheap enough that
+## there's no reason to keep the cache-dependent fast path around at all.
 func _try_move(target: Vector3i) -> void:
-	var cost := _cost_for(target)
-	if cost == 0 or ap < cost:
-		return
-	var path := _preview_path
+	var path := GridManager.find_path(grid_pos, target, move_tiles_affordable())
 	if path.is_empty() or path[-1] != target:
-		path = GridManager.find_path(grid_pos, target, move_tiles_affordable())
-	if path.is_empty():
+		return
+	var cost := move_cost_for(path.size())
+	if ap < cost:
 		return
 	spend_ap(cost)  # before the walk, so the HUD greys the buttons immediately
 	set_mode(Mode.NONE)
@@ -358,15 +420,20 @@ func _try_move(target: Vector3i) -> void:
 	_check_activation_end()
 
 
+## Called directly (not via `_issue`) — the AIMED_SHOT branch only opens a
+## local zone menu and has to run on the clicking peer, not the host. The two
+## branches that actually mutate shared state issue their own requests.
 func _try_shoot(target: Unit) -> void:
 	if mode == Mode.SUPPRESS:
-		await _try_suppress(target)
+		_issue(&"_try_suppress", [target])
 		return
 	if mode == Mode.AIMED_SHOT:
 		# Doesn't fire yet — Aimed Shot needs a zone first. The HUD listens for
 		# this and opens the VATS-style menu; `fire_aimed_shot` below finishes
 		# the job once the player picks one. Gated on the CHEAPEST zone, since
-		# which one is being paid for is exactly what that menu is for.
+		# which one is being paid for is exactly what that menu is for. Purely
+		# a read of locally-mirrored state to decide whether to open the menu —
+		# `fire_aimed_shot` re-validates for real once a zone is picked.
 		if ap < min_aimed_shot_cost() or not can_shoot():
 			return
 		if not GridManager.has_line_of_sight(self, target):
@@ -374,6 +441,10 @@ func _try_shoot(target: Unit) -> void:
 			return
 		aimed_shot_target_picked.emit(target)
 		return
+	_issue(&"_do_shoot", [target])
+
+
+func _do_shoot(target: Unit) -> void:
 	var cost := action_cost(UnitStats.Action.SHOOT)
 	if ap < cost or not can_shoot():
 		return

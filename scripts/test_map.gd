@@ -22,7 +22,17 @@ const DEFAULT_LAYOUT := "res://maps/test_deck.txt"
 
 
 func _ready() -> void:
-	build(MapAscii.load_file(resolve_layout()))
+	build_layout(resolve_layout())
+
+
+## Split out from `_ready()` so main.gd can REBUILD from a different layout
+## once it knows one — in co-op, the joining client's own `--map=` (or lack
+## of one) can't be trusted; only the HOST's resolved path is authoritative
+## for both peers. `MapBuilder.build` is safe to call a second time (it clears
+## whatever a previous build left behind), so this doubles as "load" and
+## "override the local guess" without any special-casing here.
+func build_layout(path: String) -> void:
+	build(MapAscii.load_file(path))
 
 
 ## The layout this scene will load. `--map=<name>` resolves to `maps/<name>.txt`;

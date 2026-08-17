@@ -222,6 +222,54 @@ func _ready() -> void:
 	GridManager.cover_destroyed.connect(_on_cover_destroyed)
 	refresh_cover_pose()  # a unit may spawn already in cover
 	visual.set_flashlight_enabled(has_flashlight and flashlight_on)
+	if multiplayer.has_multiplayer_peer():
+		# The host always simulates every unit — aliens as much as a
+		# squadmate's own mercs — so the host (peer 1, Godot's well-known
+		# server id) is this node's authority everywhere, regardless of
+		# `owner_peer_id` (which only gates who's ALLOWED to issue it a
+		# command — see PlayerUnit._issue).
+		set_multiplayer_authority(1)
+		_setup_replication()
+		moved.connect(_on_moved_broadcast_grid_pos)
+
+
+## Property replication for everything a client needs to actually SEE this
+## unit doing something: position/facing for the sprite, HP/AP for the HUD,
+## ammo for the loadout screen, downed/hunkered/overwatch for pose and
+## targeting. `grid_pos` is deliberately NOT in here — see
+## `_on_moved_broadcast_grid_pos`, which pushes it explicitly (with an
+## occupancy update) only once a move actually settles, rather than every
+## in-transit frame.
+func _setup_replication() -> void:
+	var sync := MultiplayerSynchronizer.new()
+	var config := SceneReplicationConfig.new()
+	for prop in ["global_position", "rotation:y", "current_hp", "ap", "is_downed",
+			"ammo", "reserve", "hunkered", "on_overwatch", "flashlight_on"]:
+		var path := NodePath(".:%s" % prop)
+		config.add_property(path)
+		config.property_set_replication_mode(path, SceneReplicationConfig.REPLICATION_MODE_ALWAYS)
+	sync.replication_config = config
+	add_child(sync)
+
+
+## `grid_pos` drives GridManager occupancy (pathfinding/LOS for every OTHER
+## peer's clicks), so a client needs it kept current for units it doesn't
+## itself move — not just the visual `global_position` the synchronizer above
+## already streams. `moved` only fires once a walk fully settles (see
+## move_along), so this is a single authoritative correction per move rather
+## than a fight with mid-walk occupancy the client has no stake in anyway.
+func _on_moved_broadcast_grid_pos(_unit: Unit) -> void:
+	if multiplayer.is_server():
+		_rpc_sync_grid_pos.rpc(grid_pos)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_sync_grid_pos(new_grid_pos: Vector3i) -> void:
+	if new_grid_pos == grid_pos:
+		return
+	GridManager.set_occupant(grid_pos, null)
+	grid_pos = new_grid_pos
+	GridManager.set_occupant(grid_pos, self)
 
 
 func begin_activation() -> void:

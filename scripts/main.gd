@@ -28,6 +28,13 @@ const SQUAD := [
 
 var _auto := false
 
+## Fired once a joining client learns which layout the HOST actually resolved
+## (see `_rpc_use_layout`) — this client's own `map` already auto-built from
+## its OWN `--map=` guess in TestMap._ready() by this point (which runs before
+## anything here), and that guess is only trustworthy for the host. Every
+## other peer rebuilds once this arrives; see `TestMap.build_layout`.
+signal layout_chosen(path: String)
+
 
 func _ready() -> void:
 	TurnManager.log_message.connect(func(text: String) -> void: print(text))
@@ -45,7 +52,18 @@ func _ready() -> void:
 	add_child(net_menu)
 	net_menu.setup()
 	await net_menu.resolved
+
+	if SteamLobby.is_networked():
+		if SteamLobby.is_host():
+			_rpc_use_layout.rpc(map.resolve_layout())
+		else:
+			map.build_layout(await layout_chosen)
 	_spawn_and_start()
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_use_layout(path: String) -> void:
+	layout_chosen.emit(path)
 
 
 ## Everything that used to be unconditional in `_ready` — spawning is
