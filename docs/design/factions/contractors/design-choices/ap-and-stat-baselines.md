@@ -85,7 +85,7 @@ Cost = max(1, ceil(base_cost − k_ref × Reflexes))
 | Suppress | 8 AP | 0.03 |
 | Aimed Shot | per zone, below | 0.015 |
 | Hunker Down | 6 AP | — none, fixed |
-| Overwatch | commits what is left | — see §5 |
+| Overwatch | 6 AP, same as Shoot | 0.03 — see §5 |
 | Flashlight toggle | 0 AP | — always free |
 
 ### The target this table is fitted to
@@ -167,16 +167,16 @@ per-zone pricing the player cannot choose between zones from accuracy alone.
 Deliberately asymmetric rather than round-to-nearest, so there is no favourable rounding boundary to
 hunt for.
 
-## 5. Overwatch — variable reserve
+## 5. Overwatch — priced as a Shoot
 
-Overwatch has no fixed price. The unit commits an amount of its remaining AP to the reserved shot,
-recorded on `Unit.overwatch_reserve`. It still **ends the activation outright**, so any AP beyond
-the reserve is forfeited, exactly as before.
+Overwatch now has a fixed price, identical to Shoot's: `UnitStats.Action.OVERWATCH` shares Shoot's
+6 AP base and 0.03 Reflexes discount. `Unit.overwatch_reserve` is set to that fixed cost — not to
+whatever AP happened to be left — so the reaction shot's accuracy reads the same regardless of when
+in the activation Overwatch is taken.
 
-**The reserve does not yet affect anything.** The reaction shot still takes `Combat.OVERWATCH_PENALTY`'s
-flat −30% — the reserve→penalty formula is open (§8). The number is recorded now so that lands as a
-formula change rather than a signature change. Callers pass −1 for "all of it", which is what the
-HUD does and the only thing worth doing until the formula exists.
+It still **ends the activation outright**, exactly as before: the listed cost is a FLOOR, not the
+whole price, and any AP left over once it is paid is forfeited by `Unit._end_activation_ap`, same as
+Hunker Down.
 
 ## 6. Max HP and Initiative baselines
 

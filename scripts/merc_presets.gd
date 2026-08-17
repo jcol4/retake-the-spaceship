@@ -24,7 +24,13 @@ extends RefCounted
 ## rules — so the fight is legible precisely to the degree they are a fair
 ## comparison. Making them clearly worse would turn the faction into a tutorial;
 ## the intended edge over them is COORDINATION, which they will shortly have too.
-static func rifleman(display_name: String) -> UnitStats:
+##
+## `veteran` is stat-only for now (docs/design/factions/rival-mercs/README.md
+## Sec 2): same doctrine, same action library, same weapon choice — just a
+## better-trained body behind the trigger. Behavioural divergence (e.g. biasing
+## role assignment toward veterans) is deferred until the base squad has been
+## played with; baking it in now would be tuning a knob nobody has watched yet.
+static func rifleman(display_name: String, veteran: bool = false) -> UnitStats:
 	var stats := UnitStats.new()
 	stats.display_name = display_name
 	# Against a rolled Assault's 30-50 / 45-65 / 60-85 / 30-60.
@@ -54,6 +60,8 @@ static func rifleman(display_name: String) -> UnitStats:
 	# running out of options.
 	stats.melee_base_accuracy = 40
 	stats.melee_damage = 4
+	if veteran:
+		_apply_veteran(stats)
 	return stats
 
 
@@ -64,11 +72,32 @@ static func rifleman(display_name: String) -> UnitStats:
 ## The LMG's six rounds is two full bursts of suppressing fire against the SMG's
 ## one, so the unit built to hold an angle is the one that can actually hold it,
 ## and the role assignment has a reason behind it the player can see.
-static func support(display_name: String) -> UnitStats:
+static func support(display_name: String, veteran: bool = false) -> UnitStats:
 	var stats := rifleman(display_name)
 	stats.weapon = WeaponPresets.make(WeaponPresets.WeaponId.LMG)
 	# Steadier and slower than its squadmates: it is here to put rounds in one
 	# direction for a whole activation, not to reposition.
 	stats.perception = randi_range(35, 50)
 	stats.reflexes = randi_range(30, 45)
+	if veteran:
+		_apply_veteran(stats)
 	return stats
+
+
+## The one lever a veteran pulls: a flat bump on every stat that already governs
+## something a player would notice mid-fight — accuracy (perception), AP cost and
+## initiative (reflexes), pool size (fitness), toughness (base_hp) and crit odds
+## (luck). Deliberately NOT a second roll (`randi_range` again) or a multiplier:
+## a flat add keeps a veteran strictly better than the SAME merc would have
+## rolled, rather than merely drawing from a better-looking range that could
+## still come up low. A player who traces why one merc outshot another should
+## find "veteran" as the answer, not "got lucky twice."
+const VETERAN_STAT_BONUS := 10
+const VETERAN_HP_BONUS := 3
+
+static func _apply_veteran(stats: UnitStats) -> void:
+	stats.perception += VETERAN_STAT_BONUS
+	stats.reflexes += VETERAN_STAT_BONUS
+	stats.fitness += VETERAN_STAT_BONUS
+	stats.luck += VETERAN_STAT_BONUS
+	stats.base_hp += VETERAN_HP_BONUS

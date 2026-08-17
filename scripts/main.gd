@@ -9,6 +9,12 @@ const BRAWLER_SCENE := preload("res://scenes/brawler_unit.tscn")
 const MERC_SCENE := preload("res://scenes/merc_unit.tscn")
 const HUNTER_SCENE := preload("res://scenes/agile_hunter_unit.tscn")
 
+## Fixed ratio for Phase 1 of the rival-mercs plan (see
+## docs/design/factions/rival-mercs/README.md Sec 2) — a placeholder roll until
+## squad composition is decided by the objective/spawn system rather than by the
+## test spawner.
+const MERC_VETERAN_CHANCE := 0.25
+
 @onready var map: Node3D = $TestMap
 @onready var camera_rig: Node3D = $CameraRig
 @onready var hud: CanvasLayer = $HUD
@@ -29,6 +35,36 @@ func _ready() -> void:
 	if _auto:
 		TurnManager.unit_activated.connect(_auto_play)
 		TurnManager.mission_ended.connect(func(_won: bool) -> void: get_tree().quit.call_deferred())
+		_spawn_and_start()
+		return
+
+	# Host/join is a separate screen shown before anything spawns: co-op needs
+	# both peers' MultiplayerPeer connected before squad ownership can be
+	# assigned below, and single-player just clicks through it as "Solo".
+	var net_menu := HostJoinMenu.new()
+	add_child(net_menu)
+	net_menu.setup()
+	await net_menu.resolved
+	_spawn_and_start()
+
+
+## Everything that used to be unconditional in `_ready` — spawning is
+## deterministic (fixed SQUAD, fixed map spawn points, no RNG) so every peer
+## builds an identical node tree independently rather than one peer spawning
+## and replicating nodes to the other. See the co-op plan's Sec 3.
+func _spawn_and_start() -> void:
+	# Which peer owns which merc. Computed identically on every peer — sorted
+	# by peer id rather than "whoever's local" — so a block split lands on the
+	# same mercs everywhere despite each peer building this tree independently.
+	# Solo play never networks, so every unit stays owner 0 and
+	# `is_owned_by_local_player()` is unconditionally true (see Unit).
+	var owning_peers: Array[int] = [0]
+	if SteamLobby.is_networked():
+		owning_peers = [multiplayer.get_unique_id()]
+		owning_peers.append_array(Array(multiplayer.get_peers()))
+		owning_peers.sort()
+	var mercs_per_peer := ceili(float(SQUAD.size()) / owning_peers.size())
+
 	var player_units: Array[PlayerUnit] = []
 	var spawn_index := 0
 	for entry in SQUAD:
@@ -36,6 +72,8 @@ func _ready() -> void:
 			break
 		var unit: PlayerUnit = PLAYER_SCENE.instantiate()
 		unit.stats = ClassPresets.roll(entry[0], entry[1])
+		var peer_slot := mini(spawn_index / mercs_per_peer, owning_peers.size() - 1)
+		unit.owner_peer_id = owning_peers[peer_slot]
 		unit.position = GridManager.grid_to_world(map.player_spawns[spawn_index])
 		add_child(unit)  # Unit._ready snaps to grid + registers occupancy
 		unit.action_logged.connect(_on_unit_log)
@@ -89,8 +127,13 @@ func _ready() -> void:
 		# unknown at compile time and `:=` has nothing to infer from.
 		var room: int = map.room_at(spawn)
 		var name := "Merc_%d" % merc_index
-		merc.stats = MercPresets.support(name) if not squads_seen.has(room) \
-			else MercPresets.rifleman(name)
+		# Stat-only veteran tier (docs/design/factions/rival-mercs/README.md
+		# Sec 2): a flat chance per merc, independent of the support/rifleman
+		# split above — a squad's designated gunner earning the better body is as
+		# plausible as a rifleman earning it.
+		var veteran := randf() < MERC_VETERAN_CHANCE
+		merc.stats = MercPresets.support(name, veteran) if not squads_seen.has(room) \
+			else MercPresets.rifleman(name, veteran)
 		squads_seen[room] = true
 		# Squad BY COMPARTMENT, the same way a robot takes its security zone from
 		# the deck. Two merc teams in two rooms get two independent blackboards
@@ -297,5 +340,15 @@ func _can_act_on(player: Unit, enemy: Unit) -> bool:
 func _on_unit_log(text: String) -> void:
 	print(text)
 	hud.append_log(text)
+	# `action_logged` narration (move/shoot/reload/etc.) is per-unit and local
+	# by default — unlike TurnManager.log_message, which already fans itself
+	# out (see turn_manager.gd's `_log`). Only the host's copy of a unit ever
+	# actually runs these actions, so only the host needs to relay.
+	if SteamLobby.is_networked() and SteamLobby.is_host():
+		_rpc_relay_log.rpc(text)
 
 
+@rpc("authority", "call_remote", "reliable")
+func _rpc_relay_log(text: String) -> void:
+	print(text)
+	hud.append_log(text)

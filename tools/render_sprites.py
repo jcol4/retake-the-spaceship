@@ -290,6 +290,11 @@ POSE_BUCKET_ZERO = {
 ## added. Eight renders buys a `melee/<dir>` that is right in every facing.
 POSE_ACTION = {
     "brawler": {"melee": "idle"},
+    # `overwatch_hold` is the pose name the game plays; `overwatch` is the
+    # Blender action it is now drawn from -- a 32-frame scanning-stance cycle
+    # replacing the old placeholder-length hold. See LOOP_TIME below for why
+    # the duration is derived rather than a round number.
+    "merc": {"overwatch_hold": "overwatch"},
 }
 
 ## Frames to sample for a pose, overriding the duration-derived count. Keyed by
@@ -356,7 +361,10 @@ LOOP_TIME = {
     "run": 2 * 0.333,
     "walk": 1.4,
     "idle": 2.0,
-    "overwatch_hold": 1.6, "aim_hold": 1.6,
+    # 32 Blender frames at SAMPLE_FPS (12) -- the merc's `overwatch` action is
+    # drawn to exactly this length, so the duration is stated as that division
+    # rather than a rounder number that would sample to a different count.
+    "overwatch_hold": 32 / 12.0, "aim_hold": 1.6,
     "idle_low": 2.4, "idle_high": 2.4,
 }
 DEFAULT_LOOP_TIME = 1.6

@@ -129,6 +129,7 @@ func _refresh(unit: Unit) -> void:
 		buttons["suppress"].text = "Suppress (%d)  %dr" % [
 			player.action_cost(UnitStats.Action.SUPPRESS), Unit.SUPPRESS_AMMO_COST]
 		_label_cost(buttons["hunker"], "Hunker", player.action_cost(UnitStats.Action.HUNKER))
+		_label_cost(buttons["overwatch"], "Overwatch", player.action_cost(UnitStats.Action.OVERWATCH))
 		_label_cost(buttons["reload"], "Reload", player.action_cost(UnitStats.Action.RELOAD))
 		# Charges are per soldier, so the label has to say how many are left too —
 		# an EMP button showing only its AP cost hides the real constraint.
@@ -146,9 +147,8 @@ func _refresh(unit: Unit) -> void:
 	buttons["emp"].disabled = not is_player \
 		or player.ap < player.action_cost(UnitStats.Action.GRENADE) or player.emp_charges <= 0
 	buttons["hunker"].disabled = not is_player or player.ap < player.action_cost(UnitStats.Action.HUNKER)
-	# Overwatch alone has no fixed price: it commits whatever is left (Sec 4.4),
-	# so any AP at all is enough to take it.
-	buttons["overwatch"].disabled = not is_player or player.ap < 1 or not player.can_shoot()
+	buttons["overwatch"].disabled = not is_player \
+		or player.ap < player.action_cost(UnitStats.Action.OVERWATCH) or not player.can_shoot()
 	buttons["reload"].disabled = not is_player \
 		or player.ap < player.action_cost(UnitStats.Action.RELOAD) or not player.can_reload()
 	# Both free actions (Sec 4.2) — no AP gate on either.

@@ -5,15 +5,18 @@
 [node name="CameraRig" type="Node3D"]
 script = ExtResource("1_script")
 
-; Plain offset rather than a SpringArm3D: with zoom removed the boom had no
-; remaining job, and its collision_mask was already 0. The camera sits back
-; along the pivot's local +Z purely to keep geometry off the near plane.
+; Plain offset rather than a SpringArm3D: zoom is driven by Camera3D.size
+; (see camera_rig.gd), not by moving the camera along a boom, and the boom's
+; collision_mask was already 0. The camera sits back along the pivot's local
+; +Z purely to keep geometry off the near plane.
 [node name="Camera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 18)
 projection = 1
-; Vertical world extent on screen, and the only scale control there is now that
-; zoom is gone. Chosen against the XCOM reference framing in
-; character-art-plan.md, which puts a character at 15-20% of viewport height.
+; Vertical world extent on screen at the closest zoom (camera_rig.gd's
+; MIN_ZOOM_SIZE, which mirrors this value — keep the two in sync). Chosen
+; against the XCOM reference framing in character-art-plan.md, which puts a
+; character at 15-20% of viewport height at this zoom level; scrolling out
+; trades that legibility for more of the room, up to MAX_ZOOM_SIZE.
 ;
 ; 10.5, corrected down from 12. THE FORESHORTENING IS THE WHOLE CORRECTION: an
 ; upright figure seen at PITCH does not occupy its full height on screen, it
@@ -26,7 +29,8 @@ projection = 1
 ; moment rendered art landed. Mirrored by render_sprites.py GAME_CAMERA_SIZE,
 ; which is where the same arithmetic is printed at render time.
 ;
-; Tightening this further trades deck legibility for character detail. At 10.5
-; the view is roughly 7 by 12 tiles, which still holds a whole compartment.
+; At 10.5 the view is roughly 7 by 12 tiles, which still holds a whole
+; compartment. Scrolling out further is a legibility/coverage tradeoff the
+; player now makes themselves; see MAX_ZOOM_SIZE in camera_rig.gd.
 size = 10.5
 far = 200.0

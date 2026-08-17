@@ -257,9 +257,9 @@ func _check_standing_post() -> void:
 	sentry.begin_activation()
 	await sentry.take_turn()
 	_check(sentry.on_overwatch, "a quiet Auxilium reserves its shot rather than idling")
-	# Overwatch commits whatever is left (rework doc Sec 4.4) and ends the
-	# activation, so the sentry ends its turn on zero rather than merely down a
-	# point — asserted against the pool, which is per-unit now.
+	# Overwatch pays a fixed cost (priced as a Shoot) and still ends the
+	# activation outright, so the sentry ends its turn on zero rather than merely
+	# down a point — asserted against the pool, which is per-unit now.
 	_check(sentry.ap == 0 and sentry.ap_pool() > 0, "and pays the AP for it")
 
 	# Leashed: a target further from its post than post_leash is not chased.

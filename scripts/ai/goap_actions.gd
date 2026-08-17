@@ -460,14 +460,13 @@ class HoldOverwatch extends GoapAction:
 		preconditions = {}
 		effects = {IN_COVER: true}
 
-	func is_available(unit: Unit, _ctx: Dictionary) -> bool:
-		return unit.ap > 0 and unit.can_shoot() and not unit.on_overwatch
+	func is_available(unit: Unit, ctx: Dictionary) -> bool:
+		return unit.ap >= ap_cost(unit, ctx) and unit.can_shoot() and not unit.on_overwatch
 
 	func ap_cost(unit: Unit, _ctx: Dictionary) -> int:
-		# Whatever is left — Overwatch has no fixed price, it commits the
-		# remainder (rework doc Sec 4.4). Reporting the true figure keeps the
-		# planner from treating it as a cheap filler action.
-		return maxi(unit.ap, 1)
+		# Priced as a Shoot (UnitStats.Action.OVERWATCH) rather than "whatever is
+		# left" — see Unit.do_overwatch.
+		return unit.action_cost(UnitStats.Action.OVERWATCH)
 
 	func execute(unit: Unit, _ctx: Dictionary) -> bool:
 		unit.do_overwatch()

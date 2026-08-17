@@ -9,7 +9,7 @@ extends Unit
 ##   ALERT   — has a stimulus but no confirmed target; walks to `last_known_pos`,
 ##             and reverts once it arrives with nothing to show for it.
 ##   COMBAT  — has a confirmed target and fights it, until the target dies or it
-##             loses contact for `lose_contact_turns` activations.
+##             loses contact for `lose_contact_turns` rounds.
 ##
 ## Two independent channels feed those transitions, both light-based (the Sec 5.4
 ## sound channel is deferred):
@@ -58,7 +58,14 @@ var target: Unit = null  # confirmed; COMBAT only
 var last_known_pos: Vector3i  # where ALERT walks to
 
 var _has_last_known: bool = false
-var _turns_without_contact: int = 0
+## TurnManager.turn_number as of the last confirmed sighting — compared
+## against the global round counter rather than incremented per activation,
+## the same way SquadBlackboard's claim staleness and GoapBrain's commitment
+## window are timed. An activation-counter would happen to agree with this in
+## the common case (one activation per unit per round), but only by accident;
+## measuring the round directly is what actually makes `lose_contact_turns`
+## mean "rounds", matching every other *_TURNS timer in the codebase.
+var _last_contact_turn: int = 0
 
 
 func _init() -> void:
@@ -311,10 +318,9 @@ func _check_contact() -> void:
 	# by the target going dark — eventually breaks the lock, which is the other
 	# half of making the flashlight a decision rather than a free upgrade.
 	if _can_see(target):
-		_turns_without_contact = 0
+		_last_contact_turn = TurnManager.turn_number
 		return
-	_turns_without_contact += 1
-	if _turns_without_contact >= lose_contact_turns:
+	if TurnManager.turn_number - _last_contact_turn >= lose_contact_turns:
 		_lose_target()
 
 
@@ -409,7 +415,7 @@ func _enter_combat(new_target: Unit, reason: String) -> void:
 	target = new_target
 	last_known_pos = new_target.grid_pos
 	_has_last_known = true
-	_turns_without_contact = 0
+	_last_contact_turn = TurnManager.turn_number
 	_set_state(AlertState.COMBAT)
 	if was != AlertState.COMBAT:
 		# An empty reason enters combat SILENTLY. For a caller that is already
@@ -427,7 +433,6 @@ func _lose_target() -> void:
 		_has_last_known = true
 	action_logged.emit("%s loses track of its target" % stats.display_name)
 	_set_state(AlertState.ALERT)
-	_turns_without_contact = 0
 
 
 ## Drops back to UNAWARE without the "finds nothing" narration. Used by the

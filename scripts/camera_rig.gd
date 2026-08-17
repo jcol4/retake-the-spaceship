@@ -1,12 +1,20 @@
 extends Node3D
 ## Isometric camera rig: fixed orthographic projection at a fixed pitch, with the
-## yaw snapped to one of four quarter turns. Q/E step between them, WASD pans.
+## yaw snapped to one of four quarter turns. Q/E step between them, WASD pans,
+## scroll wheel zooms.
 ##
-## Pitch and zoom both have no input at all. That is the point of the migration:
-## the deck is drawn at one angle and one scale, so hand-drawn sprite art only
-## ever has to be authored for that angle and that scale. What the free-orbit
+## Pitch has no input at all — the deck is drawn at one angle, so hand-drawn
+## sprite art only ever has to be authored for that angle. What the free-orbit
 ## camera used to solve — a bulkhead standing between the player and the room —
 ## is now MapBuilder's wall occlusion pass instead.
+##
+## Zoom (Camera3D.size) does have input, within a fixed range: MIN_ZOOM_SIZE is
+## the one-true-scale the sprite renderer authors against (see camera_rig.tscn
+## and render_sprites.py's GAME_CAMERA_SIZE), MAX_ZOOM_SIZE is picked so scrolling
+## all the way out fits a full room like maps/merc_duel_deck.txt (30x16 tiles) on
+## screen at once. Sprites are pre-rendered images, not tile-scale pixel art, so
+## scaling them down for the wider view just softens them a little — no LOD or
+## re-render needed.
 
 ## Emitted whenever the yaw changes, including every frame of a snap tween.
 ## Sprite direction is the unit's yaw MINUS this one, so a snap re-buckets every
@@ -28,9 +36,29 @@ const SNAP_TIME := 0.25
 
 const PAN_SPEED := 12.0
 
+## The sprite-authoring scale (see camera_rig.tscn) — the closest the player
+## can scroll in, and where the camera starts.
+const MIN_ZOOM_SIZE := 10.5
+## Fits maps/merc_duel_deck.txt (30x16 tiles, walls included) on screen at
+## once at a 16:9-or-wider aspect. Derived from the rig's fixed yaw/pitch: an
+## isometric view's visible ground diamond has width:height = sqrt(3):1, so
+## the binding constraint is height. For that room (45m x 24m), the diamond's
+## screen height comes out to ~28.2 world units; a little headroom rounds it
+## up to 30 so the wall ring isn't clipped exactly at the edge.
+const MAX_ZOOM_SIZE := 30.0
+## World units of Camera3D.size per scroll notch.
+const ZOOM_STEP := 1.5
+## Camera3D.size units per second the live size closes toward _zoom_target.
+## Scrolling nudges the target rather than the live size directly, so a burst
+## of notches reads as one continuous motion instead of a jump per tick.
+const ZOOM_SMOOTH := 10.0
+
 var _snap_tween: Tween = null
 var _snap_target := START_YAW
 var _last_yaw := INF
+var _zoom_target := MIN_ZOOM_SIZE
+
+@onready var _camera: Camera3D = $Camera3D
 
 
 func _ready() -> void:
@@ -38,6 +66,7 @@ func _ready() -> void:
 	# direction, and there is exactly one rig.
 	add_to_group("camera_rig")
 	rotation = Vector3(-PITCH, START_YAW, 0.0)
+	_zoom_target = _camera.size
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -47,6 +76,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		snap_by(1)
 	elif event.is_action_pressed("camera_snap_right"):
 		snap_by(-1)
+	elif event.is_action_pressed("camera_zoom_in"):
+		_zoom_target = maxf(MIN_ZOOM_SIZE, _zoom_target - ZOOM_STEP)
+	elif event.is_action_pressed("camera_zoom_out"):
+		_zoom_target = minf(MAX_ZOOM_SIZE, _zoom_target + ZOOM_STEP)
 
 
 ## Turns `steps` quarter turns from wherever the current snap is heading.
@@ -73,6 +106,9 @@ func _process(delta: float) -> void:
 	if rotation.y != _last_yaw:
 		_last_yaw = rotation.y
 		yaw_changed.emit(rotation.y)
+
+	if _camera.size != _zoom_target:
+		_camera.size = move_toward(_camera.size, _zoom_target, ZOOM_SMOOTH * delta)
 
 	var pan := Vector2.ZERO
 	if Input.is_action_pressed("camera_pan_up"):

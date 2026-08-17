@@ -19,14 +19,14 @@ extends Resource
 enum UnitClass { ASSAULT, SNIPER, SUPPORT, HEAVY }
 
 ## The actions the AP economy prices, which is NOT the same set as
-## `Combat.ShotAction`: that enum is about how a shot RESOLVES, so it has an
-## Overwatch entry (its own accuracy math, but no fixed price — it reserves
-## whatever is left, see Unit.do_overwatch) and no entry for the four actions
-## below that cost AP without resolving a shot.
+## `Combat.ShotAction`: that enum is about how a shot RESOLVES, so its Overwatch
+## entry is about the reaction shot's accuracy math, not its price — Overwatch's
+## price lives here, priced identically to Shoot (see BASE_AP_COST), and no
+## entry for the four actions below that cost AP without resolving a shot.
 ##
 ## Aimed Shot is deliberately absent too: its price depends on the zone picked,
 ## so it goes through `aimed_shot_cost` rather than this table.
-enum Action { SHOOT, MELEE, GRENADE, RELOAD, HUNKER, SUPPRESS }
+enum Action { SHOOT, MELEE, GRENADE, RELOAD, HUNKER, SUPPRESS, OVERWATCH }
 
 # --- AP pool (Sec 4.2 of the rework doc) -------------------------------------
 
@@ -64,9 +64,15 @@ const AP_POOL_PER_FITNESS := 0.075
 ## dearer option than simply shooting at them, which is what stops it being a
 ## strictly better Shoot. What it buys for the extra points is a whole enemy
 ## activation spent flinching, and a free reaction shot if they run.
+##
+## Overwatch is priced identically to Shoot rather than carrying its own entry —
+## same base, same discount — because holding an angle should cost what taking
+## the shot would have. It still ends the activation outright (see
+## Unit._end_activation_ap): this is the FLOOR of that price, and any AP left
+## over once it is paid is forfeited, not banked.
 const BASE_AP_COST := {
 	Action.SHOOT: 6, Action.MELEE: 6, Action.GRENADE: 6,
-	Action.RELOAD: 6, Action.HUNKER: 6, Action.SUPPRESS: 8,
+	Action.RELOAD: 6, Action.HUNKER: 6, Action.SUPPRESS: 8, Action.OVERWATCH: 6,
 }
 
 ## How much Reflexes takes off each action's base cost, per point.
@@ -87,10 +93,11 @@ const BASE_AP_COST := {
 ##
 ## Hunker is 0 rather than missing, and that is the statement: it is the one
 ## priced action Reflexes does not touch. Dropping behind a crate is not a thing
-## you do faster by being quick.
+## you do faster by being quick. Overwatch takes Shoot's own 0.03 — it is priced
+## as a Shoot, so it is discounted as one.
 const K_REFLEXES := {
 	Action.SHOOT: 0.03, Action.MELEE: 0.03, Action.GRENADE: 0.03,
-	Action.RELOAD: 0.03, Action.HUNKER: 0.0, Action.SUPPRESS: 0.03,
+	Action.RELOAD: 0.03, Action.HUNKER: 0.0, Action.SUPPRESS: 0.03, Action.OVERWATCH: 0.03,
 }
 
 ## No action is ever free, however quick its owner. Without this floor a Reflexes

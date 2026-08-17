@@ -42,6 +42,22 @@ const BURST_STRAY_MAX := 2
 ## unassignable is what guarantees no path still sets sides the old way.
 var is_player_controlled: bool:
 	get: return faction == Faction.Id.CONTRACTORS
+
+## Which human peer this unit belongs to in co-op — orthogonal to `faction`,
+## which is still just "whose side." 0 means host/unowned: every AlienUnit,
+## and any PlayerUnit before squad assignment has run. Assigned once, at squad
+## spawn (see main.gd), by the host; never touched client-side.
+@export var owner_peer_id: int = 0
+
+## True on a peer whose local player is the human sitting at this unit's
+## controls. In singleplayer (no multiplayer peer active) every unit reads as
+## locally owned, so this is safe to gate input on unconditionally rather than
+## branching the whole input path on "are we networked at all."
+func is_owned_by_local_player() -> bool:
+	if not multiplayer.has_multiplayer_peer():
+		return true
+	return owner_peer_id == multiplayer.get_unique_id()
+
 ## Metres per second while walking a path. Cosmetic ONLY — the tile budget and
 ## the AP economy know nothing about it, so no value here can affect balance.
 ##
@@ -899,7 +915,7 @@ func _injured_arm_count() -> int:
 	return n
 
 
-func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.BodyPart.TORSO) -> Combat.ShotResult:
+func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.BodyPart.TORSO, charge_ammo: bool = true) -> Combat.ShotResult:
 	# Coroutine — callers MUST `await`. Damage lands when the shot animation
 	# finishes, so the target drops in time with the effect, not before it.
 	# Swing onto the target before anything else. The weapon points where the
@@ -910,7 +926,11 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	# No vertical aim. A sprite has no spine to tilt, so a shot at a target on
 	# another deck reads flatter than it did; if that comes back it will be
 	# per-pitch-band art on an arm layer, not a bone solve.
-	ammo -= 1
+	# `charge_ammo` is false for the suppressing-fire break shot: those 3 rounds
+	# were already spent up front in `do_suppress`, so this shot is drawn from
+	# that paid-for burst rather than costing a fresh one.
+	if charge_ammo:
+		ammo -= 1
 	var result := Combat.resolve_shot(self, target, action, body_part)
 	is_busy = true
 	var rounds := randi_range(BURST_MIN, BURST_MAX)
@@ -1072,15 +1092,18 @@ func do_hunker() -> void:
 
 ## Sec 4.2. ENDS the activation, as `do_hunker` does — see `_end_activation_ap`.
 ##
-## `reserve_ap` is how much of what is left the unit commits to the reserved shot
-## (rework doc Sec 4.4), replacing the old flat 1 AP price. Callers pass -1 for
-## "all of it", which is the sane default AND now a real choice: the reserve
-## scales the reaction shot's accuracy (`Combat.overwatch_penalty_for`), so
-## reserving late in an activation with 1 AP left covers an angle far worse than
-## committing a full turn to it.
-func do_overwatch(reserve_ap: int = -1) -> void:
+## Priced identically to Shoot (`UnitStats.Action.OVERWATCH`, see BASE_AP_COST)
+## rather than the old "commits whatever is left": `overwatch_reserve` is set to
+## that fixed cost, not to the unit's whole remaining pool, so the reaction
+## shot's accuracy (`Combat.overwatch_penalty_for`) reads the same regardless of
+## when in the activation Overwatch is taken. The activation still ends outright
+## once it is paid — `_end_activation_ap` forfeits anything left over, same as
+## it always has.
+func do_overwatch() -> void:
 	on_overwatch = true
-	overwatch_reserve = ap if reserve_ap < 0 else clampi(reserve_ap, 1, ap)
+	var cost := action_cost(UnitStats.Action.OVERWATCH)
+	overwatch_reserve = cost
+	spend_ap(cost)
 	_end_activation_ap()
 	# Holding an angle from behind a crate is a different pose from holding one in
 	# the open. Falls through to the plain hold until `overwatch_hold_low` exists.

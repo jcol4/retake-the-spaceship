@@ -295,7 +295,11 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _accepting_input() -> bool:
-	return TurnManager.active_unit == self and not is_downed and not is_busy
+	# `is_owned_by_local_player` is a no-op true in single-player (see Unit) —
+	# this is the entire client-side enforcement that a co-op squadmate can't
+	# drive your mercs: their copy of this same node just never accepts input.
+	return TurnManager.active_unit == self and not is_downed and not is_busy \
+			and is_owned_by_local_player()
 
 
 func _raycast_mouse() -> Dictionary:
@@ -451,16 +455,11 @@ func try_hunker() -> void:
 	_check_activation_end()
 
 
-## `reserve_ap` is how much of what is left goes into the reserved shot (Sec
-## 4.4); -1 commits all of it, which is what the HUD passes. Overwatch ends the
-## activation either way, so a partial reserve forfeits the difference rather
-## than banking it — it will start meaning something once the reserve-to-accuracy
-## formula lands (Sec 6 item 1), and the parameter exists so that lands as a
-## formula change rather than a signature change.
-func try_overwatch(reserve_ap: int = -1) -> void:
-	if ap < 1 or is_busy or not can_shoot():
+func try_overwatch() -> void:
+	var cost := action_cost(UnitStats.Action.OVERWATCH)
+	if ap < cost or is_busy or not can_shoot():
 		return
-	do_overwatch(reserve_ap)  # burns the remaining AP itself — see try_hunker above
+	do_overwatch()  # pays the fixed cost, then burns any remainder — see try_hunker above
 	set_mode(Mode.NONE)
 	action_logged.emit("%s is on overwatch (%d AP reserved)" % [
 		stats.display_name, overwatch_reserve])

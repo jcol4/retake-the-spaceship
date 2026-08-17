@@ -80,11 +80,13 @@ all require ammo) for the rest of it — no emergency reserve, no resupply.
 
 ## Overwatch as the pool's one interrupt
 
-> **Survives, with the price replaced.** Overwatch no longer costs 1 AP — it commits a *variable
-> reserve* of whatever the unit has left. Everything the section argues still holds: it is still the
-> one interrupt, still enemy-movement-only, still terminal, and still paid for with a significant
-> accuracy penalty. The flat −30% is now a placeholder for a penalty that scales with the amount
-> reserved, which is the open item that motivated making the reserve a number at all.
+> **Survives, with the price replaced twice now.** Overwatch no longer costs 1 AP. It first became a
+> *variable reserve* of whatever the unit had left; it is now priced identically to Shoot (6 AP base,
+> Reflexes-discounted — see [`ap-and-stat-baselines.md`](ap-and-stat-baselines.md) §5), with
+> `Unit.overwatch_reserve` recording that fixed cost rather than the leftover pool. Everything the
+> section argues still holds regardless: it is still the one interrupt, still
+> enemy-movement-only, still terminal, and still paid for with a significant accuracy penalty on the
+> reserved shot.
 
 Overwatch (1 AP) is the single action that breaks the normal draw order, and only in one
 direction: it lets a unit interrupt the pool to fire when an *enemy* enters its LOS, but never

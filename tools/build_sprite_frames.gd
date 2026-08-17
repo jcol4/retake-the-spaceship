@@ -104,7 +104,10 @@ const LOOP_TIME := {
 	"run": 2 * 0.333,  # = unit_visual.gd's 2 x FOOTSTEP_GAP
 	"walk": 1.4,
 	"idle": 2.0,  # a breathing cycle
-	"overwatch_hold": 1.6, "aim_hold": 1.6,
+	# 32 Blender frames at render_sprites.py's SAMPLE_FPS (12) -- the merc's
+	# `overwatch` action is drawn to exactly this length. Keep in sync with
+	# render_sprites.py's LOOP_TIME entry of the same name.
+	"overwatch_hold": 32 / 12.0, "aim_hold": 1.6,
 	# Slower than the standing breath: a soldier pressed against a crate under
 	# fire is holding still, not idling.
 	"idle_low": 2.4, "idle_high": 2.4,

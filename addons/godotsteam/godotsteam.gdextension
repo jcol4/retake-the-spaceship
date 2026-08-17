@@ -1,0 +1,15 @@
+[configuration]
+entry_symbol = "godotsteam_init"
+compatibility_minimum = "4.4"
+
+[libraries]
+; Windows-only build for this project — see readme.md for the full
+; multi-platform release if Linux/macOS/Android support is ever needed.
+windows.debug.x86_64 = "res://addons/godotsteam/win64/libgodotsteam.windows.template_debug.x86_64.dll"
+windows.debug.x86_32 = "res://addons/godotsteam/win32/libgodotsteam.windows.template_debug.x86_32.dll"
+windows.release.x86_64 = "res://addons/godotsteam/win64/libgodotsteam.windows.template_release.x86_64.dll"
+windows.release.x86_32 = "res://addons/godotsteam/win32/libgodotsteam.windows.template_release.x86_32.dll"
+
+[dependencies]
+windows.x86_64 = { "res://addons/godotsteam/win64/steam_api64.dll": "" }
+windows.x86_32 = { "res://addons/godotsteam/win32/steam_api.dll": "" }

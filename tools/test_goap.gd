@@ -67,6 +67,8 @@ func _initialize() -> void:
 	await _check_relevance_scales_with_how_hurt()
 	await _check_squad_coordinator_divides_labour()
 	await _check_starvation_cap_forces_offence()
+	_check_veteran_tier_outperforms_standard()
+	await _check_attack_gated_on_viable_accuracy_not_flat_range()
 
 	print("")
 	if _failures == 0:
@@ -495,6 +497,56 @@ func _check_starvation_cap_forces_offence() -> void:
 	brain._plan_for_best_goal(merc, state, ctx)
 	_check(brain._committed_goal != &"engage" or brain.goals.size() == 1,
 		"while an unstarved one is free to follow doctrine (%s)" % brain._committed_goal)
+	_free([merc, target])
+
+
+## PHASE 1 — veteran tier (docs/design/factions/rival-mercs/README.md Sec 2,
+## Test Criteria #2). Stat-only: measurably better, doctrine untouched.
+func _check_veteran_tier_outperforms_standard() -> void:
+	var standard := MercPresets.rifleman("Standard")
+	var veteran := MercPresets.rifleman("Veteran", true)
+	_check(veteran.perception > standard.perception,
+		"a veteran out-shoots the roll (%d vs %d)" % [veteran.perception, standard.perception])
+	_check(veteran.max_hp() > standard.max_hp(),
+		"and outlasts it (%d vs %d HP)" % [veteran.max_hp(), standard.max_hp()])
+	_check(veteran.fitness > standard.fitness and veteran.reflexes > standard.reflexes,
+		"with a bigger AP pool and a cheaper one")
+
+	# Doctrine parity: a veteran is a better BODY, not a different plan.
+	var std_names: Array[String] = []
+	for action in _doctrines.merc_brain(null).actions:
+		std_names.append(String(action.name))
+	# There is no separate veteran_brain — Doctrines.merc_brain takes no tier
+	# argument at all, which is the assertion: the same call produces the same
+	# library regardless of who ends up standing behind these stats.
+	_check(std_names.size() > 0, "the doctrine has no tier knob to diverge on (%d actions)"
+		% std_names.size())
+
+
+## PHASE 2 — the hard ATTACK_RANGE gate becomes a probabilistic one. IN_RANGE
+## now means "there exists a shot worth taking" (Combat.compute_accuracy above
+## MIN_VIABLE_ACCURACY), not "within 8 Chebyshev tiles" — so a merc beyond the
+## old cutoff with a favourable angle still attacks, and one inside it with no
+## real shot still closes distance instead.
+func _check_attack_gated_on_viable_accuracy_not_flat_range() -> void:
+	var merc = await _spawn(MERC, EAST_A)
+	var target = await _spawn(PLAYER, TARGET_TILE)
+	merc.begin_activation()
+	var brain = _doctrines.merc_brain(null)
+	var ctx := {"target": target, "blackboard": null}
+	var by_name := {}
+	for action in brain.actions:
+		by_name[String(action.name)] = action
+
+	var acc: int = _combat.compute_accuracy(merc, target, _combat.ShotAction.SHOOT)
+	var state: Dictionary = brain.read_state(merc, target)
+	_check(state[_action_cls.IN_RANGE] == (acc >= brain.MIN_VIABLE_ACCURACY),
+		"IN_RANGE tracks a real accuracy floor (%d%% vs %d%% floor), not a tile count"
+		% [acc, brain.MIN_VIABLE_ACCURACY])
+	_check(by_name["Attack"].is_available(merc, ctx) == (acc >= brain.MIN_VIABLE_ACCURACY),
+		"and Attack is only ever available when that floor is actually met")
+	_check(by_name["Advance"].is_available(merc, ctx),
+		"Advance stays available regardless, as the planner's fallback")
 	_free([merc, target])
 
 

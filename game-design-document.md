@@ -84,7 +84,8 @@ This is the signature mechanic of the game.
 > 1 AP per tile rather than being a Run/Sprint pair; the other actions cost a base of 6–10 AP
 > discounted by Reflexes — movement is the only thing that did *not* scale with the pool, so the
 > extra AP buys distance rather than extra actions, and shooting twice still costs a soldier its
-> whole activation; Overwatch commits a variable reserve instead of a flat price. Left
+> whole activation; Overwatch is now priced identically to Shoot (see that document's §5) rather
+> than a flat price or a variable reserve. Left
 > standing rather than rewritten, per this document's convention: the 2 AP menu is what the game was
 > built against and the reasoning below is worth being able to read.
 >
