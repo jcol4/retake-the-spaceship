@@ -23,6 +23,13 @@ class Attack extends GoapAction:
 			return false
 		if unit.ap < ap_cost(unit, ctx):
 			return false
+		# PROBABILISTIC FLOOR (rival-mercs README Sec 3), the same one
+		# GoapBrain.read_state uses for IN_RANGE. Checked again here rather than
+		# trusted from IN_RANGE alone, since that fact can go stale mid-plan —
+		# this is what stops the planner from building a plan around a shot
+		# with no real chance in the first place.
+		if Combat.compute_accuracy(unit, target, Combat.ShotAction.SHOOT) < GoapBrain.MIN_VIABLE_ACCURACY:
+			return false
 		# THE CAUTION RULE (fix B). A hurt unit standing in the open, with cover it
 		# could reach, is not allowed to simply trade shots — it has to get behind
 		# something first, and `AttackFromCover` is the only route to damage from
@@ -39,6 +46,17 @@ class Attack extends GoapAction:
 
 	func ap_cost(unit: Unit, _ctx: Dictionary) -> int:
 		return unit.action_cost(UnitStats.Action.SHOOT)
+
+	## hit% * weapon damage — the plain expected-value reading, ahead of the crit
+	## roll (base damage is deterministic; only the crit multiplier is
+	## stochastic, see rival-mercs README Sec 3). What priority-target weighing
+	## and bait-unit selection score actions on instead of `ap_cost`.
+	func expected_value(unit: Unit, ctx: Dictionary) -> float:
+		var target: Unit = ctx.get("target")
+		if target == null:
+			return 0.0
+		var acc := Combat.compute_accuracy(unit, target, Combat.ShotAction.SHOOT)
+		return float(acc) / 100.0 * float(unit.stats.weapon_damage)
 
 	func execute(unit: Unit, ctx: Dictionary) -> bool:
 		var target: Unit = ctx.get("target")
@@ -69,11 +87,23 @@ class AttackFromCover extends GoapAction:
 
 	func is_available(unit: Unit, ctx: Dictionary) -> bool:
 		var target: Unit = ctx.get("target")
-		return target != null and not target.is_downed and unit.can_shoot() \
-			and unit.ap >= ap_cost(unit, ctx)
+		if target == null or target.is_downed or not unit.can_shoot() \
+				or unit.ap < ap_cost(unit, ctx):
+			return false
+		# Same probabilistic floor as `Attack` — see its comment. A merc already
+		# in cover should still close the distance rather than plink from behind
+		# a crate at a target it cannot realistically hit.
+		return Combat.compute_accuracy(unit, target, Combat.ShotAction.SHOOT) >= GoapBrain.MIN_VIABLE_ACCURACY
 
 	func ap_cost(unit: Unit, _ctx: Dictionary) -> int:
 		return unit.action_cost(UnitStats.Action.SHOOT)
+
+	func expected_value(unit: Unit, ctx: Dictionary) -> float:
+		var target: Unit = ctx.get("target")
+		if target == null:
+			return 0.0
+		var acc := Combat.compute_accuracy(unit, target, Combat.ShotAction.SHOOT)
+		return float(acc) / 100.0 * float(unit.stats.weapon_damage)
 
 	func execute(unit: Unit, ctx: Dictionary) -> bool:
 		var target: Unit = ctx.get("target")
@@ -111,6 +141,16 @@ class Suppress extends GoapAction:
 
 	func ap_cost(unit: Unit, _ctx: Dictionary) -> int:
 		return unit.action_cost(UnitStats.Action.SUPPRESS)
+
+	## Not damage-based — a pin is worth what it BUYS the squad (a safer flank),
+	## not what it does to the target directly. `PIN_VALUE` is a flat estimate
+	## rather than a damage figure so it can be weighed against `Attack`'s real
+	## expected damage on the same scale without pretending suppression deals
+	## any.
+	const PIN_VALUE := 3.0
+
+	func expected_value(_unit: Unit, _ctx: Dictionary) -> float:
+		return PIN_VALUE
 
 	func execute(unit: Unit, ctx: Dictionary) -> bool:
 		var target: Unit = ctx.get("target")
@@ -185,6 +225,13 @@ class Flank extends GoapAction:
 	## walked to such a tile, still had no shot, replanned, and flanked again,
 	## every activation, forever. It never showed up on a deck where everything
 	## shared one room.
+	## A tile a known overwatch watcher covers still ranks — it just costs
+	## `OVERWATCH_TILE_PENALTY` extra "steps" against the flood's real ones
+	## (Sec 5: expensive ground, not impassable), so a flank a couple of tiles
+	## farther but out of the lane wins, and a covered tile is only ever picked
+	## when nothing safer is reachable at all.
+	const OVERWATCH_TILE_PENALTY := 6
+
 	static func _best_tile(unit: Unit, target: Unit, board: SquadBlackboard) -> Dictionary:
 		if target == null:
 			return {}
@@ -192,14 +239,16 @@ class Flank extends GoapAction:
 		# for it would run a fresh BFS per candidate tile — hundreds per planning
 		# unit per activation, for an answer that does not change.
 		var costs := GridManager.reachable_costs(unit.grid_pos, unit.move_tiles_affordable())
+		var watcher_list := TileThreat.watchers(unit)
 		var best := {}
-		var best_steps := 1 << 30
+		var best_score := 1 << 30
 		var aim := target.global_position + Vector3(0, 0.9, 0)
 		for tile: Vector3i in costs:
 			var steps: int = costs[tile]
-			# Cheap tests first. The raycast below is the only expensive one, and
-			# on a real deck the range test alone discards most of the flood.
-			if steps >= best_steps:
+			# Cheap tests first, on the RAW step count — a valid lower bound on this
+			# candidate's eventual score (the overwatch penalty only adds), so
+			# pruning on it here can never discard a tile that would have won.
+			if steps >= best_score:
 				continue
 			if board and board.is_tile_claimed(tile, unit):
 				continue
@@ -210,7 +259,12 @@ class Flank extends GoapAction:
 			if not GridManager.has_clear_line(
 					unit, GridManager.grid_to_world(tile) + Vector3(0, 1.4, 0), aim):
 				continue
-			best_steps = steps
+			var score := steps
+			if TileThreat.is_covered(tile, watcher_list):
+				score += OVERWATCH_TILE_PENALTY
+			if score >= best_score:
+				continue
+			best_score = score
 			best = {"tile": tile, "steps": steps}
 		return best
 
@@ -245,19 +299,28 @@ class RepositionToCover extends GoapAction:
 	## Nearest reachable tile with cover facing the threat. Asked from the
 	## TARGET's side of the edge, since cover only counts against the direction a
 	## shot actually crosses.
+	## Same tile-ranking treatment as `Flank._best_tile` — see its comment.
+	const OVERWATCH_TILE_PENALTY := 6
+
 	static func _best_tile(unit: Unit, threat: Unit) -> Dictionary:
 		if threat == null:
 			return {}
 		var costs := GridManager.reachable_costs(unit.grid_pos, unit.move_tiles_affordable())
+		var watcher_list := TileThreat.watchers(unit)
 		var best := {}
-		var best_steps := 1 << 30
+		var best_score := 1 << 30
 		for tile: Vector3i in costs:
 			var steps: int = costs[tile]
-			if steps >= best_steps:
+			if steps >= best_score:
 				continue
 			if Combat.defending_cover(threat.grid_pos, tile)[0] == MapData.Cover.NONE:
 				continue
-			best_steps = steps
+			var score := steps
+			if TileThreat.is_covered(tile, watcher_list):
+				score += OVERWATCH_TILE_PENALTY
+			if score >= best_score:
+				continue
+			best_score = score
 			best = {"tile": tile, "steps": steps}
 		return best
 

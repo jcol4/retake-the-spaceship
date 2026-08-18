@@ -30,6 +30,17 @@ extends EnemyUnit
 
 var _brain: GoapBrain = null
 
+## Set by `take_damage` immediately before `Unit.fire_at`/`melee_at` calls
+## `come_under_fire` on the same synchronous stack (no `await` runs between the
+## two) — see `come_under_fire`'s comment. Cleared there once read, so it never
+## outlives the shot that set it.
+var _pending_hit := false
+
+
+func take_damage(amount: int) -> int:
+	_pending_hit = true
+	return super(amount)
+
 
 func _init() -> void:
 	# Runs after EnemyUnit._init, which set the alien defaults. Both are wrong for
@@ -77,8 +88,44 @@ func _combat_turn() -> void:
 	# its members has a target — and this is the first moment that is true.
 	# `assigned_on_turn` makes it idempotent, so the second merc drawn reads the
 	# assignment the first one caused rather than recomputing it.
-	SquadCoordinator.assign(_brain.blackboard, _squadmates(), quarry)
+	var mates := _squadmates()
+	SquadCoordinator.assign(_brain.blackboard, mates, quarry)
+	# PRIORITY TARGETS (rival-mercs README Sec 6) — may swap `quarry` (and this
+	# unit's own `target`) onto whoever the squad has decided matters most, if
+	# this unit can actually see that pick and it clears the switch margin.
+	quarry = _reconsider_priority_target(quarry, mates)
 	await _brain.run(self, quarry)
+
+
+## Margin the squad's priority pick must beat the current target's own score by
+## before this unit actually switches onto it — mirrors the shape of
+## `GoapBrain.COMMITMENT_BONUS`'s hysteresis for the same reason: without it, a
+## squad whose two candidates score within a point of each other would have
+## every member retargeting every activation, which reads as indecision rather
+## than as a squad focusing fire.
+const PRIORITY_SWITCH_MARGIN := 5.0
+
+func _reconsider_priority_target(current: Unit, mates: Array) -> Unit:
+	var board := _brain.blackboard
+	if board == null:
+		return current
+	var pick: Unit = SquadCoordinator.update_priority_target(board, mates)
+	if pick == null or pick == current or pick.is_downed:
+		return current
+	# The squad's pick is only a real option for THIS unit if it can actually
+	# see it — the radio buys a heading, never x-ray vision, the same limit
+	# `_receive_call` already documents for a bare contact call.
+	if not GridManager.has_line_of_sight(self, pick):
+		return current
+	var current_score := SquadCoordinator.threat_score(current, mates, board) \
+		if current != null else -INF
+	var pick_score := SquadCoordinator.threat_score(pick, mates, board)
+	if pick_score < current_score + PRIORITY_SWITCH_MARGIN:
+		return current
+	target = pick
+	last_known_pos = pick.grid_pos
+	_has_last_known = true
+	return pick
 
 
 ## Whether an UNAWARE merc walks the squad's patrol instead of holding still.
@@ -214,6 +261,17 @@ func _propagate_alert() -> void:
 func come_under_fire(shooter: Unit) -> void:
 	if shooter == null or not is_hostile_to(shooter):
 		return
+	# PRIORITY TARGETS' "demonstrated danger" term (rival-mercs README Sec 6):
+	# tally a CONFIRMED hit against the squad, not merely an incoming shot —
+	# `_pending_hit` is set by `take_damage` immediately before `Unit.fire_at`/
+	# `melee_at` calls this, synchronously and with nothing else able to run in
+	# between, so it names exactly the shot that just landed. Recorded ahead of
+	# the `is_downed` branch below: the squad should credit the shooter for the
+	# kill shot too, not only for hits its target survived.
+	if _pending_hit and _brain != null and _brain.blackboard != null:
+		var key := SquadCoordinator.hit_fact_key(shooter)
+		_brain.blackboard.set_fact(key, _brain.blackboard.fact(key, 0.0) + 1.0)
+	_pending_hit = false
 	if is_downed:
 		_relay_to_squad(shooter.grid_pos, shooter)
 		return

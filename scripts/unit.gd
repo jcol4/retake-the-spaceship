@@ -231,6 +231,9 @@ func _ready() -> void:
 		set_multiplayer_authority(1)
 		_setup_replication()
 		moved.connect(_on_moved_broadcast_grid_pos)
+		print("[NET] %s ready at %s, authority=%d owner_peer_id=%d local_id=%d is_server=%s" % [
+			stats.display_name if stats else name, get_path(), get_multiplayer_authority(),
+			owner_peer_id, multiplayer.get_unique_id(), multiplayer.is_server()])
 
 
 ## Property replication for everything a client needs to actually SEE this
@@ -260,11 +263,13 @@ func _setup_replication() -> void:
 ## than a fight with mid-walk occupancy the client has no stake in anyway.
 func _on_moved_broadcast_grid_pos(_unit: Unit) -> void:
 	if multiplayer.is_server():
+		print("[NET] host broadcasting grid_pos for %s -> %s" % [stats.display_name, grid_pos])
 		_rpc_sync_grid_pos.rpc(grid_pos)
 
 
 @rpc("authority", "call_remote", "reliable")
 func _rpc_sync_grid_pos(new_grid_pos: Vector3i) -> void:
+	print("[NET] client received grid_pos for %s -> %s (was %s)" % [stats.display_name, new_grid_pos, grid_pos])
 	if new_grid_pos == grid_pos:
 		return
 	GridManager.set_occupant(grid_pos, null)

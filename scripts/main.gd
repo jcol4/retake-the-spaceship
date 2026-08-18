@@ -54,15 +54,22 @@ func _ready() -> void:
 	await net_menu.resolved
 
 	if SteamLobby.is_networked():
+		print("[NET] proceeding to spawn: is_host=%s local_id=%d peers=%s" % [
+			SteamLobby.is_host(), multiplayer.get_unique_id(), multiplayer.get_peers()])
 		if SteamLobby.is_host():
-			_rpc_use_layout.rpc(map.resolve_layout())
+			var path: String = map.resolve_layout()
+			print("[NET] host sending layout '%s'" % path)
+			_rpc_use_layout.rpc(path)
 		else:
-			map.build_layout(await layout_chosen)
+			var path: String = await layout_chosen
+			print("[NET] client received layout '%s', rebuilding" % path)
+			map.build_layout(path)
 	_spawn_and_start()
 
 
 @rpc("authority", "call_remote", "reliable")
 func _rpc_use_layout(path: String) -> void:
+	print("[NET] client's _rpc_use_layout fired with '%s'" % path)
 	layout_chosen.emit(path)
 
 
@@ -82,6 +89,7 @@ func _spawn_and_start() -> void:
 		owning_peers.append_array(Array(multiplayer.get_peers()))
 		owning_peers.sort()
 	var mercs_per_peer := ceili(float(SQUAD.size()) / owning_peers.size())
+	print("[NET] owning_peers=%s mercs_per_peer=%d" % [owning_peers, mercs_per_peer])
 
 	var player_units: Array[PlayerUnit] = []
 	var spawn_index := 0
@@ -92,6 +100,7 @@ func _spawn_and_start() -> void:
 		unit.stats = ClassPresets.roll(entry[0], entry[1])
 		var peer_slot := mini(spawn_index / mercs_per_peer, owning_peers.size() - 1)
 		unit.owner_peer_id = owning_peers[peer_slot]
+		print("[NET] spawning %s -> owner_peer_id=%d" % [entry[1], unit.owner_peer_id])
 		unit.position = GridManager.grid_to_world(map.player_spawns[spawn_index])
 		add_child(unit)  # Unit._ready snaps to grid + registers occupancy
 		unit.action_logged.connect(_on_unit_log)

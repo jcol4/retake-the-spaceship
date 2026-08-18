@@ -79,6 +79,18 @@ const ASSIGNMENT_BONUS := 15.0
 ## cause, which is what a guard is for.
 const PASSIVE_ACTIVATION_LIMIT := 3
 
+## The probabilistic replacement for the old flat `chebyshev_dist <=
+## EnemyUnit.ATTACK_RANGE` cutoff (docs/design/factions/rival-mercs/README.md
+## Sec 3). `IN_RANGE` no longer means "close enough" — it means "a shot exists
+## that isn't a wild one," read straight off `Combat.compute_accuracy`, which
+## already folds in distance falloff, cover, light, suppression and weapon
+## range. 15 is the same rough floor a player would eyeball as "not a wild
+## shot"; `EnemyUnit.ATTACK_RANGE` still governs Flank's tile search
+## (`GoapActions.Flank._best_tile`) and the non-GOAP alien loop
+## (`EnemyUnit._combat_turn`), but no longer gates a GOAP unit's
+## shoot-vs-advance decision on its own.
+const MIN_VIABLE_ACCURACY := 15
+
 var actions: Array = []
 ## Authored highest priority first. Each entry:
 ##   {"name": StringName, "goal": {...}, "when": StringName?, "relevance": Callable?}
@@ -239,8 +251,14 @@ func _commit_to(goal_name: StringName) -> void:
 ## nothing else, which is what keeps it faction-neutral.
 func read_state(unit: Unit, target: Unit) -> Dictionary:
 	var has_los := target != null and GridManager.has_line_of_sight(unit, target)
-	var in_range := target != null \
-		and GridManager.chebyshev_dist(unit.grid_pos, target.grid_pos) <= EnemyUnit.ATTACK_RANGE
+	# PROBABILISTIC, not a tile count (Sec 3 of the rival-mercs design doc). Still
+	# capped by ATTACK_RANGE/LOS through `has_los` and Combat's own distance and
+	# weapon-range penalties, but the cutoff itself is now "would this shot be
+	# worth taking", not "is the target within N tiles" — a merc with a clean
+	# angle at range 9 is in range; one at range 3 through heavy cover, hunkered
+	# target, and bad light may not be.
+	var in_range := has_los \
+		and Combat.compute_accuracy(unit, target, Combat.ShotAction.SHOOT) >= MIN_VIABLE_ACCURACY
 	var covered := not GridManager.covered_sides(unit.grid_pos).is_empty()
 	# Explicitly typed: `defending_cover` returns an untyped Array, so indexing it
 	# yields a Variant and `:=` has nothing to infer from.
