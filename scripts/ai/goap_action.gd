@@ -66,6 +66,19 @@ func ap_cost(_unit: Unit, _ctx: Dictionary) -> int:
 	return 1
 
 
+## Roughly "how good is taking this action right now", in damage-equivalent
+## points — hit% * weapon damage for a shot, the pin's worth for Suppress, 0.0
+## (the default) for actions whose value is indirect, like a reposition.
+##
+## NOT the planner's edge weight — `ap_cost` stays what A* searches against, so
+## the cheapest-plan guarantee is untouched. This is a second number scored
+## ONLY by things that need "which of several legal actions is actually worth
+## it", per docs/design/factions/rival-mercs/README.md Sec 3: priority-target
+## weighing and bait-unit selection read this, `GoapPlanner` never does.
+func expected_value(_unit: Unit, _ctx: Dictionary) -> float:
+	return 0.0
+
+
 ## Runs the action. Coroutine — callers MUST await. Returns false when it could
 ## not be carried out after all, which tells the executor to stop and replan
 ## rather than walk the rest of a plan built on a false assumption.

@@ -32,8 +32,18 @@ func _ready() -> void:
 		return
 	Steam.lobby_created.connect(_on_lobby_created)
 	Steam.lobby_joined.connect(_on_lobby_joined)
-	multiplayer.peer_connected.connect(func(id: int) -> void: player_joined.emit(id))
-	multiplayer.peer_disconnected.connect(func(id: int) -> void: player_left.emit(id))
+	multiplayer.peer_connected.connect(func(id: int) -> void:
+		print("[NET] peer_connected: %d (local_id=%d, is_server=%s)" % [id, multiplayer.get_unique_id(), multiplayer.is_server()])
+		player_joined.emit(id))
+	multiplayer.peer_disconnected.connect(func(id: int) -> void:
+		print("[NET] peer_disconnected: %d" % id)
+		player_left.emit(id))
+	multiplayer.connected_to_server.connect(func() -> void:
+		print("[NET] connected_to_server (local_id=%d)" % multiplayer.get_unique_id()))
+	multiplayer.connection_failed.connect(func() -> void:
+		print("[NET] connection_failed"))
+	multiplayer.server_disconnected.connect(func() -> void:
+		print("[NET] server_disconnected"))
 
 
 func _process(_delta: float) -> void:
@@ -72,6 +82,7 @@ func join_game(lobby_id: int) -> void:
 
 
 func _on_lobby_created(connect_result: int, lobby_id: int) -> void:
+	print("[NET] _on_lobby_created result=%d lobby_id=%d" % [connect_result, lobby_id])
 	if connect_result != 1:  # Steam.RESULT_OK
 		join_failed.emit("Lobby creation failed (%d)" % connect_result)
 		return
@@ -79,16 +90,20 @@ func _on_lobby_created(connect_result: int, lobby_id: int) -> void:
 	var peer := SteamMultiplayerPeer.new()
 	peer.create_host(0)
 	multiplayer.multiplayer_peer = peer
+	print("[NET] host peer created, local_id=%d is_server=%s" % [multiplayer.get_unique_id(), multiplayer.is_server()])
 	lobby_ready.emit(lobby_id)
 
 
 func _on_lobby_joined(lobby_id: int, _permissions: int, _locked: bool, response: int) -> void:
+	print("[NET] _on_lobby_joined lobby_id=%d response=%d" % [lobby_id, response])
 	if response != Steam.CHAT_ROOM_ENTER_RESPONSE_SUCCESS:
 		join_failed.emit("Could not enter lobby (%d)" % response)
 		return
 	current_lobby_id = lobby_id
 	var host_steam_id := Steam.getLobbyOwner(lobby_id)
+	print("[NET] joining as client, host_steam_id=%d" % host_steam_id)
 	var peer := SteamMultiplayerPeer.new()
 	peer.create_client(host_steam_id, 0)
 	multiplayer.multiplayer_peer = peer
+	print("[NET] client peer created, local_id=%d is_server=%s" % [multiplayer.get_unique_id(), multiplayer.is_server()])
 	lobby_ready.emit(lobby_id)

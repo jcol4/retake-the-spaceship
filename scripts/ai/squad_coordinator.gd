@@ -83,3 +83,101 @@ static func _best_suppressor(live: Array, target: Unit) -> Unit:
 			best_score = score
 			best = unit
 	return best
+
+
+## PRIORITY TARGETS (rival-mercs README Sec 6). The squad's shared answer to
+## "who matters most right now", decided once and read by every member —
+## exactly the same move `assign` already made for role negotiation, and for
+## the same reason: a fact each unit evaluates privately ("the wounded one
+## looks juicier") cannot divide the squad's attention any better than
+## `squad_needs_pin` could divide its labour before `assign` existed.
+##
+## Candidates are every hostile visible to AT LEAST ONE live member. A hostile
+## the whole squad is currently blind to cannot be this activation's priority
+## regardless of how it would score; `MercUnit._reconsider_priority_target`
+## separately checks the ACTING unit's own line of sight before switching onto
+## the pick, so this only ever buys the squad a heading, never x-ray vision —
+## the same limit the radio-contact channel already carries.
+static func update_priority_target(board: SquadBlackboard, members: Array) -> Unit:
+	if board == null:
+		return null
+	var live: Array = members.filter(func(u: Unit) -> bool:
+		return is_instance_valid(u) and not u.is_downed)
+	var seen := {}
+	for member: Unit in live:
+		for hostile: Unit in member.hostiles():
+			if hostile.is_downed or seen.has(hostile):
+				continue
+			if GridManager.has_line_of_sight(member, hostile):
+				seen[hostile] = true
+	var best: Unit = null
+	var best_score := -INF
+	for hostile: Unit in seen:
+		var score := threat_score(hostile, live, board)
+		if score > best_score:
+			best_score = score
+			best = hostile
+	if best != null:
+		board.set_fact(&"priority_target", best)
+	return best
+
+
+## How much attention the squad owes `hostile` right now — higher means "worth
+## organising the squad's plan around", not merely "worth shooting at". Additive
+## rather than multiplicative on purpose: each factor should be able to matter
+## on its own — a barely-wounded VIP in the open still outranks a healthy
+## nobody — rather than one weak factor zeroing out a strong one.
+const FACTION_WEIGHT_PRIMARY := 10.0
+const FACTION_WEIGHT_INCIDENTAL := 3.0
+const COVER_WEIGHT := 2.0
+const VULNERABILITY_WEIGHT := 5.0
+const SUPPRESSING_ALLY_BONUS := 4.0
+const CONFIRMED_HIT_WEIGHT := 2.0
+
+static func threat_score(hostile: Unit, members: Array, board: SquadBlackboard) -> float:
+	if hostile == null or hostile.is_downed:
+		return -INF
+	var score := 0.0
+	# FACTION WEIGHT. A player unit is the mission; an alien that wandered into
+	# the same fight is not worth the squad's coordinated attention, only
+	# whatever a member can spend on it opportunistically on its own turn.
+	score += FACTION_WEIGHT_PRIMARY if hostile.faction == Faction.Id.CONTRACTORS \
+		else FACTION_WEIGHT_INCIDENTAL
+	# POSITIONAL THREAT. The BEST cover this target enjoys against any live
+	# member — a target every member but one is stuck shooting through a crate
+	# at is worth planning around; one already standing in the open is
+	# something any single member can already punish without the squad
+	# needing to agree on anything.
+	var best_cover := MapData.Cover.NONE
+	for member: Unit in members:
+		if member.is_downed:
+			continue
+		var cover: int = Combat.defending_cover(member.grid_pos, hostile.grid_pos)[0]
+		best_cover = maxi(best_cover, cover)
+	score += float(best_cover) * COVER_WEIGHT
+	# VULNERABILITY. Worth finishing over a healthy target at equal threat —
+	# real focus fire goes to the wounded one, not whoever was spotted first.
+	var hp_frac := float(hostile.current_hp) / float(maxi(hostile.stats.max_hp(), 1))
+	score += (1.0 - hp_frac) * VULNERABILITY_WEIGHT
+	# DEMONSTRATED DANGER. Currently pinning one of ours (read straight off
+	# `Unit.suppressed_by`, live state rather than a tally), or has already
+	# landed a confirmed hit on the squad this encounter (see
+	# `MercUnit.take_damage` / `come_under_fire`, which write the fact this
+	# reads under `hit_fact_key`).
+	for member: Unit in members:
+		if member.suppressed_by == hostile:
+			score += SUPPRESSING_ALLY_BONUS
+			break
+	if board:
+		score += float(board.fact(hit_fact_key(hostile), 0.0)) * CONFIRMED_HIT_WEIGHT
+	return score
+
+
+## Blackboard fact key a confirmed hit against the squad is tallied under, keyed
+## by instance id rather than by the shooter itself: a Dictionary key that is an
+## Object compares by identity, so a freed/downed shooter would still resolve
+## correctly today, but the id survives even a future change to how shooters are
+## looked up here. Shared between the writer (`MercUnit.come_under_fire`) and
+## the reader (`threat_score` above) so the two can never drift out of format.
+static func hit_fact_key(shooter: Unit) -> StringName:
+	return StringName("hit_count_%d" % shooter.get_instance_id())

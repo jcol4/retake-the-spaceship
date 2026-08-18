@@ -72,7 +72,7 @@ const AP_POOL_PER_FITNESS := 0.075
 ## over once it is paid is forfeited, not banked.
 const BASE_AP_COST := {
 	Action.SHOOT: 6, Action.MELEE: 6, Action.GRENADE: 6,
-	Action.RELOAD: 6, Action.HUNKER: 6, Action.SUPPRESS: 8, Action.OVERWATCH: 6,
+	Action.RELOAD: 3, Action.HUNKER: 6, Action.SUPPRESS: 8, Action.OVERWATCH: 6,
 }
 
 ## How much Reflexes takes off each action's base cost, per point.

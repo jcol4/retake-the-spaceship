@@ -158,7 +158,12 @@ func _update_path_preview(highlights: Node) -> void:
 
 func _update_target_hover(highlights: Node) -> void:
 	var tile := NO_TILE
-	var hit := _raycast_mouse()
+	# Layer 2 (units) only, not 1|2 — a wall between the camera and the target
+	# must not eat this pick. `_apply_wall_occlusion` (map_builder.gd) hides
+	# only the MESH of a near wall and keeps its StaticBody3D live so LOS stays
+	# honest, so a combined-mask raycast still hits the invisible wall first.
+	# Same reasoning as `GridManager.tile_under_ray`'s projection fix.
+	var hit := _raycast_mouse(2)
 	if not hit.is_empty():
 		var unit := _unit_from_collider(hit["collider"])
 		if unit and is_hostile_to(unit) and not unit.is_downed:
@@ -280,9 +285,13 @@ func _try_throw_emp(target: Vector3i) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not _accepting_input():
-		return
 	if not event.is_action_pressed("select_unit"):
+		return
+	if not _accepting_input():
+		print("[NET] %s ignored a click: active_unit=%s is_downed=%s is_busy=%s owned_locally=%s" % [
+			stats.display_name,
+			TurnManager.active_unit.stats.display_name if TurnManager.active_unit else "null",
+			is_downed, is_busy, is_owned_by_local_player()])
 		return
 	# Handled BEFORE the raycast, and that is the fix: a move click used to need
 	# the ray to land on something, then took the tile it landed on. A wall in the
@@ -290,6 +299,22 @@ func _unhandled_input(event: InputEvent) -> void:
 	# so the click did nothing at all. Projection needs no hit.
 	if mode == Mode.MOVE:
 		_issue(&"_try_move", [_tile_under_mouse()])
+		return
+	if mode in [Mode.SHOOT, Mode.AIMED_SHOT, Mode.SUPPRESS]:
+		# Layer 2 (units) only, same reasoning as `_update_target_hover`: a wall
+		# with its mesh hidden but its collider still live must not eat a click
+		# on the hostile standing behind it.
+		var unit_hit := _raycast_mouse(2)
+		if unit_hit.is_empty():
+			return
+		var unit := _unit_from_collider(unit_hit["collider"])
+		if unit and is_hostile_to(unit):
+			# Called directly rather than via `_issue`: Aimed Shot's branch below
+			# only opens a local zone menu (see `aimed_shot_target_picked`) and
+			# must run on THIS peer, not get routed to the host. The branches
+			# that actually mutate shared state (fire, suppress) issue their own
+			# requests — see `_try_shoot`/`_try_suppress` below.
+			_try_shoot(unit)
 		return
 	var hit := _raycast_mouse()
 	if hit.is_empty():
@@ -303,15 +328,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		# Deliberately ahead of the unit lookup: aiming the beam *at* something is
 		# the main reason to use this, so clicking an alien has to be allowed.
 		_issue(&"_try_face", [hit["position"]])
-		return
-	var unit := _unit_from_collider(hit["collider"])
-	if unit and is_hostile_to(unit) and mode in [Mode.SHOOT, Mode.AIMED_SHOT, Mode.SUPPRESS]:
-		# Called directly rather than via `_issue`: Aimed Shot's branch below
-		# only opens a local zone menu (see `aimed_shot_target_picked`) and must
-		# run on THIS peer, not get routed to the host. The branches that
-		# actually mutate shared state (fire, suppress) issue their own
-		# requests — see `_try_shoot`/`_try_suppress` below.
-		_try_shoot(unit)
 
 
 ## Every method a click or HUD button can trigger on this unit. `_rpc_command`
@@ -330,14 +346,19 @@ const _COMMANDS := [
 ## the host acting on its own units, skip the round trip and just run it.
 func _issue(method: StringName, args: Array = []) -> void:
 	if not multiplayer.has_multiplayer_peer() or multiplayer.is_server():
+		print("[NET] %s running '%s' locally (server=%s)" % [stats.display_name, method, multiplayer.has_multiplayer_peer() and multiplayer.is_server()])
 		await callv(method, args)  # `await` is a no-op if the callee isn't a coroutine
 	else:
+		print("[NET] %s sending '%s' to host (owner_peer_id=%d, local_id=%d)" % [
+			stats.display_name, method, owner_peer_id, multiplayer.get_unique_id()])
 		_rpc_command.rpc_id(1, method, args)
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func _rpc_command(method: StringName, args: Array) -> void:
+	print("[NET] host received '%s' for %s from peer %d" % [method, stats.display_name, multiplayer.get_remote_sender_id()])
 	if not multiplayer.is_server():
+		print("[NET] ...but this peer isn't the server — dropped")
 		return
 	if method not in _COMMANDS:
 		push_warning("%s: rejected unknown command '%s'" % [stats.display_name, method])
@@ -348,8 +369,10 @@ func _rpc_command(method: StringName, args: Array) -> void:
 			stats.display_name, method, sender, owner_peer_id])
 		return
 	if TurnManager.active_unit != self:
-		push_warning("%s: rejected '%s' — not this unit's activation" % [stats.display_name, method])
+		push_warning("%s: rejected '%s' — not this unit's activation (active_unit=%s)" % [
+			stats.display_name, method, TurnManager.active_unit.stats.display_name if TurnManager.active_unit else "null"])
 		return
+	print("[NET] host executing '%s' for %s" % [method, stats.display_name])
 	callv(method, args)
 
 
@@ -361,14 +384,14 @@ func _accepting_input() -> bool:
 			and is_owned_by_local_player()
 
 
-func _raycast_mouse() -> Dictionary:
+func _raycast_mouse(mask: int = 1 | 2) -> Dictionary:
 	var camera := get_viewport().get_camera_3d()
 	if camera == null:
 		return {}
 	var mouse_pos: Vector2 = get_viewport().get_mouse_position()
 	var from := camera.project_ray_origin(mouse_pos)
 	var to := from + camera.project_ray_normal(mouse_pos) * 500.0
-	var query := PhysicsRayQueryParameters3D.create(from, to, 1 | 2)
+	var query := PhysicsRayQueryParameters3D.create(from, to, mask)
 	return get_world_3d().direct_space_state.intersect_ray(query)
 
 

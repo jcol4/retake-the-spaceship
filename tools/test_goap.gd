@@ -33,6 +33,7 @@ var _action_cls
 var _combat
 var _barks
 var _coordinator
+var _tile_threat
 
 # UnitStats.Action values, by number — see the load() note above.
 const ACTION_SHOOT := 0
@@ -50,6 +51,7 @@ func _initialize() -> void:
 	_combat = load("res://scripts/combat.gd")
 	_barks = load("res://scripts/ai/barks.gd")
 	_coordinator = load("res://scripts/ai/squad_coordinator.gd")
+	_tile_threat = load("res://scripts/ai/tile_threat.gd")
 	var map = load("res://scenes/test_map.tscn").instantiate()
 	root.add_child(map)
 	await process_frame
@@ -69,6 +71,8 @@ func _initialize() -> void:
 	await _check_starvation_cap_forces_offence()
 	_check_veteran_tier_outperforms_standard()
 	await _check_attack_gated_on_viable_accuracy_not_flat_range()
+	await _check_overwatch_awareness()
+	await _check_priority_targets()
 
 	print("")
 	if _failures == 0:
@@ -503,7 +507,14 @@ func _check_starvation_cap_forces_offence() -> void:
 ## PHASE 1 — veteran tier (docs/design/factions/rival-mercs/README.md Sec 2,
 ## Test Criteria #2). Stat-only: measurably better, doctrine untouched.
 func _check_veteran_tier_outperforms_standard() -> void:
+	# Same seed for both draws, so the only difference between the two stat
+	# blocks is the veteran bonus rather than which side of a wide random range
+	# each happened to land on — `rifleman`'s roll (30-45 perception, etc.)
+	# overlaps `veteran`'s (that range +10), so comparing two independent rolls
+	# is genuinely flaky, not just unlucky.
+	seed(12345)
 	var standard := MercPresets.rifleman("Standard")
+	seed(12345)
 	var veteran := MercPresets.rifleman("Veteran", true)
 	_check(veteran.perception > standard.perception,
 		"a veteran out-shoots the roll (%d vs %d)" % [veteran.perception, standard.perception])
@@ -548,6 +559,111 @@ func _check_attack_gated_on_viable_accuracy_not_flat_range() -> void:
 	_check(by_name["Advance"].is_available(merc, ctx),
 		"Advance stays available regardless, as the planner's fallback")
 	_free([merc, target])
+
+
+## PHASE 3 — overwatch awareness (rival-mercs README Sec 5). A tile a known
+## player overwatch covers should rank as expensive ground for a merc choosing
+## where to move, not be treated the same as an uncovered one — and never be
+## treated as IMPASSABLE, since sometimes there is nothing better reachable.
+func _check_overwatch_awareness() -> void:
+	var merc = await _spawn(MERC, EAST_B)
+	var target = await _spawn(PLAYER, TARGET_TILE)
+	var watcher = await _spawn(PLAYER, EAST_A)
+	merc.begin_activation()
+	var brain = _doctrines.merc_brain(null)
+	var by_name := {}
+	for action in brain.actions:
+		by_name[String(action.name)] = action
+
+	_check(_tile_threat.watchers(merc).is_empty(),
+		"no watchers counted while nobody is holding overwatch")
+
+	watcher.on_overwatch = true
+	var watcher_list = _tile_threat.watchers(merc)
+	_check(watcher_list.size() == 1 and watcher_list[0] == watcher,
+		"a hostile holding overwatch is picked up as a watcher (%d found)" % watcher_list.size())
+
+	# The mechanism itself, decoupled from any one map's geometry: a tile right
+	# on top of a watcher is trivially within its own sightline, so scoring it
+	# must come out higher (worse) than scoring the same tile with no watcher
+	# at all — proving the penalty actually fires rather than asserting which
+	# tile a real flank happens to prefer on this particular deck.
+	var hot_tile: Vector3i = watcher.grid_pos
+	_check(_tile_threat.is_covered(hot_tile, watcher_list),
+		"a tile a watcher stands on reads as covered by it")
+	watcher.on_overwatch = false
+	_check(not _tile_threat.is_covered(hot_tile, _tile_threat.watchers(merc)),
+		"and the same tile reads as safe once the reservation is gone")
+
+	# Never a hard exclusion: even with the ONLY reachable flank tile covered,
+	# Flank must still return it rather than reporting nothing.
+	watcher.on_overwatch = true
+	var pick = by_name["Flank"]._best_tile(merc, target, null)
+	_check(not pick.is_empty(),
+		"Flank still finds a tile with a watcher covering part of the map")
+	_free([merc, target, watcher])
+
+
+## PHASE 4 — priority targets (rival-mercs README Sec 6). The squad's shared
+## answer to "who matters most", not each unit's private read of the board.
+func _check_priority_targets() -> void:
+	var merc = await _spawn(MERC, EAST_A)
+	var weak = await _spawn(PLAYER, TARGET_TILE)
+	var strong = await _spawn(PLAYER, EAST_B)
+	var alien = load("res://scenes/enemy_unit.tscn").instantiate()
+	alien.stats = AlienPresets.ranged("Alien")
+	alien.position = _grid.grid_to_world(EAST_A + Vector3i(0, 0, 2))
+	root.add_child(alien)
+	await process_frame
+
+	merc.begin_activation()
+	var mates: Array = [merc]
+	var fresh_board = _blackboard_cls.new()
+
+	# FACTION WEIGHT: a player unit outranks an incidental alien, all else equal.
+	_check(_coordinator.threat_score(weak, mates, fresh_board) >
+			_coordinator.threat_score(alien, mates, fresh_board),
+		"a player unit outranks an incidental alien")
+
+	# VULNERABILITY: the same target, wounded, outranks itself healthy.
+	var healthy_score: float = _coordinator.threat_score(weak, mates, fresh_board)
+	weak.current_hp = 1
+	var wounded_score: float = _coordinator.threat_score(weak, mates, fresh_board)
+	_check(wounded_score > healthy_score,
+		"a wounded target outranks the same target healthy (%.1f vs %.1f)" % [wounded_score, healthy_score])
+	weak.current_hp = weak.stats.max_hp()
+
+	# DEMONSTRATED DANGER: a confirmed hit against the squad is tallied on the
+	# squad's OWN blackboard (merc._brain.blackboard, not a fresh one) and read
+	# straight back through threat_score — the write side is `take_damage` +
+	# `come_under_fire`'s synchronous handshake, not this test poking a fact in.
+	var board = merc._brain.blackboard
+	var before: float = _coordinator.threat_score(strong, mates, board)
+	merc.take_damage(1)
+	merc.come_under_fire(strong)
+	var key: StringName = _coordinator.hit_fact_key(strong)
+	_check(board.fact(key, 0.0) == 1.0, "a confirmed hit against a merc is tallied on the squad board")
+	var after: float = _coordinator.threat_score(strong, mates, board)
+	_check(after > before, "and raises the shooter's priority (%.1f -> %.1f)" % [before, after])
+
+	# END TO END: the squad retargets when the pick clears the switch margin.
+	merc.target = weak
+	strong.current_hp = 1
+	merc.suppressed_by = strong
+	var switched = merc._reconsider_priority_target(weak, mates)
+	_check(switched == strong, "the squad retargets onto the higher-priority hostile")
+	_check(merc.target == strong, "and the unit's own COMBAT target actually moves with it")
+
+	# ...and holds when nothing clears the margin.
+	merc.suppressed_by = null
+	strong.current_hp = strong.stats.max_hp()
+	merc.target = weak
+	var held = merc._reconsider_priority_target(weak, mates)
+	_check(held == weak, "but a marginal difference alone does not trigger a switch")
+
+	_free([merc, weak, strong])
+	_grid.set_occupant(alien.grid_pos, null)
+	alien.queue_free()
 
 
 ## MUST carry a real stat block, assigned before `add_child`. A scene

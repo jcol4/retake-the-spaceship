@@ -108,6 +108,7 @@ func _draw_next() -> void:
 		# Clients' own TurnManager sits inert (see `_is_authority`) — this is
 		# the only way their `active_unit`/HUD/`_accepting_input` gate ever
 		# learns whose turn it is.
+		print("[NET] host syncing active_unit -> %s (%s)" % [drawn.stats.display_name, drawn.get_path()])
 		_rpc_sync_active_unit.rpc(drawn.get_path())
 	if drawn is EnemyUnit:
 		await drawn.take_turn()  # animated moves — must finish before the next draw
@@ -123,6 +124,8 @@ func _draw_next() -> void:
 @rpc("authority", "call_remote", "reliable")
 func _rpc_sync_active_unit(unit_path: NodePath) -> void:
 	var unit := get_tree().root.get_node_or_null(unit_path) as Unit
+	print("[NET] client received active_unit sync: path=%s resolved=%s" % [
+		unit_path, unit.stats.display_name if unit else "NULL (node not found at that path!)"])
 	active_unit = unit
 	if unit:
 		unit_activated.emit(unit)
@@ -197,6 +200,7 @@ func check_overwatch(mover: Unit) -> void:
 ## runs.
 func end_activation(unit: Unit) -> void:
 	if not _is_authority():
+		print("[NET] client requesting end_activation for %s" % unit.stats.display_name)
 		_rpc_request_end_activation.rpc_id(1, unit.get_path())
 		return
 	_finish_activation(unit)
@@ -204,10 +208,12 @@ func end_activation(unit: Unit) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _rpc_request_end_activation(unit_path: NodePath) -> void:
+	print("[NET] host received end_activation request for %s from peer %d" % [unit_path, multiplayer.get_remote_sender_id()])
 	if not _is_authority():
 		return
 	var unit := get_tree().root.get_node_or_null(unit_path) as Unit
 	if unit == null:
+		print("[NET] ...but no unit resolved at that path")
 		return
 	var sender := multiplayer.get_remote_sender_id()
 	if unit.owner_peer_id != 0 and sender != unit.owner_peer_id:
