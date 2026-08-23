@@ -13,6 +13,7 @@ signal resolved
 
 var _status: Label
 var _lobby_id_field: LineEdit
+var _copy_button: Button
 
 
 func setup() -> void:
@@ -71,6 +72,12 @@ func setup() -> void:
 	_status.text = "" if SteamLobby.steam_available else "Steam unavailable — solo only"
 	vbox.add_child(_status)
 
+	_copy_button = Button.new()
+	_copy_button.text = "Copy Lobby ID"
+	_copy_button.visible = false
+	_copy_button.pressed.connect(_on_copy_lobby_id)
+	vbox.add_child(_copy_button)
+
 	SteamLobby.lobby_ready.connect(_on_lobby_ready)
 	SteamLobby.join_failed.connect(func(reason: String) -> void: _status.text = reason)
 
@@ -97,10 +104,16 @@ func _on_join() -> void:
 func _on_lobby_ready(lobby_id: int) -> void:
 	if SteamLobby.is_host():
 		# There's no lobby browser or invite flow in the prototype — the host
-		# reads this ID off aloud (or Steam chat) and the joining player types
-		# it into the Join field above.
+		# shares this ID (aloud, Steam chat, or the copy button below) and the
+		# joining player types it into the Join field above.
 		_status.text = "Lobby ID: %d — waiting for a squadmate to join..." % lobby_id
+		_copy_button.visible = true
 		multiplayer.peer_connected.connect(func(_id: int) -> void: resolved.emit(); queue_free())
 	else:
 		resolved.emit()
 		queue_free()
+
+
+func _on_copy_lobby_id() -> void:
+	DisplayServer.clipboard_set(str(SteamLobby.current_lobby_id))
+	_copy_button.text = "Copied!"
