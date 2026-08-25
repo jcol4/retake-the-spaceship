@@ -31,20 +31,21 @@ const POSES := [
 ## tile edge carries (unit_visual.gd COVER_LOW / COVER_HIGH).
 ##
 ## Kept OUT of POSES, and that separation is load-bearing rather than tidiness.
-## Everything in POSES is emitted for all eight directions whether it was drawn
-## or not, stubbed by `_pick` from the nearest thing that exists — which is right
-## for a pose the game will otherwise resolve to nothing, and catastrophic for
-## these: unit_visual.gd's cover chain asks `has_animation("begin_shoot_low_ne")`
-## and falls back to plain `begin_shoot_ne` when the answer is no, so stubbing
-## the name would answer YES and hand it whatever PNG `_pick` happened to find.
-## The fallback would never fire and the unit would fire its rifle by playing,
-## say, a reload.
+## A pose in POSES is emitted for all eight directions once ANY direction has
+## art for it, filling the rest in from whichever direction of the SAME pose
+## does exist (see `_build`/`_pick`) — right for a pose the game will otherwise
+## resolve to nothing, and catastrophic for these: unit_visual.gd's cover chain
+## asks `has_animation("begin_shoot_low_ne")` and falls back to plain
+## `begin_shoot_ne` when the answer is no, so stubbing the name from another
+## direction would answer YES and hand it a facing that is not actually low
+## cover. The fallback would never fire and the unit would fire from cover
+## looking like it was standing in the open.
 ##
-## So these are emitted ONLY where art genuinely exists, per direction as well as
-## per pose. That is what lets the set land one pose at a time.
+## So these are emitted ONLY where art genuinely exists, per direction as well
+## as per pose. That is what lets the set land one pose at a time.
 const COVER_POSES := [
-	"idle_low", "begin_shoot_low", "end_shoot_low",
-	"idle_high", "begin_shoot_high", "end_shoot_high",
+	"idle_low", "begin_shoot_low", "end_shoot_low", "reload_low",
+	"idle_high", "begin_shoot_high", "end_shoot_high", "reload_high",
 ]
 
 ## All EIGHT, not the five-plus-mirror set. A character carrying a rifle cannot
@@ -161,7 +162,22 @@ func _build(layer: String, variant: String) -> bool:
 	var frames := SpriteFrames.new()
 	frames.remove_animation(&"default")
 	var drawn := 0
+	var missing := 0
 	for pose in POSES:
+		# A pose with NOTHING drawn for it in any direction is left OUT of the
+		# SpriteFrames entirely, the same way an undrawn COVER_POSES entry is
+		# below. Stubbing it with `_pick`'s last-resort pick used to paper over
+		# a genuinely missing pose with an unrelated one's art under the
+		# missing pose's own name — on the merc that landed on `begin_shoot`,
+		# so `idle_fidget`, `run_stop`, `melee` and others were silently
+		# playing a raised rifle any time they were asked for. Leaving the
+		# animation absent instead routes through unit_visual.gd's real
+		# fallback chain (`_has_any`, AIM_HOLD, hard-cut transitions,
+		# FALLBACK_TIME), which was built for exactly this and degrades
+		# honestly instead of lying about what art exists.
+		if not _has_pose(found, pose):
+			missing += 1
+			continue
 		for dir in DIRECTIONS:
 			var textures: Array = _pick(found, pose, dir)
 			if found.has("%s/%s" % [pose, dir]):
@@ -198,9 +214,9 @@ func _build(layer: String, variant: String) -> bool:
 	if err != OK:
 		push_error("save %s failed: %d" % [path, err])
 		return false
-	print("[frames] %s  %d animations, %d authored, %d stubbed, %d cover" % [
+	print("[frames] %s  %d animations, %d authored, %d stubbed, %d cover, %d poses missing entirely" % [
 		path, frames.get_animation_names().size(), drawn,
-		frames.get_animation_names().size() - drawn - cover, cover])
+		frames.get_animation_names().size() - drawn - cover, cover, missing])
 	return true
 
 
@@ -242,10 +258,23 @@ func _scan(layer: String, variant: String) -> Dictionary:
 	return out
 
 
-## Textures for one pose+direction, or the nearest stand-in. Order of preference:
-## the pair itself, the same POSE in any direction (keeps facing wrong but the
-## action right), then anything at all. The last case is what
-## `body_swarm.tres` does by hand for all 90 of its entries.
+## Whether `pose` has art in ANY direction. Gates whether `_build` emits the
+## pose at all — see the comment there for why an entirely-undrawn pose must
+## be left OUT rather than stubbed.
+func _has_pose(found: Dictionary, pose: String) -> bool:
+	for key: String in found:
+		if key.begins_with(pose + "/"):
+			return true
+	return false
+
+
+## Textures for one pose+direction, or the nearest stand-in. Only ever called
+## for a pose `_has_pose` has already confirmed has art somewhere, so this
+## only ever has to choose between the exact direction and another one of the
+## SAME pose (keeps facing wrong but the action right) — never a blind pick
+## across poses. `body_swarm.tres` is the one place that cross-pose stand-in
+## is still done, and it is done BY HAND for all 90 of its entries, precisely
+## so the choice is a decision and not an accident of file-scan order.
 func _pick(found: Dictionary, pose: String, dir: String) -> Array:
 	var exact := "%s/%s" % [pose, dir]
 	if found.has(exact):
@@ -253,7 +282,10 @@ func _pick(found: Dictionary, pose: String, dir: String) -> Array:
 	for key: String in found:
 		if key.begins_with(pose + "/"):
 			return found[key]
-	return found.values()[0]
+	# Unreachable given the _has_pose guard in _build, but a loud failure here
+	# beats a silent wrong-pose stub if that guard is ever bypassed.
+	push_error("_pick called for %s/%s with no art for that pose in any direction" % [pose, dir])
+	return []
 
 
 ## `speed` is frames per second, and a SpriteFrames animation of n frames at

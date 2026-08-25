@@ -742,11 +742,20 @@ func _has_any(base: StringName) -> bool:
 func _play(base: StringName, restart: bool = false) -> void:
 	if _instant():
 		return
+	# A pose no layer has ANY art for falls through to IDLE rather than being
+	# asked for as-is. Without this, a single-layer character missing (say)
+	# `downed` entirely does not just skip the pose — every layer resolves to
+	# nothing and the whole character goes invisible for as long as the pose
+	# is on screen, which for DOWNED is forever. This only catches the total
+	# loss: a pose that IS drawn for at least one layer still hides the
+	# layers that lack it individually below, which is a deliberate look (a
+	# downed body correctly loses its helmet) rather than a gap to paper over.
+	var effective_base := base if base == IDLE or _has_any(base) else IDLE
 	for layer in layers:
 		var sprite: AnimatedSprite3D = _sprites.get(layer)
 		if sprite == null:
 			continue
-		var resolved := _resolve(layer, base)
+		var resolved := _resolve(layer, effective_base)
 		var name: StringName = resolved[0]
 		if name == &"":
 			sprite.visible = false  # this layer has nothing to show for this pose
