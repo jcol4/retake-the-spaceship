@@ -87,6 +87,37 @@ text = "Right Leg"
 layout_mode = 2
 text = "Cancel"
 
+[node name="GrenadeMenu" type="CenterContainer" parent="."]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="GrenadeMenu"]
+layout_mode = 2
+
+[node name="VBox" type="VBoxContainer" parent="GrenadeMenu/Panel"]
+layout_mode = 2
+
+[node name="Title" type="Label" parent="GrenadeMenu/Panel/VBox"]
+layout_mode = 2
+text = "Choose grenade"
+horizontal_alignment = 1
+
+[node name="Emp" type="Button" parent="GrenadeMenu/Panel/VBox"]
+layout_mode = 2
+text = "EMP"
+
+[node name="Frag" type="Button" parent="GrenadeMenu/Panel/VBox"]
+layout_mode = 2
+text = "Frag"
+
+[node name="Cancel" type="Button" parent="GrenadeMenu/Panel/VBox"]
+layout_mode = 2
+text = "Cancel"
+
 [node name="SettingsPanel" type="CenterContainer" parent="."]
 visible = false
 anchors_preset = 15
@@ -141,9 +172,9 @@ text = "Aimed Shot (2)"
 layout_mode = 2
 text = "Suppress (5)"
 
-[node name="Emp" type="Button" parent="Actions"]
+[node name="Grenade" type="Button" parent="Actions"]
 layout_mode = 2
-text = "EMP (1)"
+text = "Grenade (1)"
 
 [node name="Hunker" type="Button" parent="Actions"]
 layout_mode = 2
