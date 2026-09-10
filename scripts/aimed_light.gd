@@ -22,9 +22,26 @@ extends SpotLight3D
 
 ## Node supplying position — normally the muzzle. Defaults to the parent.
 @export var origin_path: NodePath = ^".."
-## Node whose -Z is the aim direction. Empty means `owner`, which is the Visual
-## root and shares the unit's basis.
+## Node whose basis the aim is expressed in. Empty means `owner`, which is the
+## Visual root and shares the unit's basis.
 @export var facing_path: NodePath
+
+## Where the beam points, in `facing`'s LOCAL space. Default -Z is straight
+## ahead, which is what every character without a measured barrel gets.
+##
+## The merc overwrites this with his rifle's actual bore, measured off two
+## locators on the barrel (tools/render_sprites.py --markers) and about 18
+## degrees off his shoulders. That is a deliberate change of policy from what
+## the note above describes: the light now follows the RIFLE rather than the
+## torso, and `lighting_manager.gd` is aimed by the same vector so the rules
+## still light exactly what the screen does.
+##
+## STABLE, not per-frame. The bore sways ~5 degrees through an idle cycle, and
+## LightingManager recomputes only on discrete triggers (move, toggle, turn
+## start) -- so a swaying gameplay cone would sample whichever animation frame
+## happened to be showing when a unit moved, and two identical moves could light
+## different tiles. The drawn beam sways; what the rules aim by must not.
+var bore_direction := Vector3(0.0, 0.0, -1.0)
 
 var _origin: Node3D = null
 var _facing: Node3D = null
@@ -42,8 +59,20 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
-	# Deliberately not skipped while invisible: the Beam child reads this
-	# transform too, and a light toggled back on mid-turn should already be
-	# pointing the right way rather than snapping on the following frame.
-	global_transform = Transform3D(_facing.global_transform.basis.orthonormalized(),
+	# Deliberately not skipped while invisible: a light toggled back on mid-turn
+	# should already be pointing the right way rather than snapping on the
+	# following frame.
+	var facing := _facing.global_transform.basis.orthonormalized()
+	global_transform = Transform3D(aim_basis(facing * bore_direction),
 		_origin.global_position)
+
+
+## A basis whose -Z (a Godot light's forward) lies along `aim`.
+static func aim_basis(aim: Vector3) -> Basis:
+	if aim.length_squared() < 1e-8:
+		return Basis()
+	var dir := aim.normalized()
+	# looking_at needs an `up` that is not parallel to the aim. A rifle bore is
+	# nowhere near vertical, so this only guards against a degenerate caller.
+	var up := Vector3.UP if absf(dir.dot(Vector3.UP)) < 0.999 else Vector3.FORWARD
+	return Basis.looking_at(dir, up)

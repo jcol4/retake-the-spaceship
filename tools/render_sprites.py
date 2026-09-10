@@ -8,6 +8,15 @@ Two modes:
     # Render an animated .blend out to assets/sprites/.
     blender.exe -b art_src/merc.blend -P tools/render_sprites.py -- --variant merc
 
+    # Export where the gun's lamp sits on each frame, rendering NOTHING.
+    blender.exe -b art_src/merc_anim.blend -P tools/render_sprites.py -- \
+        --variant merc --markers --poses idle
+
+That last mode is seconds rather than minutes and never touches a PNG, because
+the marker's position is a projection of a known point through a known camera
+rather than something to be searched for in an image. Re-run it whenever the rig
+moves; re-render only when the ART moves. See MARKER_MATERIAL.
+
 The output filenames are the load-bearing part: `build_sprite_frames.gd` collects
 `[layer]_[variant]_[pose]_[dir]_[frame].png` into one `SpriteFrames` per layer,
 so this script's only real contract with the game is that it writes those names
@@ -20,13 +29,14 @@ the arms and the torso -- and it is what Fallout did too.
 """
 
 import argparse
+import json
 import math
 import os
 import sys
 
 import bpy
 from bpy_extras.object_utils import world_to_camera_view
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 ## Pixels of slack added below the lowest geometry when reporting `foot_anchor`.
 ##
@@ -405,6 +415,194 @@ SAMPLE_FPS = 12.0
 ## cycle starts on a contact.
 MIN_FRAMES = 2
 
+# --- The muzzle marker -------------------------------------------------------
+#
+# A locator sphere parented (through the rifle) to the armature's `weapon` bone,
+# whose only job is to say WHERE ON THE CANVAS the gun's lamp sits in each frame
+# of each facing. `unit_visual.gd` reads the exported table and puts the
+# flashlight glow there, so the glow tracks the drawn muzzle as the rifle sways
+# rather than sitting at a fixed offset that is only ever right in one pose.
+#
+# IT IS NEVER RENDERED, and that is not left to the .blend to remember:
+# `hide_marker` forces hide_render on before any frame is shot. A marker that
+# reached the film would bake a magenta blob into the art, and stripping it back
+# out afterwards DOES NOT WORK -- Cycles antialiases, so the sphere's edge pixels
+# are magenta/background BLENDS that no exact-colour match catches, and painting
+# over the middle just leaves a magenta fringe around whatever was painted. The
+# position is read from the OBJECT instead (see marker_uv), which is exact,
+# subpixel, and costs no render at all.
+#
+# Hiding it also keeps it out of `renderable_meshes`, so it can never skew the
+# `foot_anchor` measurement by being the lowest thing on screen.
+#
+# Identified by MATERIAL first, because the material name is the part that says
+# what the object is FOR -- an artist renaming the mesh should not break this.
+MARKER_MATERIAL = "gun_loc"
+MARKER_OBJECT = "Sphere"
+
+## The muzzle marker's partner: a second locator further back along the bore, so
+## that the two TOGETHER give the barrel's AXIS rather than just a point on it.
+##
+## One marker cannot do this, and not for want of trying: under the ortho camera
+## a canvas position genuinely cannot be lifted back to a 3D direction, because
+## depth is precisely the information the projection discards. Two points on the
+## bore line is the cheapest honest way to recover it, and it is a MEASUREMENT of
+## where the gun actually points rather than an inference about it.
+##
+## Matched on either name or material, so a duplicate of the muzzle sphere works
+## as-is once renamed -- no material wrangling required.
+REAR_MARKER_OBJECT = "BarrelRear"
+REAR_MARKER_MATERIAL = "gun_loc_rear"
+
+## Bore axis used when no rear marker exists yet: the rifle model's own local
+## axis. Measured at yaw -15.7 deg, pitch -15.4 deg off the character's facing,
+## which behaves the way a bore line should -- but it is the axis the MESH was
+## BUILT on, not a point on the barrel that anybody placed, so it is a stand-in.
+## It prints as one, loudly, every run.
+FALLBACK_BORE_OBJECT = "AssaultRifle2_1"
+FALLBACK_BORE_AXIS = (1.0, 0.0, 0.0)
+
+## Written next to the sprites and keyed by the same `<pose>_<direction>` names
+## the game's SpriteFrames use, so the Godot-side lookup is the animation name
+## the sprite is ALREADY playing rather than a re-derivation of pose and facing.
+MARKER_FILENAME = "muzzle_%s.json"
+
+
+def _by_material_or_name(material, name):
+    for obj in bpy.data.objects:
+        if obj.type != "MESH":
+            continue
+        if any(m and m.name == material for m in obj.data.materials):
+            return obj
+    return bpy.data.objects.get(name)
+
+
+def find_rear_marker(explicit=None):
+    """The locator further back along the bore, or None if none exists yet."""
+    if explicit:
+        obj = bpy.data.objects.get(explicit)
+        if obj is None:
+            sys.exit("--rear-marker-object %r not found in the .blend" % explicit)
+        return obj
+    return _by_material_or_name(REAR_MARKER_MATERIAL, REAR_MARKER_OBJECT)
+
+
+def find_marker(explicit=None, exclude=None):
+    """The locator on the muzzle, whose screen position gets exported.
+
+    `exclude` keeps a rear marker DUPLICATED from the muzzle sphere -- and so
+    still carrying the muzzle's material -- from being picked up as the muzzle
+    itself, which is the obvious way to make this second marker and therefore
+    the one that has to work.
+    """
+    if explicit:
+        obj = bpy.data.objects.get(explicit)
+        if obj is None:
+            sys.exit("--marker-object %r not found in the .blend" % explicit)
+        return obj
+    for obj in bpy.data.objects:
+        if obj.type != "MESH" or obj is exclude:
+            continue
+        if any(m and m.name == MARKER_MATERIAL for m in obj.data.materials):
+            return obj
+    found = bpy.data.objects.get(MARKER_OBJECT)
+    return None if found is exclude else found
+
+
+def hide_marker(marker, role="muzzle"):
+    """Keeps the locator off the film. See MARKER_MATERIAL for why this matters."""
+    if marker is None:
+        return
+    if not marker.hide_render:
+        marker.hide_render = True
+        print("[render_sprites] %r is the %s marker -- hidden from renders "
+              "(it is a locator, not art)" % (marker.name, role))
+
+
+def marker_world(marker):
+    """`marker`'s centre in world space, on the currently evaluated frame.
+
+    Uses the evaluated bounding-box centre rather than the object's origin, so a
+    marker whose origin was left off-centre still reports its middle. Under the
+    ortho camera a sphere projects to a circle centred on exactly that point,
+    which is what makes a sphere a good marker in the first place.
+    """
+    evaluated = marker.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    local_centre = sum((Vector(corner) for corner in evaluated.bound_box),
+                       Vector()) / 8.0
+    return evaluated.matrix_world @ local_centre
+
+
+def marker_uv(scene, camera, marker):
+    """Where `marker` sits on the canvas this frame, as (u, v) in 0..1.
+
+    ORIGIN IS TOP-LEFT, matching how an image is indexed everywhere the game
+    touches one; `world_to_camera_view` measures up from the bottom, so v is
+    flipped here rather than in Godot.
+    """
+    ndc = world_to_camera_view(scene, camera, marker_world(marker))
+    return ndc.x, 1.0 - ndc.y
+
+
+def bore_vector(marker, rear, fallback):
+    """Unit vector down the barrel this frame, in WORLD space.
+
+    Two markers on the bore line when they exist, because that is a measurement
+    of where the gun points. The model's own axis otherwise, which is a guess --
+    see FALLBACK_BORE_OBJECT.
+    """
+    if rear is not None:
+        return (marker_world(marker) - marker_world(rear)).normalized()
+    if fallback is None:
+        return None
+    basis = fallback.evaluated_get(
+        bpy.context.evaluated_depsgraph_get()).matrix_world.to_3x3()
+    return (basis @ Vector(FALLBACK_BORE_AXIS)).normalized()
+
+
+def _unturn(v, dir_index):
+    """Undoes the TURNTABLE for `dir_index`, leaving the unit's own frame.
+
+    Only the 45-degree bucket step is removed, NOT the whole object rotation,
+    and the difference is the entire subtlety here. `bucket_zero` also contains
+    the authoring correction -- which way the artist happened to point the model
+    -- and at bucket 0 that correction has ALREADY done its job: the character
+    is facing Blender +Y, which is Godot -Z, which is yaw zero for every unit in
+    the game. So bucket 0's world frame IS the unit frame, and each further
+    bucket is just 45 degrees on top of it.
+
+    Undoing `character.matrix_world` instead is the obvious-looking thing and is
+    wrong twice over: it takes out the authoring correction that must stay in
+    (yaw came out 90 degrees off), and it drags in the armature's own transform,
+    which put the muzzle at 1.676 m when it is really at 1.144 m.
+    """
+    return Matrix.Rotation(-math.radians(45.0 * dir_index), 3, "Z") @ v
+
+
+def to_unit_point(world_point, dir_index):
+    """A world point as an offset in the unit's own frame, in Godot's axes.
+
+    The same in every facing, because the turntable is exactly what `_unturn`
+    removes -- so this depends only on the animation frame, turning 8 directions
+    x N frames of data into N.
+    """
+    return _godot_axes(_unturn(world_point, dir_index))
+
+
+def to_unit_direction(world_vector, dir_index):
+    """A world direction in the unit's own frame, in Godot's axes."""
+    return _godot_axes(_unturn(world_vector, dir_index).normalized())
+
+
+def _godot_axes(v):
+    """Blender (Z-up, +Y forward) -> Godot (Y-up, -Z forward).
+
+    The same convention DIRECTIONS is built on: Blender +Y is Godot -Z and
+    Blender +Z is Godot +Y, so a character facing Blender +Y comes out facing
+    Godot -Z, which is bucket 0.
+    """
+    return [round(v.x, 6), round(v.z, 6), round(-v.y, 6)]
+
 
 def _clear_scene():
     bpy.ops.object.select_all(action="SELECT")
@@ -691,16 +889,8 @@ def report_anchor(lowest_ndc):
           "render every pose to get the number the character actually needs)")
 
 
-def render_variant(variant, out_dir, character, only_poses=None, directions=None):
-    scene = bpy.context.scene
-    configure_render(scene)
-    build_camera(scene)
-
-    os.makedirs(out_dir, exist_ok=True)
-
-    if character.animation_data is None:
-        character.animation_data_create()
-
+def poses_to_do(variant, only_poses=None):
+    """The poses this run will walk, and a note about the ones it cannot."""
     actions = {a.name: a for a in bpy.data.actions}
     # Matched through the alias table, so a pose drawn from another pose's
     # action (POSE_ACTION) counts as present.
@@ -714,6 +904,84 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
     if not todo:
         sys.exit("No actions matched a pose name. Rename your actions to: %s"
                  % ", ".join(POSES))
+    return todo
+
+
+def iter_pose_frames(variant, character, todo, directions):
+    """Walks every (pose, direction, frame) a render writes, in that same order.
+
+    SHARED by the render pass and the marker export, and that sharing is the
+    point: entry N of a marker track has to be the frame in `..._N.png`, and the
+    only way to guarantee it is for one piece of code to decide what the frames
+    ARE. Two loops kept in step by hand would drift the first time a sampling
+    rule changed, and the symptom -- a glow that lags the barrel by a frame --
+    is subtle enough to be lived with rather than noticed.
+
+    Yields (pose, direction, frame_index) with the scene already evaluated on
+    that frame, so a caller can render it or measure it.
+    """
+    actions = {a.name: a for a in bpy.data.actions}
+    for pose in todo:
+        action = actions[source_action(pose, variant)]
+        character.animation_data.action = action
+        # Per POSE, not once per run: an action authored at a different facing
+        # needs its own zero (POSE_BUCKET_ZERO).
+        original_rotation = math.radians(bucket_zero(pose, variant))
+        muted = mute_object_transform_curves(action, character)
+        count = frame_count(pose, variant)
+        looping = pose in LOOP_TIME
+        frames = sample_frames(action, count, looping)
+
+        for direction in directions:
+            # Angle comes from the position in DIRECTIONS, not from the position
+            # in the list being walked, so a subset never reassigns anyone's
+            # bucket.
+            dir_index = DIRECTIONS.index(direction)
+            # The character turns; the camera and the world-fixed key do not.
+            character.rotation_euler.z = original_rotation + math.radians(45.0 * dir_index)
+
+            for frame_index, blender_frame in enumerate(frames):
+                # Belt and braces on top of the muting: frame_set re-evaluates
+                # everything, so ANY mechanism that drives this object's
+                # transform -- a driver, an NLA strip, a constraint -- would
+                # silently collapse all eight facings into one. Cheap to check,
+                # and the failure is invisible in the output otherwise.
+                bpy.context.scene.frame_set(int(round(blender_frame)),
+                                            subframe=float(blender_frame % 1.0))
+                expected = original_rotation + math.radians(45.0 * dir_index)
+                if abs(character.rotation_euler.z - expected) > 1e-6:
+                    sys.exit(
+                        "[render_sprites] %r drives %s's rotation: after "
+                        "frame_set it reads %.1f deg, not the %.1f deg this "
+                        "direction needs. Every facing would render identical. "
+                        "Remove the object-level animation from the action."
+                        % (pose, character.name,
+                           math.degrees(character.rotation_euler.z),
+                           math.degrees(expected)))
+
+                yield pose, direction, frame_index
+
+        for fcurve in muted:
+            fcurve.mute = False
+
+        print("[render_sprites] %s: %d frames x %d directions"
+              % (pose, len(frames), len(directions)))
+
+
+def render_variant(variant, out_dir, character, only_poses=None, directions=None):
+    scene = bpy.context.scene
+    configure_render(scene)
+    build_camera(scene)
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    if character.animation_data is None:
+        character.animation_data_create()
+
+    todo = poses_to_do(variant, only_poses)
+    # A locator, not art. Forced off the film before the first frame -- see
+    # MARKER_MATERIAL for why stripping it out afterwards is not an option.
+    hide_marker(find_marker())
 
     # NOT read from the character -- see BUCKET_ZERO_DEGREES for the bug that
     # caused. Printed because it is the one number that silently re-aims every
@@ -731,60 +999,18 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
     meshes = renderable_meshes()
     lowest_ndc = 1.0
 
-    for pose in todo:
-        action = actions[source_action(pose, variant)]
-        character.animation_data.action = action
-        # Per POSE, not once per run: an action authored at a different facing
-        # needs its own zero (POSE_BUCKET_ZERO).
-        original_rotation = math.radians(bucket_zero(pose, variant))
-        muted = mute_object_transform_curves(action, character)
-        count = frame_count(pose, variant)
-        looping = pose in LOOP_TIME
-        frames = sample_frames(action, count, looping)
+    for pose, direction, frame_index in iter_pose_frames(
+            variant, character, todo, directions or GAME_DIRECTIONS):
+        name = "body_%s_%s_%s_%d.png" % (variant, pose, direction, frame_index)
+        scene.render.filepath = os.path.join(out_dir, name)
+        # Measured before the render, on the same evaluated pose the render is
+        # about to shoot. Costs a vertex loop against a Cycles frame, which is
+        # nothing, and saves reading 500 PNGs back.
+        lowest_ndc = min(lowest_ndc,
+                         lowest_point_on_screen(scene, scene.camera, meshes))
 
-        for direction in (directions or GAME_DIRECTIONS):
-            # Angle comes from the position in DIRECTIONS, not from the position
-            # in the list being rendered, so rendering a subset never reassigns
-            # anyone's bucket.
-            dir_index = DIRECTIONS.index(direction)
-            # The character turns; the camera and the world-fixed key do not.
-            character.rotation_euler.z = original_rotation + math.radians(45.0 * dir_index)
-
-            for frame_index, blender_frame in enumerate(frames):
-                # Belt and braces on top of the muting: frame_set re-evaluates
-                # everything, so ANY mechanism that drives this object's
-                # transform -- a driver, an NLA strip, a constraint -- would
-                # silently collapse all eight facings into one. Cheap to check,
-                # and the failure is invisible in the output otherwise.
-                scene.frame_set(int(round(blender_frame)),
-                                subframe=float(blender_frame % 1.0))
-                expected = original_rotation + math.radians(45.0 * dir_index)
-                if abs(character.rotation_euler.z - expected) > 1e-6:
-                    sys.exit(
-                        "[render_sprites] %r drives %s's rotation: after "
-                        "frame_set it reads %.1f deg, not the %.1f deg this "
-                        "direction needs. Every facing would render identical. "
-                        "Remove the object-level animation from the action."
-                        % (pose, character.name,
-                           math.degrees(character.rotation_euler.z),
-                           math.degrees(expected)))
-
-                name = "body_%s_%s_%s_%d.png" % (variant, pose, direction, frame_index)
-                scene.render.filepath = os.path.join(out_dir, name)
-                # Measured before the render, on the same evaluated pose the
-                # render is about to shoot. Costs a vertex loop against a Cycles
-                # frame, which is nothing, and saves reading 500 PNGs back.
-                lowest_ndc = min(lowest_ndc,
-                                 lowest_point_on_screen(scene, scene.camera, meshes))
-
-                bpy.ops.render.render(write_still=True)
-                written += 1
-
-        for fcurve in muted:
-            fcurve.mute = False
-
-        print("[render_sprites] %s: %d frames x %d directions"
-              % (pose, len(frames), len(directions or GAME_DIRECTIONS)))
+        bpy.ops.render.render(write_still=True)
+        written += 1
 
     # Left facing bucket 0 of the SHARED base, not of whichever pose happened to
     # be rendered last. Cosmetic -- the .blend is never written -- but a tidier
@@ -795,6 +1021,112 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
     report_anchor(lowest_ndc)
     print("[render_sprites] now run build_sprite_frames.gd with SF_VARIANT=%s "
           "SF_LAYERS=body" % variant)
+
+
+def _mean_direction(vectors):
+    """The average of unit vectors, renormalised. Empty gives Godot forward."""
+    if not vectors:
+        return [0.0, 0.0, -1.0]
+    total = Vector((0.0, 0.0, 0.0))
+    for v in vectors:
+        total += Vector(v)
+    if total.length < 1e-9:
+        return [0.0, 0.0, -1.0]
+    total.normalize()
+    return [round(total.x, 6), round(total.y, 6), round(total.z, 6)]
+
+
+def export_markers(variant, out_dir, character, marker, rear=None,
+                   fallback=None, only_poses=None, directions=None):
+    """Writes where the muzzle marker lands on the canvas, frame by frame.
+
+    NO RENDERING HAPPENS HERE. The marker's screen position is a projection of a
+    known point through a known camera, so it is `world_to_camera_view` and a
+    matrix multiply -- seconds for a whole pose set, against the tens of minutes
+    the equivalent Cycles bake costs. That is also why this is safe to re-run
+    whenever the rig moves: it never touches the PNGs.
+
+    Keyed `<pose>_<direction>` because that is exactly the SpriteFrames
+    animation name `unit_visual.gd` will be playing when it needs the answer, so
+    the lookup is the string it already has rather than a pose and a facing
+    reassembled at runtime.
+    """
+    scene = bpy.context.scene
+    configure_render(scene)
+    camera = build_camera(scene)
+    hide_marker(marker)
+    hide_marker(rear, "rear bore")
+    if rear is None:
+        print("[render_sprites] *** no rear bore marker (%r / material %r). "
+              "Falling back to %r's local axis, which is a GUESS at where the "
+              "barrel points -- add a second locator on the bore line to "
+              "measure it instead. ***"
+              % (REAR_MARKER_OBJECT, REAR_MARKER_MATERIAL, FALLBACK_BORE_OBJECT))
+
+    if character.animation_data is None:
+        character.animation_data_create()
+
+    todo = poses_to_do(variant, only_poses)
+    walked = directions or GAME_DIRECTIONS
+    tracks = {}
+    bore = {}
+    for pose, direction, frame_index in iter_pose_frames(
+            variant, character, todo, walked):
+        u, v = marker_uv(scene, camera, marker)
+        track = tracks.setdefault("%s_%s" % (pose, direction), [])
+        # Appended in the generator's order, which IS the frame order, so the
+        # index this lands at is the `_%d` in the matching PNG's name.
+        assert len(track) == frame_index, (
+            "marker track for %s_%s went out of order at %d"
+            % (pose, direction, frame_index))
+        track.append([round(u, 6), round(v, 6)])
+
+        # Recorded on ONE facing only: these are the character's own local
+        # space, which the turntable rotates along with the character, so all
+        # eight directions would write identical values. See to_godot_point.
+        if direction != walked[0]:
+            continue
+        entry = bore.setdefault(pose, {"muzzle": [], "direction": []})
+        bucket = DIRECTIONS.index(direction)
+        entry["muzzle"].append(to_unit_point(marker_world(marker), bucket))
+        aim = bore_vector(marker, rear, fallback)
+        entry["direction"].append(
+            to_unit_direction(aim, bucket) if aim else [0.0, 0.0, -1.0])
+
+    # The cycle MEAN, for the rules to aim by. The per-frame directions above
+    # are what the drawn beam sways along; LightingManager must not use them,
+    # because it recomputes on discrete triggers (move, toggle, turn start) and
+    # never per frame -- so a swaying gameplay cone would sample whichever
+    # animation frame happened to be showing when a unit moved, and two
+    # identical moves could light different tiles. A stable direction keeps
+    # detection reproducible; the residual disagreement with the drawn beam is
+    # under 3 degrees, which is sub-tile at any range the cone reaches.
+    for entry in bore.values():
+        entry["mean_direction"] = _mean_direction(entry["direction"])
+
+    document = {
+        "variant": variant,
+        # Recorded for the reader's benefit only: the canvas coordinates are
+        # NORMALISED, so the game derives pixels from whatever the loaded
+        # texture actually measures and a resolution change costs no re-export.
+        "resolution": RESOLUTION,
+        "canvas_height": CANVAS_HEIGHT,
+        "marker": marker.name,
+        "rear_marker": rear.name if rear else None,
+        # Says out loud whether `bore` was measured off two locators or guessed
+        # from the rifle's own axis, so a reader never has to infer which.
+        "bore_source": "markers" if rear else "model-axis (APPROXIMATE)",
+        "origin": "top-left",
+        "axes": "godot",
+        "frames": tracks,
+        "bore": bore,
+    }
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, MARKER_FILENAME % variant)
+    with open(path, "w") as handle:
+        json.dump(document, handle, indent=1, sort_keys=True)
+    print("[render_sprites] wrote %d marker tracks to %s"
+          % (len(tracks), path))
 
 
 def setup(path):
@@ -881,6 +1213,18 @@ def main():
     parser.add_argument("--directions",
                         help="comma-separated subset; defaults to all eight the "
                              "game reads (%s)" % ",".join(GAME_DIRECTIONS))
+    parser.add_argument("--markers", action="store_true",
+                        help="export muzzle marker positions only, rendering "
+                             "nothing. Seconds, not minutes -- and it leaves "
+                             "the PNGs untouched.")
+    parser.add_argument("--marker-object",
+                        help="muzzle locator; defaults to the mesh using the "
+                             "%r material, else %r" % (MARKER_MATERIAL, MARKER_OBJECT))
+    parser.add_argument("--rear-marker-object",
+                        help="second locator further back along the bore, which "
+                             "is what turns the muzzle POINT into a barrel "
+                             "AXIS; defaults to %r or the %r material"
+                             % (REAR_MARKER_OBJECT, REAR_MARKER_MATERIAL))
     args = parser.parse_args(argv)
 
     if args.setup:
@@ -900,6 +1244,18 @@ def main():
         if bad:
             sys.exit("unknown direction(s): %s (pick from %s)"
                      % (", ".join(bad), ", ".join(DIRECTIONS)))
+
+    if args.markers:
+        rear = find_rear_marker(args.rear_marker_object)
+        marker = find_marker(args.marker_object, exclude=rear)
+        if marker is None:
+            sys.exit("No muzzle marker found. Add a mesh using the %r material, "
+                     "or pass --marker-object <name>." % MARKER_MATERIAL)
+        export_markers(args.variant, os.path.abspath(args.out),
+                       find_character(args.character), marker, rear,
+                       bpy.data.objects.get(FALLBACK_BORE_OBJECT), only, dirs)
+        return
+
     render_variant(args.variant, os.path.abspath(args.out),
                    find_character(args.character), only, dirs)
 
