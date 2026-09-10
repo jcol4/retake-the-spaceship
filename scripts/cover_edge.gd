@@ -19,6 +19,18 @@ var type: int = MapData.Cover.NONE
 var hp: int = 0
 var node: Node3D = null  # the visual prop, told to restyle itself on a tier change
 
+## Set only for a block-cover piece (MapBuilder.CoverBlock / MapData.obstacles)
+## registered via GridManager.register_cover_block — a WHOLE tile footprint
+## rather than one boundary, shared across every side of its perimeter so one
+## shot anywhere on it damages the same pool. `footprint`/`deck` are what
+## GridManager needs to reopen the tiles on destruction; `registrations` is
+## every [pos, side] this same edge was stored at, so destruction can find and
+## clear all of them, not just the one that happened to land the killing shot.
+var is_block: bool = false
+var footprint: Rect2i = Rect2i()
+var deck: int = 0
+var registrations: Array = []
+
 
 static func hp_for(cover_type: int) -> int:
 	return HEAVY_HP if cover_type == MapData.Cover.HEAVY else LIGHT_HP

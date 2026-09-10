@@ -346,6 +346,37 @@ func add_cover_edge(pos: Vector3i, side: int, cover_type: int, node: Node3D) -> 
 	return edge
 
 
+## Registers one block-cover piece (MapBuilder.CoverBlock, backing a
+## MapData.obstacles entry) against every tile bordering its footprint — the
+## same shared CoverEdge at each, exactly how add_cover_edge already shares
+## one edge between the two tiles a single boundary separates, just spread
+## across a whole perimeter instead of one side. A neighbour that has no
+## GridTileData is either inside the footprint itself or another obstacle
+## (WALL/VOID/OBSTACLE cells never get one — see MapBuilder._build_cell), so
+## checking `tiles.has(n)` alone is enough to skip those without knowing the
+## footprint's own shape.
+func register_cover_block(footprint: Rect2i, deck: int, tier: int, node: Node3D) -> CoverEdge:
+	var edge := CoverEdge.new()
+	edge.type = tier
+	edge.hp = CoverEdge.hp_for(tier)
+	edge.node = node
+	edge.is_block = true
+	edge.footprint = footprint
+	edge.deck = deck
+	for z in range(footprint.position.y, footprint.position.y + footprint.size.y):
+		for x in range(footprint.position.x, footprint.position.x + footprint.size.x):
+			var pos := Vector3i(x, deck, z)
+			for side in [MapData.Side.EAST, MapData.Side.SOUTH, MapData.Side.WEST, MapData.Side.NORTH]:
+				var n := pos + MapData.SIDE_STEP[side]
+				var t: GridTileData = tiles.get(n)
+				if t == null:
+					continue
+				var facing := opposite_side(side)
+				t.cover_edges[facing] = edge
+				edge.registrations.append([n, facing])
+	return edge
+
+
 func cover_edge(pos: Vector3i, side: int) -> CoverEdge:
 	var t: GridTileData = tiles.get(pos)
 	return t.cover_edges.get(side) if t else null
@@ -379,13 +410,41 @@ func damage_cover_edge(pos: Vector3i, side: int, amount: int) -> int:
 	edge.hp -= amount
 	if edge.hp > 0:
 		return edge.type
-	if edge.type == MapData.Cover.HEAVY:
+	if edge.is_block:
+		# Straight to destroyed, no HEAVY->LIGHT ladder: that ladder models a
+		# prop getting shabbier while still standing, which doesn't apply to a
+		# whole tile — either it's still blocking the way or it's rubble.
+		_destroy_cover_block(edge)
+	elif edge.type == MapData.Cover.HEAVY:
 		edge.type = MapData.Cover.LIGHT
 		edge.hp = CoverEdge.hp_for(MapData.Cover.LIGHT)
+		if edge.node and edge.node.has_method("set_tier"):
+			edge.node.set_tier(edge.type)
 	else:
 		edge.type = MapData.Cover.NONE
 		edge.hp = 0
-	if edge.node and edge.node.has_method("set_tier"):
-		edge.node.set_tier(edge.type)
+		if edge.node and edge.node.has_method("set_tier"):
+			edge.node.set_tier(edge.type)
 	cover_destroyed.emit(pos, side, edge.type)
 	return edge.type
+
+
+## A block's HP hit zero: clear the accuracy bonus everywhere it was
+## registered, reopen its footprint to movement, and let the visual react.
+## `grid_to_world` already returns the correct fallback position for a cell
+## with no tile yet (see below), so reopening needs no coordinate math of its
+## own beyond that.
+func _destroy_cover_block(edge: CoverEdge) -> void:
+	edge.type = MapData.Cover.NONE
+	edge.hp = 0
+	for reg: Array in edge.registrations:
+		var t: GridTileData = tiles.get(reg[0])
+		if t:
+			t.cover_edges.erase(reg[1])
+	for z in range(edge.footprint.position.y, edge.footprint.position.y + edge.footprint.size.y):
+		for x in range(edge.footprint.position.x, edge.footprint.position.x + edge.footprint.size.x):
+			var pos := Vector3i(x, edge.deck, z)
+			if not tiles.has(pos):
+				add_tile(pos, grid_to_world(pos))
+	if edge.node and edge.node.has_method("on_destroyed"):
+		edge.node.on_destroyed()

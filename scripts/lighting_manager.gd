@@ -82,7 +82,7 @@ func recompute_dynamic() -> void:
 	_dynamic.clear()
 	_dynamic_source.clear()
 	for unit: Unit in _flashlight_units():
-		var facing: Vector3 = -unit.global_transform.basis.z
+		var facing: Vector3 = _aim_of(unit)
 		for pos in GridManager.tiles.keys():
 			if GridManager.chebyshev_dist(unit.grid_pos, pos) > FLASHLIGHT_RANGE:
 				continue
@@ -114,6 +114,33 @@ func flashlight_value(pos: Vector3i) -> float:
 func flashlight_source(pos: Vector3i) -> Unit:
 	# Which unit's beam is lighting this tile, or null if none is.
 	return _dynamic_source.get(pos)
+
+
+## Which way a unit's beam points, in world space.
+##
+## THE RIFLE, NOT THE SHOULDERS. A character whose barrel has been measured
+## (two locators on the bore, exported by tools/render_sprites.py --markers)
+## lights what its gun is actually pointing at — about 18 degrees off forward
+## for the merc's carry — and the SpotLight3D on screen is aimed by the very
+## same vector, so what looks lit and what counts as lit cannot drift apart.
+## That agreement is the rule this whole layer exists to hold (see aimed_light.gd).
+##
+## The vector is the pose's STABLE cycle mean, never the per-frame bore. This
+## function is called from a recompute that only happens on discrete triggers —
+## move, toggle, turn start — so a direction that swayed with the animation
+## would be sampled at whatever frame happened to be showing when a unit moved,
+## and two identical moves could light different tiles. The drawn beam sways;
+## this must not.
+##
+## Falls back to unit facing for everything without a measured barrel, which is
+## every character but the merc.
+func _aim_of(unit: Unit) -> Vector3:
+	var visual: Variant = unit.get("visual")
+	if visual is Node3D and (visual as Node3D).has_method("aim_direction"):
+		var aim: Vector3 = (visual as Node3D).call("aim_direction")
+		if aim.length_squared() > 0.5:
+			return aim
+	return -unit.global_transform.basis.z
 
 
 func _flashlight_units() -> Array[Unit]:

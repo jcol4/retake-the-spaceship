@@ -1,15 +1,14 @@
-[gd_scene load_steps=10 format=3 uid="uid://cplayerunit01"]
+[gd_scene format=3 uid="uid://cplayerunit01"]
 
-[ext_resource type="Script" path="res://scripts/player_unit.gd" id="1_script"]
-[ext_resource type="Script" path="res://scripts/active_marker.gd" id="2_marker"]
-[ext_resource type="Script" path="res://scripts/unit_visual.gd" id="3_visual"]
+[ext_resource type="Script" uid="uid://b02fka2oks72a" path="res://scripts/player_unit.gd" id="1_script"]
+[ext_resource type="Script" uid="uid://dy5rwrokelr2w" path="res://scripts/active_marker.gd" id="2_marker"]
+[ext_resource type="Script" uid="uid://5w8oew6yomj8" path="res://scripts/unit_visual.gd" id="3_visual"]
 
 [sub_resource type="CapsuleShape3D" id="capsule_shape"]
 radius = 0.35
 height = 1.8
 
 [sub_resource type="TorusMesh" id="ring_mesh"]
-inner_radius = 0.5
 outer_radius = 0.64
 
 [sub_resource type="StandardMaterial3D" id="marker_mat"]
@@ -28,82 +27,38 @@ rings = 1
 shading_mode = 0
 albedo_color = Color(0.4, 1, 0.65, 1)
 
-[node name="PlayerUnit" type="Node3D" groups=["player_units", "units"]]
+[node name="PlayerUnit" type="Node3D" unique_id=1752049843 groups=["player_units", "units"]]
 script = ExtResource("1_script")
 
-; Sprite layers, the muzzle point and the rig light are all built in code from
-; the exports below — see unit_visual.gd. Nothing about a character is assembled
-; in this file any more, which is what makes a gear swap a `variant` change
-; rather than a scene edit.
-;
-; The sprite's pivot is its FEET, so no Y offset here.
-; ONE layer. Every other layer -- head, helmet, and the `arm` this used to carry
-; -- is painted into `body`, because the art is now RENDERED rather than drawn:
-; render_sprites.py shoots the whole character, rifle included, into a single
-; flattened pass. That is the trade it takes deliberately, in exchange for
-; correct self-occlusion between the rifle, the arms and the torso, which
-; separate layers cannot give at this camera angle.
-;
-; An empty layer does NOT stay empty -- it falls back to placeholder art and
-; paints a grey disc over the figure -- so a layer listed here must have a
-; matching `[layer]_merc.tres`. `arm_merc.tres` still exists from the abandoned
-; hand-drawn pass and covers only 11 frames of one direction; listing `arm`
-; would composite that stale sw-facing arm over every facing of the new render.
-;
-; The art is authored for all eight directions rather than five because the merc
-; is asymmetric: mirroring would put the rifle in the wrong hand. See
-; tools/build_sprite_frames.gd.
-;
-; canvas_height and foot_anchor are overridden here because this is the first
-; character with RENDERED art rather than the code placeholder, and the two
-; disagree about both. The defaults on unit_visual.gd describe the placeholder:
-; a canvas cut to the character (1.92 m) with the feet flush to the bottom edge
-; (anchor 1.0). Rendered art is neither — see render_sprites.py CANVAS_HEIGHT.
-;
-; 0.984375 is MEASURED, not derived: it is 1 - 6/256, where 6 is the lowest
-; alpha row across all 1248 rendered PNGs (worst case body_merc_run_w_0.png).
-; It is deliberately NOT 1 - FLOOR_MARGIN / CANVAS_HEIGHT, which would put the
-; anchor on the world origin at row 45. The origin is not the lowest point of
-; the art — a planted forward foot projects below it — and since the
-; sprite is a vertical billboard with ALPHA_CUT_DISCARD it writes depth, so
-; those extra px fall under the floor mesh and are occluded. Feet through the
-; floor, which is exactly what anchoring on the origin looked like.
-;
-; Re-measure when a pose with a longer reach lands; a crouch or a dive would
-; push the lowest row down and this number with it. It moved from 0.96484375
-; (row 9, the old body_merc_run_n_1.png) when `run` was re-rendered with its
-; facing fixed: correctly oriented, its stride reaches further down-frame than
-; the misrotated version ever did.
-[node name="Visual" type="Node3D" parent="."]
+[node name="Visual" type="Node3D" parent="." unique_id=208281447]
 script = ExtResource("3_visual")
 layers = Array[StringName]([&"body"])
 variant = &"merc"
 canvas_height = 2.56
 foot_anchor = Vector2(0.5, 0.984375)
-has_light = true
 
-[node name="Body" type="StaticBody3D" parent="."]
+[node name="Body" type="StaticBody3D" parent="." unique_id=2091734915]
 collision_layer = 2
 collision_mask = 0
 
-[node name="Collision" type="CollisionShape3D" parent="Body"]
+[node name="Collision" type="CollisionShape3D" parent="Body" unique_id=1772212450]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
 shape = SubResource("capsule_shape")
 
-[node name="NameLabel" type="Label3D" parent="."]
+[node name="NameLabel" type="Label3D" parent="." unique_id=491628301]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.2, 0)
 billboard = 1
 text = "Unit"
 
-[node name="ActiveMarker" type="Node3D" parent="."]
+[node name="ActiveMarker" type="Node3D" parent="." unique_id=1185707420]
 script = ExtResource("2_marker")
 
-[node name="Ring" type="MeshInstance3D" parent="ActiveMarker"]
+[node name="Ring" type="MeshInstance3D" parent="ActiveMarker" unique_id=1658586534]
 transform = Transform3D(1, 0, 0, 0, 0.3, 0, 0, 0, 1, 0, 0.04, 0)
 mesh = SubResource("ring_mesh")
 surface_material_override/0 = SubResource("marker_mat")
 
-[node name="Arrow" type="MeshInstance3D" parent="ActiveMarker"]
+[node name="Arrow" type="MeshInstance3D" parent="ActiveMarker" unique_id=1580695739]
 transform = Transform3D(1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 2.75, 0)
 mesh = SubResource("arrow_mesh")
 surface_material_override/0 = SubResource("arrow_mat")

@@ -279,6 +279,12 @@ const BUCKET_OFFSET := PI / 4.0
 ## then a flat multiply beats shipping two identical-looking factions.
 @export var faction_tint: Color = Color.WHITE
 
+## TEST HOOK for shaders/gritty_fallout.gdshader — assign the material here (or
+## shaders/gritty_fallout_test.tres directly) to see it on every layer of this
+## unit. Left null it changes nothing; this is scaffolding for eyeballing the
+## look, not the real place a shipped filter would be wired in.
+@export var test_shader: ShaderMaterial = null
+
 ## Which family of shapes the placeholder generator draws for this character.
 ## `organic` is the standing biped everything started as; `machine` is the
 ## hard-edged, geometric read the security robots are specified with
@@ -317,10 +323,38 @@ const MUZZLE_REACH := 0.3
 ## art, it is a detection mechanic (aimed_light.gd).
 const LIGHT_HEIGHT := 1.6
 
+## Where the rifle's lamp is, and which way its barrel points, per animation
+## frame. Written by `tools/render_sprites.py --markers` from two locator
+## spheres on the bore line, and expressed in the UNIT'S OWN FRAME in Godot
+## axes — so one table of N frames serves all eight facings, and the light can
+## follow it at any continuous yaw rather than snapping to a bucket.
+##
+## THIS IS WHAT A SPRITE GETS INSTEAD OF A BONE. The old rig hung the light off
+## a helmet bone; drawn art has none, and a fixed offset could only ever be
+## right in one frame of one facing. Measured off the model instead — the
+## markers are never rendered, see MARKER_MATERIAL in render_sprites.py for why
+## reading the object beats colour-keying a magenta blob back out of the art.
+##
+## A pose with no entry gets no beam, which is the same graceful nothing a
+## character with no art for a pose already gets. Only `idle` is exported today.
+const MUZZLE_MARKER_PATH := "res://assets/sprites/muzzle_%s.json"
+
 var _sprites: Dictionary = {}  # layer StringName -> AnimatedSprite3D
 var _frames: Dictionary = {}  # layer StringName -> SpriteFrames
 var _light: SpotLight3D = null
 var _light_mount: Marker3D = null
+## pose StringName -> {muzzle: Array[Vector3], direction: Array[Vector3],
+## mean_direction: Vector3}, all in the unit's own frame. Only `mean_direction`
+## is read today — it aims the light, and through it the rules. The per-frame
+## arrays are what a swaying effect would need and are kept exported against
+## that, but nothing sways now: see aimed_light.gd `bore_direction`.
+var _bore: Dictionary = {}
+## `<pose>_<direction>` StringName -> Array[Vector2] of canvas positions, which
+## is what actually places the lamp on screen.
+var _canvas: Dictionary = {}
+## Metres the body layer's canvas spans. Cached because the lamp's placement
+## needs it every frame and `_frame_size` walks animations to find it.
+var _canvas_metres := Vector2.ZERO
 var _unit: Node3D = null
 ## Cached: _sync_direction runs every frame per unit, and a group lookup there
 ## would be the most-called line in the game for no reason.
@@ -341,11 +375,18 @@ var _cover: StringName = &""
 ## a unit says otherwise — see CerberusUnit._refresh_status_light.
 var _status_color := Color.WHITE
 
+## Parsed marker tables, keyed by variant. STATIC because every unit of a
+## variant reads the identical table, and a squad of six parsing the same JSON
+## six times is waste that scales with squad size.
+static var _marker_cache: Dictionary = {}
+
 
 func _ready() -> void:
 	# Children are ready before their parent, so Unit._ready can rely on these.
 	_unit = get_parent() as Node3D
 	_build_layers()
+	# Before _build_light, which aims the light off it.
+	_read_markers()
 	if has_light:
 		_build_light()
 	_rig = get_tree().get_first_node_in_group("camera_rig") as Node3D
@@ -408,8 +449,28 @@ func _build_layers() -> void:
 		sprite.shaded = false
 		sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
 		sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+		if test_shader:
+			_apply_test_shader(sprite)
 		add_child(sprite)
 		_sprites[layer] = sprite
+
+
+## Wires the test shader onto one sprite. material_override replaces the
+## sprite's material entirely — Godot does NOT feed AnimatedSprite3D's frame
+## texture into a custom shader automatically, no matter what a uniform is
+## named, so this pushes it in by hand on every frame change. A DUPLICATED
+## material per sprite, because a shared one would have every layer showing
+## whichever sprite last wrote texture_albedo.
+func _apply_test_shader(sprite: AnimatedSprite3D) -> void:
+	var mat: ShaderMaterial = test_shader.duplicate()
+	sprite.material_override = mat
+	var push_texture := func() -> void:
+		if sprite.sprite_frames and sprite.animation != &"" and sprite.sprite_frames.has_animation(sprite.animation):
+			mat.set_shader_parameter("texture_albedo",
+				sprite.sprite_frames.get_frame_texture(sprite.animation, sprite.frame))
+	sprite.frame_changed.connect(push_texture)
+	sprite.animation_changed.connect(push_texture)
+	push_texture.call()
 
 
 ## Authored art for one layer, or null while none exists. The naming convention is
@@ -466,6 +527,8 @@ func set_variant(new_variant: StringName) -> void:
 		# Re-derived, not carried over: the incoming art may be a different
 		# resolution from what this layer was showing.
 		_apply_frame_scale(sprite, frames)
+	# New art brings its own barrel with it.
+	_read_markers()
 	_play(_stance)
 
 
@@ -474,6 +537,11 @@ func _build_light() -> void:
 	# orientation follows the unit — see aimed_light.gd for why those must differ.
 	_light_mount = Marker3D.new()
 	_light_mount.name = "LightMount"
+	# Detached from the unit's rotation, because `muzzle_world` answers in
+	# camera-relative screen space rather than in the unit's own frame; the
+	# turntable would otherwise be applied to it twice. _update_light_rig reimposes
+	# the position every frame, same pattern as aimed_light.gd itself.
+	_light_mount.top_level = true
 	_light_mount.position = Vector3(0.0, LIGHT_HEIGHT, 0.0)
 	add_child(_light_mount)
 
@@ -485,7 +553,23 @@ func _build_light() -> void:
 	_light.set("facing_path", NodePath(".."))
 	_light.light_color = Color(0.94, 0.96, 1.0)
 	_light.light_energy = 7.0
-	_light.light_volumetric_fog_energy = 3.0
+	# THE VISIBLE CONE. main.tscn has volumetric_fog_enabled with a density of
+	# 0.01, so this is the whole of the shaft between the barrel and the pool —
+	# no mesh, no shader, and no possibility of drifting out of line with the
+	# floor, because the cone IS this light. Walls occlude it for free, since
+	# the light already casts shadows.
+	#
+	# This was 0 for a while, and the reason it was is worth keeping: mounted at
+	# the body's centre it read as a haze hugging the model rather than as a
+	# beam. That was a POSITION problem, not a technique one. The mount now
+	# tracks the measured muzzle (see _update_light_rig), so the same setting
+	# now scatters from the gun.
+	#
+	# This is the dial for how present the shaft is. Prefer it over raising the
+	# environment's fog DENSITY, which would haze the whole ship rather than
+	# this one beam. 1.0 is Godot's default; 3.0 was the setting that read as a
+	# haze on the model back when the light was mounted at the chest.
+	_light.light_volumetric_fog_energy = 2.0
 	_light.shadow_enabled = true
 	_light.shadow_blur = 0.6
 	_light.spot_range = 9.0
@@ -496,10 +580,188 @@ func _build_light() -> void:
 	_light.spot_angle_attenuation = 2.5
 	add_child(_light)
 
-	var beam := MeshInstance3D.new()
-	beam.name = "Beam"
-	beam.set_script(load("res://scripts/flashlight_beam.gd"))
-	_light.add_child(beam)
+	# Aimed down the measured bore rather than down the unit's -Z, using the
+	# STABLE cycle mean — see aimed_light.gd `bore_direction` for why the rules
+	# must not be given a direction that sways.
+	_light.set("bore_direction", stable_bore())
+
+
+## Pulls both marker tables for the current variant, and re-measures the canvas
+## so the lamp's placement is derived from the art's own resolution.
+func _read_markers() -> void:
+	var tables := _load_markers(variant)
+	_canvas = tables.get("canvas", {})
+	_bore = tables.get("bore", {})
+	var sprite: AnimatedSprite3D = _sprites.get(&"body")
+	if sprite and sprite.sprite_frames:
+		_canvas_metres = _frame_size(sprite.sprite_frames) * sprite.pixel_size
+
+
+## The bore direction the light and the rules both aim by, in the unit's own
+## frame: one stable vector per pose, never the swaying per-frame one — see
+## aimed_light.gd `bore_direction` for why the rules must not be given a
+## direction that moves within a cycle.
+##
+## RETURNED UNCLAMPED, however far off the unit's facing the barrel points, and
+## the run cycle is why that is worth stating. A merc runs with the rifle across
+## his chest, so `run` measures 73 degrees off his direction of travel. That was
+## gated for a while — a 35-degree ceiling that admitted every standing pose and
+## rejected only the run — on the grounds that swinging the detection cone
+## three-quarters of a right angle sideways is a real change to how stealth
+## plays. It is, and the gate came out anyway: the light visibly leaving the gun
+## was judged to matter more than the cone pointing where the player is walking.
+##
+## So a running merc lights the wall to his left rather than the corridor ahead,
+## and lighting_manager.gd agrees with the screen about it. That is a property
+## of running, not a bug — move fast and you cannot see where you are going.
+## Reinstating the ceiling is a two-line change here if it plays badly.
+##
+## Falls back to straight ahead only for a pose with no table at all, and for
+## any character without a measured barrel — every character but the merc.
+func stable_bore() -> Vector3:
+	var entry: Variant = _bore.get(_bore_pose())
+	if entry is Dictionary:
+		var mean: Variant = (entry as Dictionary).get("mean_direction")
+		if mean is Vector3 and (mean as Vector3).length_squared() > 0.5:
+			return mean
+	return Vector3(0.0, 0.0, -1.0)
+
+
+## The same vector in WORLD space, for LightingManager — which must aim its cone
+## at exactly what the light on screen is aiming at.
+func aim_direction() -> Vector3:
+	return (global_transform.basis * stable_bore()).normalized()
+
+
+## Where the lamp sits on screen right now, in world space. This is where the
+## SpotLight3D is mounted, and therefore where the visible cone starts.
+##
+## FROM THE CANVAS, NOT FROM THE 3D MARKER, and the difference is not a detail.
+## Under this camera a point's screen height mixes its world height with its
+## horizontal depth (screen up is (-0.408, 0.408, 0.816)), and the render baked
+## that mixture into the canvas. A billboard cannot reproduce it: the quad is
+## flat and always faces the viewer, so the depth term is simply gone. Place the
+## lamp at its true 3D position and it lands about 0.15 m BELOW the drawn barrel
+## — physically right, visibly wrong, which is the gap this replaced.
+##
+## The 3D bore is still exactly right for the light's DIRECTION, which is a
+## rotation and carries no such error.
+func muzzle_world() -> Vector3:
+	var sprite: AnimatedSprite3D = _sprites.get(&"body")
+	var here := _canvas_frame()
+	if sprite == null or here == Vector2.ZERO:
+		return global_position + Vector3(0.0, LIGHT_HEIGHT, 0.0)
+	var u := here.x
+	# A mirrored pose shows the art flipped, so the marker flips with it.
+	if sprite.flip_h:
+		u = 1.0 - u
+	# Canvas fraction -> metres out from the sprite's own origin, which
+	# `foot_anchor` places at the feet. The sprite is a FIXED_Y billboard, so its
+	# right IS the camera's horizontal right and its up IS world up — exactly the
+	# pair this offset decomposes onto.
+	var dx := (u - foot_anchor.x) * _canvas_metres.x
+	var dy := (foot_anchor.y - here.y) * _canvas_metres.y
+	var right := _rig.global_transform.basis.x.normalized() if _rig else Vector3.RIGHT
+	return global_position + right * dx + Vector3.UP * dy
+
+
+## This frame's canvas position for the lamp, or ZERO when the pose has none.
+func _canvas_frame() -> Vector2:
+	var sprite: AnimatedSprite3D = _sprites.get(&"body")
+	if sprite == null:
+		return Vector2.ZERO
+	var track: Variant = _canvas.get(sprite.animation)
+	if not (track is Array) or (track as Array).is_empty():
+		return Vector2.ZERO
+	var entries: Array = track
+	return entries[clampi(sprite.frame, 0, entries.size() - 1)]
+
+
+## Which pose's bore table applies. The bore is keyed by POSE, not by the
+## `<pose>_<direction>` animation name, because it lives in the unit's own frame
+## and so does not vary with facing — see MUZZLE_MARKER_PATH.
+func _bore_pose() -> StringName:
+	var sprite: AnimatedSprite3D = _sprites.get(&"body")
+	if sprite == null:
+		return _stance
+	var text := String(sprite.animation)
+	for dir: StringName in DIRECTIONS:
+		var suffix := "_" + String(dir)
+		if text.ends_with(suffix):
+			return StringName(text.substr(0, text.length() - suffix.length()))
+	return StringName(text)
+
+
+## Keeps the light sitting on the drawn muzzle and pointing down the measured
+## bore. That is the whole per-frame job now: the visible cone is the light's
+## own volumetric scattering, so there is no second thing to keep in step with
+## it and no way for the shaft and the floor pool to disagree.
+func _update_light_rig() -> void:
+	if _light_mount:
+		# GLOBAL, because `muzzle_world` answers in camera-relative screen space
+		# and the mount's parent turns with the unit. `top_level` in _build_light
+		# is what makes this the whole story rather than half of it.
+		_light_mount.global_position = muzzle_world()
+	if _light:
+		# Refreshed per frame rather than once at build: which pose is playing
+		# decides which stable bore applies, and no pose is playing yet when the
+		# light is built. Cheap — one vector write.
+		_light.set("bore_direction", stable_bore())
+
+
+## The marker tables for `art_variant`, parsed once per variant per run and
+## turned into vectors here rather than on every frame that reads one. Returns
+## {canvas: {<pose>_<dir>: Array[Vector2]}, bore: {<pose>: {...}}}.
+static func _load_markers(art_variant: StringName) -> Dictionary:
+	if _marker_cache.has(art_variant):
+		return _marker_cache[art_variant]
+	var path: String = MUZZLE_MARKER_PATH % art_variant
+	var document: Variant = null
+	# FileAccess in the editor and wherever the .json ships raw; the JSON
+	# resource importer otherwise. Trying both means the table resolves either
+	# way rather than only under whichever the project happens to be set to.
+	if FileAccess.file_exists(path):
+		document = JSON.parse_string(FileAccess.get_file_as_string(path))
+	elif ResourceLoader.exists(path):
+		var res: Variant = load(path)
+		document = res.data if res is JSON else null
+	var bore_out: Dictionary = {}
+	var canvas_out: Dictionary = {}
+	if document is Dictionary:
+		var bore: Variant = (document as Dictionary).get("bore", {})
+		if bore is Dictionary:
+			for pose: String in (bore as Dictionary):
+				var entry: Dictionary = (bore as Dictionary)[pose]
+				bore_out[StringName(pose)] = {
+					"muzzle": _to_vectors(entry.get("muzzle", [])),
+					"direction": _to_vectors(entry.get("direction", [])),
+					"mean_direction": _to_vector(entry.get("mean_direction")),
+				}
+		var frames: Variant = (document as Dictionary).get("frames", {})
+		if frames is Dictionary:
+			for anim: String in (frames as Dictionary):
+				var rows: Array = (frames as Dictionary)[anim]
+				var track: Array = []
+				for row: Variant in rows:
+					track.append(Vector2(float(row[0]), float(row[1]))
+						if row is Array and (row as Array).size() == 2 else Vector2.ZERO)
+				canvas_out[StringName(anim)] = track
+	var out := {"canvas": canvas_out, "bore": bore_out}
+	_marker_cache[art_variant] = out
+	return out
+
+
+static func _to_vectors(rows: Array) -> Array:
+	var out: Array = []
+	for row: Variant in rows:
+		out.append(_to_vector(row))
+	return out
+
+
+static func _to_vector(row: Variant) -> Vector3:
+	if row is Array and (row as Array).size() == 3:
+		return Vector3(float(row[0]), float(row[1]), float(row[2]))
+	return Vector3.ZERO
 
 
 func set_flashlight_enabled(on: bool) -> void:
@@ -518,6 +780,10 @@ func _process(_delta: float) -> void:
 	# Unit facing is tweened rather than signalled, so it is polled. One float
 	# compare and a bucket calculation per unit per frame.
 	_sync_direction()
+	# Polled for the same reason, and additionally because the bore moves WITHIN
+	# a pose: the answer changes on every sprite frame, not just when the facing
+	# does.
+	_update_light_rig()
 
 
 ## Re-buckets every layer in lockstep. Called on unit facing changes and on
