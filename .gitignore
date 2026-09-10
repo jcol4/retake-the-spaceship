@@ -16,6 +16,15 @@ art_src/*.fbx
 __pycache__/
 *.pyc
 
+# Raw Rhino/Blender room-tile sources (assets/room_tiles/source/) -- same
+# reasoning as art_src/ above. These are multi-hundred-MB CAD exports with
+# embedded 12800x7200 texture caches; nothing in the game reads them. The
+# clean, scaled, texture-shrunk .glb modules built from them (via
+# tools/export_room_modules.py) live in assets/room_tiles/modules/ instead,
+# which IS tracked and is what MapBuilder actually instances.
+assets/room_tiles/source/*.blend
+assets/room_tiles/source/*.fbx
+
 # Render output: contact sheets, preview strips and gifs produced by the
 # tools/ scripts (make_sprite_gif.py defaults --out here). ~27 MB across 146
 # files, all regenerable from the blends in art_src/, so not worth versioning.

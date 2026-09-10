@@ -18,6 +18,8 @@ enum Terrain {
 	FLOOR,     # plain walkable deck plating
 	WALL,      # full-height bulkhead, blocks movement and LOS
 	PLATFORM,  # solid block; its *top* is the walkable tile, one deck up
+	DOOR,      # walkable gap in a bulkhead line — a plain opening, no module
+	OBSTACLE,  # multi-tile furniture footprint — blocks movement, not LOS. See `obstacles`.
 }
 enum Cover { NONE, LIGHT, HEAVY }
 ## The first three are light sources; ALARM is not — it emits no light and is
@@ -94,6 +96,15 @@ var room_links: Array = []  # [a, b] index pairs into `rooms`
 var corridors: Array[int] = []  # indices into `rooms` that are through-routes
 var room_of: Dictionary = {}  # Vector3i cell pos -> index into `rooms`
 
+## Multi-tile furniture, e.g. a 3x1 table: `[Rect2i footprint, int cover_tier]`
+## entries. The footprint's cells are Terrain.OBSTACLE (not walkable — see
+## `is_walkable`); MapBuilder reads the whole rect here, not just per-cell
+## membership, because it builds one mesh spanning the piece and needs its
+## bounds and orientation, not just "which cells are blocked". The perimeter
+## cover this implies is stored as ordinary `cover_edges` like any other
+## crate — there is no separate cover concept for furniture.
+var obstacles: Array = []
+
 
 func set_cell(pos: Vector3i, cell: Cell) -> void:
 	cells[pos] = cell
@@ -124,7 +135,7 @@ func is_walkable(pos: Vector3i) -> bool:
 	# Cover no longer subtracts from this. Under the edge-cover model a unit
 	# stands ON the tile a crate is bolted to the side of, so a covered tile is
 	# an ordinary floor tile in every respect the grid cares about.
-	return terrain_at(pos) in [Terrain.FLOOR, Terrain.PLATFORM]
+	return terrain_at(pos) in [Terrain.FLOOR, Terrain.PLATFORM, Terrain.DOOR]
 
 
 func walkable_positions() -> Array[Vector3i]:

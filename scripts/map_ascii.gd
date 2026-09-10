@@ -17,6 +17,9 @@ extends RefCounted
 ##
 ## Grid legend (one glyph per tile):
 ##   ' ' void      '.' floor     '#' wall      'R' raised platform
+##   'D' door — a walkable gap in a wall line, distinct from '.' only so
+##       corridor-vs-room bookkeeping (MapData.room_of) can tell them apart;
+##       nothing renders differently there any more
 ##   'P' player spawn          'E' enemy spawn         'S' swarm spawn
 ##   'B' brawler spawn — the swarm's heavy, same melee loop, twice the HP
 ##   Security robots, one glyph per model, taken from the first letter of the
@@ -49,12 +52,20 @@ extends RefCounted
 ## Naming the same edge from the other tile costs one subtraction and keeps the
 ## file a single source of truth. Rooms are NOT stored: they are derived from the
 ## layout by MapData.compute_rooms, so they cannot drift out of sync with it.
+##
+## `[obstacles]` is the same idea for multi-tile furniture: a footprint spans
+## several tiles, which a one-glyph-per-tile grid can't name any better than it
+## can name a boundary. Each line is `x,z w,h light|heavy`, naming the
+## footprint's top-left corner and size. The grid itself shows '.' underneath —
+## MapData.Terrain.OBSTACLE is applied by the section, same as cover is applied
+## on top of whatever the grid glyph already said.
 
 const GLYPHS := {
 	" ": [MapData.Terrain.VOID, MapData.Fixture.NONE, MapData.Spawn.NONE, false],
 	".": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.NONE, false],
 	"#": [MapData.Terrain.WALL, MapData.Fixture.NONE, MapData.Spawn.NONE, false],
 	"R": [MapData.Terrain.PLATFORM, MapData.Fixture.NONE, MapData.Spawn.NONE, false],
+	"D": [MapData.Terrain.DOOR, MapData.Fixture.NONE, MapData.Spawn.NONE, false],
 	"P": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.PLAYER, false],
 	"E": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.ENEMY, false],
 	"S": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.SWARM, false],
@@ -81,6 +92,7 @@ const GLYPHS := {
 }
 
 const COVER_SECTION := "[cover]"
+const OBSTACLES_SECTION := "[obstacles]"
 
 const SIDE_NAMES := {"E": MapData.Side.EAST, "S": MapData.Side.SOUTH}
 const SIDE_GLYPH := {MapData.Side.EAST: "E", MapData.Side.SOUTH: "S"}
@@ -106,6 +118,7 @@ static func parse(rows: PackedStringArray, deck: int = 0) -> MapData:
 			cell.stair = spec[3]
 			data.set_cell(Vector3i(x, deck, z), cell)
 	_parse_cover(data, rows, deck)
+	_parse_obstacles(data, rows, deck)
 	data.resolve_stairs()
 	# Derived here rather than by the caller so every route into a MapData —
 	# file, string, or test fixture — arrives with the same graph populated.
@@ -145,6 +158,33 @@ static func _parse_cover(data: MapData, rows: PackedStringArray, deck: int) -> v
 		data.set_cover_edge(pos, SIDE_NAMES[parts[1]], COVER_NAMES[parts[2]])
 
 
+## `[obstacles]` mirrors `[cover]`'s reasoning: a footprint spans several
+## tiles, which a one-glyph-per-tile grid cannot express any more than it can
+## express a boundary. Each line is `x,z w,h tier`, naming the footprint's
+## top-left corner, its size in tiles, and light|heavy.
+static func _parse_obstacles(data: MapData, rows: PackedStringArray, deck: int) -> void:
+	var inside := false
+	for raw in rows:
+		var line: String = (raw as String).strip_edges()
+		if line.begins_with("["):
+			inside = line == OBSTACLES_SECTION
+			continue
+		if not inside or line.is_empty():
+			continue
+		var parts := line.split(" ", false)
+		var coords := parts[0].split(",") if parts.size() == 3 else PackedStringArray()
+		var size := parts[1].split(",") if parts.size() == 3 else PackedStringArray()
+		if coords.size() != 2 or size.size() != 2 or not COVER_NAMES.has(parts[2]):
+			push_error("MapAscii: bad [obstacles] line '%s' (want 'x,z w,h light|heavy')" % line)
+			continue
+		var footprint := Rect2i(int(coords[0]), int(coords[1]), int(size[0]), int(size[1]))
+		var tier: int = COVER_NAMES[parts[2]]
+		for z in range(footprint.position.y, footprint.position.y + footprint.size.y):
+			for x in range(footprint.position.x, footprint.position.x + footprint.size.x):
+				data.get_cell(Vector3i(x, deck, z)).terrain = MapData.Terrain.OBSTACLE
+		data.obstacles.append([footprint, tier])
+
+
 static func encode(data: MapData, deck: int = 0) -> PackedStringArray:
 	# Grid block only. to_text is what round-trips a whole file.
 	var rows := PackedStringArray()
@@ -171,6 +211,22 @@ static func encode_cover(data: MapData, deck: int = 0) -> PackedStringArray:
 	return rows
 
 
+static func encode_obstacles(data: MapData, deck: int = 0) -> PackedStringArray:
+	var rows := PackedStringArray()
+	for entry: Array in data.obstacles:
+		var footprint: Rect2i = entry[0]
+		var tier: int = entry[1]
+		if rows.is_empty():
+			rows.append("")
+			rows.append(OBSTACLES_SECTION)
+		rows.append("%d,%d %d,%d %s" % [
+			footprint.position.x, footprint.position.y,
+			footprint.size.x, footprint.size.y,
+			COVER_WORD[tier],
+		])
+	return rows
+
+
 static func _glyph_for(cell: MapData.Cell) -> String:
 	# Precedence: terrain first (a wall can hold nothing), then the feature that
 	# most changes how the tile plays.
@@ -180,6 +236,8 @@ static func _glyph_for(cell: MapData.Cell) -> String:
 		return "#"
 	if cell.terrain == MapData.Terrain.PLATFORM:
 		return "R"
+	if cell.terrain == MapData.Terrain.DOOR:
+		return "D"
 	match cell.spawn:
 		MapData.Spawn.PLAYER: return "P"
 		MapData.Spawn.ENEMY: return "E"
@@ -224,4 +282,5 @@ static func read_rows(path: String) -> PackedStringArray:
 static func to_text(data: MapData, deck: int = 0) -> String:
 	var rows := encode(data, deck)
 	rows.append_array(encode_cover(data, deck))
+	rows.append_array(encode_obstacles(data, deck))
 	return "\n".join(rows)

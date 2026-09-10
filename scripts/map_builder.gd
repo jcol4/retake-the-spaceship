@@ -7,6 +7,45 @@ extends Node3D
 const WALL_HEIGHT := 3.0
 const PLATFORM_HEIGHT := 3.0
 
+## Modules built by tools/export_room_modules.py from the Rhino/Blender kit in
+## assets/room_tiles/source/ (see that script's docstring for the pipeline and
+## assets/room_tiles/modules/ for the .glb output), used at their own native
+## scale — no stretching, and each with its thickness measured live off the
+## mesh (see _module_thickness) rather than hardcoded, so a re-export that
+## changes the art can't silently drift out of sync with the hug offset
+## below. `DoorClosed`/`DoorOpen`, `WallCorner` and the damaged variants exist
+## in modules/ but aren't wired in: corners are not a separate piece any more
+## (see LONG_TILES/SHORT_TILES), a DOOR cell is a plain opening with no
+## module at all (see _build_wall_runs), and nothing yet marks a WALL run as
+## damaged. A 3+-way junction or an isolated single wall cell (no matching
+## art) falls back to the flat placeholder box.
+const WALL_MODULES := {
+	"straight": preload("res://assets/room_tiles/modules/WallStraight.glb"),
+	"short": preload("res://assets/room_tiles/modules/WallEnd.glb"),
+}
+
+## Each module's own unrotated length axis: true if its length runs along
+## local X at rotation 0 (WallStraight), false if along local Z (WallEnd —
+## the short wall was authored rotated 90° from the long one in its own
+## source file; confirmed directly in Godot, not assumed — see
+## _rotation_for). The two pieces do NOT share a rotation convention, so
+## placing either one along a given grid axis takes whichever rotation
+## actually points ITS OWN length that way.
+const MODULE_LENGTH_ALONG_X := {
+	"straight": true,
+	"short": false,
+}
+
+## Tiles each module's authored length covers (length ÷ TILE_SIZE): the
+## "basic wall" runs 7.5m = 5 tiles, the "short wall" 4.5m = 3 tiles. Both are
+## generic building blocks for _pack_tiles now, not a run piece vs. a
+## dead-end cap — a 3-tile piece can land anywhere a run's length calls for
+## one.
+const LONG_TILES := 5
+const SHORT_TILES := 3
+
+enum WallShape { STRAIGHT_X, STRAIGHT_Z, CORNER, END, OTHER }
+
 # How far behind a wall to look for floor before calling that wall an obstruction.
 # 1 is deliberate, not a first guess: a wall that directly fronts a floor tile IS
 # the near-side boundary of a room, and a wall backed by anything else (another
@@ -40,9 +79,20 @@ var hunter_spawns: Array[Vector3i] = []
 ## change and the spawner iterates it either way.
 var cerberus_spawns: Dictionary = {}
 
-## Cell position -> that wall's MeshInstance3D. Only the mesh is kept, because
-## only the mesh is ever hidden — see _apply_wall_occlusion.
+## Cell position -> that wall's visual root (a MeshInstance3D for the
+## placeholder box, or a module instance's root Node3D for a wall built from
+## assets/room_tiles/modules/). Only the visual is kept, because only the
+## visual is ever hidden — see _apply_wall_occlusion. A whole straight run
+## shares one instance across every cell it covers (see _build_wall_runs), so
+## several keys here can point at the same node.
 var _wall_meshes: Dictionary = {}
+## WALL cells already given a visual by _build_wall_runs, so _build_cell's
+## per-cell pass knows to skip them rather than double-build a box underneath.
+var _handled_walls: Dictionary = {}
+## module_key -> measured thickness (see _module_thickness), memoised per
+## build() so each module's mesh is only instantiated-and-measured once
+## rather than once per piece placed.
+var _thickness_cache: Dictionary = {}
 ## Which grid step currently leads away from the camera. ZERO means "not resolved
 ## yet", which is also the state on a freshly built map.
 var _occlusion_step := Vector3i.ZERO
@@ -102,6 +152,8 @@ func build(map_data: MapData) -> void:
 		child.queue_free()
 	_make_materials()
 	_wall_meshes.clear()
+	_handled_walls.clear()
+	_thickness_cache.clear()
 	_occlusion_step = Vector3i.ZERO  # forces a recompute against the new layout
 	_revealed.clear()
 	_last_revealed.clear()
@@ -111,12 +163,18 @@ func build(map_data: MapData) -> void:
 	_fading_in = []
 	_fade_tween = null
 	GridManager.clear()
+	# Ahead of the per-cell pass: a run or a door span has to be recognised as a
+	# whole before any of its cells are visited individually, or there is no
+	# "whole" left to chunk into fixed-length modules — see _build_wall_runs.
+	_build_wall_runs()
 	for pos: Vector3i in data.cells:
 		_build_cell(pos, data.get_cell(pos))
 	# After every cell, because an edge prop registers itself against the tiles on
 	# BOTH sides and those tiles have to exist first.
 	for entry: Array in data.cover_edge_list():
 		_add_cover_edge(entry[0], entry[1], entry[2])
+	for entry: Array in data.obstacles:
+		_add_cover_block(entry[0], entry[1])
 	for link: Array in data.stair_links:
 		GridManager.add_stair_link(link[0], link[1])
 	player_spawns = data.spawns(MapData.Spawn.PLAYER)
@@ -138,12 +196,25 @@ func _build_cell(pos: Vector3i, cell: MapData.Cell) -> void:
 		MapData.Terrain.VOID:
 			return
 		MapData.Terrain.WALL:
-			_add_wall(pos, world)
+			_add_wall_collision(world)  # every WALL cell blocks LOS, however it's drawn
+			if not _handled_walls.has(pos):
+				# _build_wall_runs couldn't cover it with a real module — a
+				# leftover remainder _pack_tiles couldn't express exactly in
+				# LONG_TILES/SHORT_TILES pieces (see its docstring), a 3+-way
+				# junction, or an isolated wall cell. Same placeholder box
+				# either way; there is no art for any of these.
+				_wall_meshes[pos] = _add_wall_placeholder(world)
 			return
 		MapData.Terrain.PLATFORM:
 			# The block is solid; the walkable tile is its top surface.
 			GridManager.add_tile(data.walkable_pos(pos), world + Vector3(0, PLATFORM_HEIGHT, 0))
 			_add_platform(world)
+			return
+		MapData.Terrain.OBSTACLE:
+			# No GridManager.add_tile: identical to WALL, this is what makes the
+			# tile unwalkable. The mesh+collision for the whole footprint is
+			# built once from data.obstacles (see build()), not per cell, since
+			# one furniture piece spans several of these.
 			return
 	GridManager.add_tile(pos, world)
 	_add_floor_quad(world, _stair_mat if cell.stair else _floor_mat)
@@ -215,10 +286,309 @@ func _add_box_body(world: Vector3, size: Vector3, mat: StandardMaterial3D, layer
 	return body
 
 
+## Invisible collision only — layer 1, sized to fill exactly one WALL cell.
+## Every WALL cell gets one of these regardless of how it is drawn, because
+## LOS (GridManager.has_line_of_sight) and lighting occlusion (has_clear_line)
+## both raycast layer 1: a wall drawn by a module spanning five tiles must
+## still block a shot at each of those five tiles individually.
+func _add_wall_collision(world: Vector3) -> void:
+	var body := StaticBody3D.new()
+	body.collision_layer = 1
+	body.collision_mask = 0
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(GridManager.TILE_SIZE, WALL_HEIGHT, GridManager.TILE_SIZE)
+	shape.shape = box
+	body.add_child(shape)
+	add_child(body)
+	body.global_position = world + Vector3(0, WALL_HEIGHT / 2.0, 0)
+
+
+## The flat placeholder box, for any WALL cell the module classifier can't
+## place with real art (a 3+-way junction, or an isolated single wall cell —
+## see WallShape.OTHER in _classify_wall). Visual only; _add_wall_collision
+## supplies the matching collision separately.
+func _add_wall_placeholder(world: Vector3) -> MeshInstance3D:
+	var mesh_instance := MeshInstance3D.new()
+	var box_mesh := BoxMesh.new()
+	box_mesh.size = Vector3(GridManager.TILE_SIZE, WALL_HEIGHT, GridManager.TILE_SIZE)
+	mesh_instance.mesh = box_mesh
+	mesh_instance.material_override = _wall_mat
+	add_child(mesh_instance)
+	mesh_instance.global_position = world + Vector3(0, WALL_HEIGHT / 2.0, 0)
+	return mesh_instance
+
+
 func _add_wall(pos: Vector3i, world: Vector3) -> void:
-	var body := _add_box_body(world, Vector3(GridManager.TILE_SIZE, WALL_HEIGHT, GridManager.TILE_SIZE), _wall_mat, 1)
-	# Kept so wall occlusion can hide this mesh without touching its collision.
-	_wall_meshes[pos] = body.get_node("Mesh")
+	_add_wall_collision(world)
+	_wall_meshes[pos] = _add_wall_placeholder(world)
+
+
+## One instance of a WALL_MODULES piece, positioned at `world` (a cell's
+## tile-centre — see cell_to_world) plus `offset` (the "hug" shift — see
+## _hug_direction), rotated to run along the grid axis `along_x` names.
+## Modules are exported with their own origin already at floor level and at
+## native scale (see tools/export_room_modules.py), so no vertical offset or
+## stretch is needed here the way _add_box_body needs one for a centre-origin
+## BoxMesh.
+func _instance_module(module_key: String, world: Vector3, offset: Vector3, along_x: bool) -> Node3D:
+	var inst: Node3D = WALL_MODULES[module_key].instantiate()
+	add_child(inst)
+	inst.global_position = world + offset
+	inst.rotation.y = _rotation_for(module_key, along_x)
+	return inst
+
+
+## Which Y-rotation makes `module_key`'s own length axis run along the grid
+## axis `along_x` names. A module authored with its length on local X needs
+## no rotation to run along world X (0.0) and a quarter turn to run along
+## world Z (PI/2); one authored along local Z is the other way around — see
+## MODULE_LENGTH_ALONG_X.
+func _rotation_for(module_key: String, along_x: bool) -> float:
+	var native_along_x: bool = MODULE_LENGTH_ALONG_X[module_key]
+	return 0.0 if along_x == native_along_x else PI / 2.0
+
+
+## Which of a WALL cell's four orthogonal neighbours continue the same
+## bulkhead line, indexed by Side (map_data.gd: EAST=0, SOUTH=1, WEST=2,
+## NORTH=3). DOOR counts alongside WALL: a doorway interrupts a wall run
+## without ending it, so a WALL cell next to one must still read as a
+## straight-run cell, not as a dead end capping against open air.
+func _wall_neighbors(pos: Vector3i) -> Array[bool]:
+	var out: Array[bool] = []
+	for side in [MapData.Side.EAST, MapData.Side.SOUTH, MapData.Side.WEST, MapData.Side.NORTH]:
+		var t := data.terrain_at(pos + MapData.SIDE_STEP[side])
+		out.append(t == MapData.Terrain.WALL or t == MapData.Terrain.DOOR)
+	return out
+
+
+## Classifies a WALL cell by which neighbours continue the bulkhead line, the
+## way a standard tile autotiler would: two OPPOSITE such neighbours is a
+## straight run cell (STRAIGHT_X/STRAIGHT_Z below); two PERPENDICULAR ones is
+## a corner, carrying the two Sides the wall continues toward; exactly one is
+## a dead end, carrying the one Side it continues toward; anything else (a 3-
+## or 4-way junction, or an isolated wall cell with no continuation at all)
+## has no matching module and falls back to the placeholder box.
+##
+## A corner or a dead end is NOT a separate piece — WallCorner is retired,
+## and a dead end is just wherever a run of ordinary LONG_TILES/SHORT_TILES
+## pieces happens to stop. _continues_axis below is what lets a run swallow
+## either kind of cell as an ordinary tile of its own length; see that
+## function and _build_wall_runs for why a corner cell deliberately ends up
+## covered by BOTH the runs that meet there.
+func _classify_wall(pos: Vector3i) -> Dictionary:
+	var nb := _wall_neighbors(pos)
+	var e: bool = nb[MapData.Side.EAST]
+	var s: bool = nb[MapData.Side.SOUTH]
+	var w: bool = nb[MapData.Side.WEST]
+	var n: bool = nb[MapData.Side.NORTH]
+	var count := int(e) + int(s) + int(w) + int(n)
+	if count == 2 and e and w:
+		return {"shape": WallShape.STRAIGHT_X}
+	if count == 2 and n and s:
+		return {"shape": WallShape.STRAIGHT_Z}
+	if count == 2:
+		var dir_a: int = MapData.Side.NORTH if n else MapData.Side.SOUTH
+		var dir_b: int = MapData.Side.EAST if e else MapData.Side.WEST
+		return {"shape": WallShape.CORNER, "dir_a": dir_a, "dir_b": dir_b}
+	if count == 1:
+		var toward: int = MapData.Side.EAST if e else (MapData.Side.SOUTH if s else (MapData.Side.WEST if w else MapData.Side.NORTH))
+		return {"shape": WallShape.END, "toward": toward}
+	return {"shape": WallShape.OTHER}
+
+
+## Whether `pos` continues a run along the grid axis `along_x` names: a WALL
+## cell whose own classification has a leg on THAT axis specifically — a
+## matching STRAIGHT cell (both legs on this axis), a CORNER (always has one
+## leg per axis, so it always counts on both), or an END whose lone leg
+## happens to point along this axis. WallShape.OTHER (a 3+-way junction, or
+## an isolated cell) never counts, on either axis — no module fits it, so a
+## run must not try to swallow it.
+func _continues_axis(pos: Vector3i, along_x: bool) -> bool:
+	if data.terrain_at(pos) != MapData.Terrain.WALL:
+		return false
+	var shape: Dictionary = _classify_wall(pos)
+	match shape.shape:
+		WallShape.STRAIGHT_X:
+			return along_x
+		WallShape.STRAIGHT_Z:
+			return not along_x
+		WallShape.CORNER:
+			return true
+		WallShape.END:
+			var toward_along_x: bool = shape.toward == MapData.Side.EAST or shape.toward == MapData.Side.WEST
+			return toward_along_x == along_x
+		_:
+			return false
+
+
+## Places every door span (see _place_spans) and every WALL run along both
+## grid axes, packing each run's full length into LONG_TILES/SHORT_TILES
+## pieces (see _pack_tiles) at native module scale — no stretching. Must run
+## before the per-cell pass in `build()`: a run has to be recognised as a
+## whole, and packed, before any single cell of it can be drawn.
+##
+## A cell is checked against BOTH axes independently, rather than being
+## claimed by whichever axis reaches it first: a corner cell genuinely
+## belongs to two runs — the one bending through it and the one bending away
+## — and with WallCorner retired, the only way to cover a corner at all is to
+## let each adjoining run's own packing include it as an ordinary tile at its
+## end. That means a corner cell gets two overlapping module instances, one
+## from each run — deliberate, not a bug, per the fix this replaced (a
+## dedicated corner piece whose two legs could never match an arbitrary
+## room's actual corner dimensions). `seen` is tracked per axis for the same
+## reason: a cell fully handled by its X-run must still be free to also be
+## handled by its Z-run.
+func _build_wall_runs() -> void:
+	var seen := {true: {}, false: {}}
+	for pos: Vector3i in data.cells:
+		if data.terrain_at(pos) != MapData.Terrain.WALL:
+			continue
+		for along_x in [true, false]:
+			if not seen[along_x].has(pos) and _continues_axis(pos, along_x):
+				_handle_run(pos, along_x, seen[along_x])
+
+
+## The full extent of the maximal run through `pos` along axis `along_x`,
+## scanning BOTH directions rather than assuming `pos` is already the run's
+## start — `data.cells`' iteration order happens to visit most runs
+## start-first (raster order), but a floating divider open at both ends has
+## no "first" cell that isn't itself one of the two WallShape.END cells
+## bracketing it, and scanning both ways is what covers that case too.
+func _run_bounds(pos: Vector3i, along_x: bool) -> Array[Vector3i]:
+	var step := Vector3i(1, 0, 0) if along_x else Vector3i(0, 0, 1)
+	var start := pos
+	while _continues_axis(start - step, along_x):
+		start -= step
+	var end := pos
+	while _continues_axis(end + step, along_x):
+		end += step
+	return [start, end]
+
+
+## Packs one run's full bounds into LONG_TILES/SHORT_TILES pieces (see
+## _pack_tiles) and places one module instance per piece, each hugging the
+## same side of the run — see _hug_direction. Any remainder _pack_tiles
+## can't express exactly (only possible for a 1, 2, 4 or 7-tile run; every
+## other length is exact) is left uncovered and falls through to
+## `_build_cell`'s per-cell placeholder box, the same graceful degradation an
+## ordinary junction gets.
+func _handle_run(pos: Vector3i, along_x: bool, seen: Dictionary) -> void:
+	var bounds := _run_bounds(pos, along_x)
+	var lo: Vector3i = bounds[0]
+	var hi: Vector3i = bounds[1]
+	var step := Vector3i(1, 0, 0) if along_x else Vector3i(0, 0, 1)
+	var length := _coord_along(hi, step) - _coord_along(lo, step) + 1
+	var hug_dir := _hug_direction(lo, hi, step, along_x)
+	var cur := lo
+	for tiles: int in _pack_tiles(length):
+		var module_key := "straight" if tiles == LONG_TILES else "short"
+		var piece_end := cur + step * (tiles - 1)
+		var mid := (cell_to_world(cur) + cell_to_world(piece_end)) / 2.0
+		var gap := (GridManager.TILE_SIZE - _module_thickness(module_key)) / 2.0
+		var inst := _instance_module(module_key, mid, Vector3(hug_dir) * gap, along_x)
+		var c := cur
+		while true:
+			seen[c] = true
+			_handled_walls[c] = true
+			_wall_meshes[c] = inst
+			if c == piece_end:
+				break
+			c += step
+		cur = piece_end + step
+
+
+## Splits `length` tiles into LONG_TILES (5) and SHORT_TILES (3) pieces
+## summing to as much of it as possible, preferring more/longer pieces when
+## more than one combination covers it exactly. Any remainder (only possible
+## for a length of 1, 2, 4 or 7 tiles — every other length is exactly
+## representable, since gcd(3,5)=1) is left uncovered; the caller leaves
+## those cells for the placeholder box rather than forcing a module to
+## overhang or squeeze.
+func _pack_tiles(length: int) -> Array[int]:
+	var best: Array[int] = []
+	var best_leftover := length
+	for longs in range(length / LONG_TILES, -1, -1):
+		var rest := length - longs * LONG_TILES
+		var shorts := rest / SHORT_TILES
+		var leftover := rest % SHORT_TILES
+		if leftover < best_leftover:
+			best_leftover = leftover
+			best = []
+			for _i in longs:
+				best.append(LONG_TILES)
+			for _i in shorts:
+				best.append(SHORT_TILES)
+			if best_leftover == 0:
+				break
+	return best
+
+
+## Which way a run's pieces should shift off the tile-centre line they'd
+## otherwise sit on, so their face touches the tile boundary they border
+## instead of leaving a gap — every module's thickness is noticeably less
+## than TILE_SIZE, so centring left visible floor showing past both faces.
+## Returns a unit step (to be scaled by however much gap a given piece's own
+## thickness leaves — see _handle_run) or ZERO to stay centred.
+##
+## Checked once per run, at whichever cell is nearest the run's middle,
+## rather than at `lo` or `hi` themselves: either end may be a corner cell,
+## and a corner's own two perpendicular neighbours are each either VOID or
+## WALL (never floor) — that's what makes it a corner — so checking there
+## would find no floor side at all. A run entirely made of corners (length 2,
+## nothing straight between two bends) still falls back to this and finds
+## nothing either, which just leaves it centred rather than guessing wrong.
+## An interior partition with floor on both sides also resolves to ZERO
+## here, for the same reason: nothing to prefer, so stay centred.
+func _hug_direction(lo: Vector3i, hi: Vector3i, step: Vector3i, along_x: bool) -> Vector3i:
+	var mid_coord := (_coord_along(lo, step) + _coord_along(hi, step)) / 2
+	var rep := lo + step * (mid_coord - _coord_along(lo, step))
+	var perp: Vector3i = MapData.SIDE_STEP[MapData.Side.NORTH] if along_x else MapData.SIDE_STEP[MapData.Side.EAST]
+	var a := data.is_walkable(rep + perp)
+	var b := data.is_walkable(rep - perp)
+	if a and not b:
+		return perp
+	if b and not a:
+		return -perp
+	return Vector3i.ZERO
+
+
+## `module_key`'s thickness — its horizontal extent NOT along its own native
+## length axis (see MODULE_LENGTH_ALONG_X) — measured fresh off the mesh
+## rather than hardcoded, so a re-export in tools/export_room_modules.py
+## can't silently drift out of sync with the hug offset in _handle_run.
+## Memoised in _thickness_cache: this only needs to run once per module per
+## build(), not once per piece placed.
+func _module_thickness(module_key: String) -> float:
+	if _thickness_cache.has(module_key):
+		return _thickness_cache[module_key]
+	var inst: Node3D = WALL_MODULES[module_key].instantiate()
+	var aabb := AABB()
+	var first := true
+	for node in _mesh_instances(inst):
+		var xformed: AABB = node.transform * node.get_aabb()
+		aabb = xformed if first else aabb.merge(xformed)
+		first = false
+	inst.free()
+	var thickness: float = aabb.size.z if MODULE_LENGTH_ALONG_X[module_key] else aabb.size.x
+	_thickness_cache[module_key] = thickness
+	return thickness
+
+
+func _mesh_instances(root: Node) -> Array[MeshInstance3D]:
+	var out: Array[MeshInstance3D] = []
+	if root is MeshInstance3D:
+		out.append(root)
+	for child in root.get_children():
+		out.append_array(_mesh_instances(child))
+	return out
+
+
+## `pos`'s coordinate along `step`'s axis, so two positions on the same
+## straight line can be compared/ordered with a plain integer rather than
+## vector geometry. `step` is always a unit step along X or Z (never both).
+func _coord_along(pos: Vector3i, step: Vector3i) -> int:
+	return pos.z if step.z != 0 else pos.x
 
 
 func _add_platform(world: Vector3) -> void:
@@ -249,6 +619,29 @@ func _add_cover_edge(pos: Vector3i, side: int, cover_type: int) -> void:
 	var body := _add_box_body(world, size, _cover_heavy_mat if heavy else _cover_light_mat, 4)
 	body.set_script(load("res://scripts/cover_object.gd"))
 	body.call("register_with_grid", pos, side, cover_type)
+
+
+## One block-cover piece (MapData.obstacles): a box spanning the whole
+## footprint, blocking movement by never getting a GridManager tile (see the
+## OBSTACLE branch above) and giving its neighbours the usual accuracy bonus
+## via GridManager.register_cover_block — one shared HP pool across the whole
+## footprint, not one independent pool per edge. Collision is layer 4, same as
+## ordinary edge cover: neither tier blocks line of sight (Sec 6.1), only
+## movement, so this is not built like a wall.
+func _add_cover_block(footprint: Rect2i, tier: int) -> void:
+	var first := cell_to_world(Vector3i(footprint.position.x, 0, footprint.position.y))
+	var last := cell_to_world(Vector3i(footprint.position.x + footprint.size.x - 1, 0, footprint.position.y + footprint.size.y - 1))
+	var center := (first + last) / 2.0
+	var size := Vector3(
+		footprint.size.x * GridManager.TILE_SIZE,
+		CoverObject.TIER_HEIGHT[tier],
+		footprint.size.y * GridManager.TILE_SIZE,
+	)
+	var mat := _cover_heavy_mat if tier == MapData.Cover.HEAVY else _cover_light_mat
+	var body := _add_box_body(center, size, mat, 4)
+	body.set_script(load("res://scripts/cover_block.gd"))
+	body.call("setup", footprint, 0, tier, _floor_mat, GridManager.TILE_SIZE, GridManager.FLOOR_HEIGHT)
+	GridManager.register_cover_block(footprint, 0, tier, body)
 
 
 func _add_light(world: Vector3, fixture: int) -> void:
@@ -321,9 +714,10 @@ func _add_floor_quad(world: Vector3, mat: StandardMaterial3D) -> void:
 ## raycast layer 1 map geometry: a wall you can see past must still be a wall you
 ## cannot shoot through, or the screen starts disagreeing with the rules.
 ##
-## When walls become .glb module instances (Phase 8) the only thing that changes
-## here is what `_wall_meshes` holds — the module root instead of the "Mesh"
-## child. Nothing in the rule below reads the node's type.
+## Now that walls ARE .glb module instances (Phase 8), `_wall_meshes` holds
+## either kind — a bare MeshInstance3D for the placeholder box, or a module
+## root for real art — and `_apply_wall_occlusion`/`_wall_nodes_by_hide` below
+## are what actually branch on which one a given wall got.
 func _process(_delta: float) -> void:
 	if data == null:
 		return
@@ -461,19 +855,51 @@ func _away_step(look: Vector3) -> Vector3i:
 	return OCCLUSION_STEPS[wrapi(roundi(atan2(flat.x, flat.z) / (PI / 4.0)), 0, 8)]
 
 
+## Groups `_wall_meshes` by NODE rather than by cell first: a run built by
+## _build_wall_runs shares one visual across every cell it covers, and that
+## visual can only be hidden or shown as a whole. A run is hidden only when
+## EVERY cell it covers wants it hidden — biasing toward staying visible on a
+## split verdict is the safe direction, since a wall that should have hidden
+## but didn't is a solved problem (open the door), while one that hid when it
+## should not have opens the deck onto nothing.
+func _wall_nodes_by_hide(step: Vector3i) -> Dictionary:
+	var positions_by_node: Dictionary = {}
+	for pos: Vector3i in _wall_meshes:
+		var node: Node3D = _wall_meshes[pos]
+		if not positions_by_node.has(node):
+			positions_by_node[node] = []
+		positions_by_node[node].append(pos)
+	var out: Dictionary = {}
+	for node: Node3D in positions_by_node:
+		var hide := true
+		for pos: Vector3i in positions_by_node[node]:
+			if not _hides_interior(pos, step):
+				hide = false
+				break
+		out[node] = hide
+	return out
+
+
 func _apply_wall_occlusion(step: Vector3i) -> void:
 	var fading_out: Array[MeshInstance3D] = []
 	var fading_in: Array[MeshInstance3D] = []
-	for pos: Vector3i in _wall_meshes:
-		var mesh: MeshInstance3D = _wall_meshes[pos]
-		var hide := _hides_interior(pos, step)
-		if hide == not mesh.visible:
+	var by_hide := _wall_nodes_by_hide(step)
+	for node: Node3D in by_hide:
+		var hide: bool = by_hide[node]
+		if hide == not node.visible:
 			continue  # already where it needs to be
+		# Only the placeholder box (a bare MeshInstance3D) fades — a module
+		# instance can carry several MeshInstance3D children with several
+		# materials between them, and material_override doesn't reach into
+		# that. It pops instead; see MIGRATION_PLAN.md Phase 4 for the fade.
+		if not (node is MeshInstance3D):
+			node.visible = not hide
+			continue
 		if hide:
-			fading_out.append(mesh)
+			fading_out.append(node)
 		else:
-			mesh.visible = true
-			fading_in.append(mesh)
+			node.visible = true
+			fading_in.append(node)
 
 	if fading_out.is_empty() and fading_in.is_empty():
 		return
