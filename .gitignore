@@ -25,6 +25,18 @@ __pycache__/
 assets/room_tiles/source/*.blend
 assets/room_tiles/source/*.fbx
 
+# Same raw-export problem, but dropped loose in assets/room_tiles/ itself
+# instead of source/ -- caught once already (wall-*.blend, .fbx, .3dm and
+# multi-ten-MB scaled-room-tiles pngs, ~2.7GB, got committed straight to
+# origin/main). export_room_modules.py only ever reads assets/room_tiles/source/,
+# so nothing here is loaded by anything -- if you're re-exporting, the raw file
+# belongs in source/, not here.
+assets/room_tiles/*.blend
+assets/room_tiles/*.fbx
+assets/room_tiles/*.3dm
+assets/room_tiles/*.3dm.rhl
+assets/room_tiles/scaled-room-tiles*
+
 # Render output: contact sheets, preview strips and gifs produced by the
 # tools/ scripts (make_sprite_gif.py defaults --out here). ~27 MB across 146
 # files, all regenerable from the blends in art_src/, so not worth versioning.
