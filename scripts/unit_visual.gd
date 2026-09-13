@@ -70,6 +70,11 @@ const GRENADE := &"throw_grenade"
 const INTERACT := &"interact"
 const HIT_REACT := &"hit_react"
 const DOWNED := &"downed"
+## The corpse: a held stance the unit settles into once DOWNED has played out,
+## and never leaves. A STANCE rather than DOWNED's last frame left on screen,
+## because everything that re-resolves the sprite — a facing re-sync, a variant
+## swap — re-plays `_stance`, and a body that re-played idle would stand back up.
+const DEAD := &"dead"
 ## Alien-side only: played once when an alien wakes, by EnemyUnit's state machine
 ## rather than by anything the player ordered.
 const ALERT_SCREAM := &"alert_scream"
@@ -119,10 +124,19 @@ const FALLBACK_TIME := {
 	END_SHOOT: SETTLE_TIME,
 	MELEE: 1.20,
 	RELOAD: 3.75,
-	GRENADE: 1.00,
-	INTERACT: 1.00,
-	HIT_REACT: 0.47,
-	DOWNED: 0.80,
+	# Stated as a division, not a round guess: the authored `grenade` action is
+	# 37 Blender frames at the rig's 12 fps (art_src/merc_anim.blend), and this
+	# is what stops that getting silently resampled into some other length --
+	# see render_sprites.py frame_count/sample_frames, which derive the RENDERED
+	# frame count from this duration rather than the other way round. Get this
+	# wrong and the throw still renders fine, it just plays back sped up or
+	# slowed down from how it was animated. INTERACT likewise: 30 frames.
+	GRENADE: 37 / 12.0,
+	INTERACT: 30 / 12.0,
+	# The merc's `get_hit`/`get_hit_low` actions: 7 Blender frames at 12 fps.
+	HIT_REACT: 7 / 12.0,
+	# The merc's `die` action: 12 Blender frames at 12 fps.
+	DOWNED: 12 / 12.0,
 	ALERT_SCREAM: 2.80,
 }
 const DEFAULT_FALLBACK_TIME := 0.4
@@ -786,6 +800,14 @@ func _process(_delta: float) -> void:
 	_update_light_rig()
 
 
+## Re-asserts whatever the unit should be showing, for a unit coming back into
+## view (Unit.set_rendered). Nothing plays while a unit is instant, so without
+## this the sprite keeps whatever it showed when it went out of sight — which for
+## a unit killed there is standing up rather than lying where it fell.
+func refresh() -> void:
+	_play(_action if _action != &"" else _stance)
+
+
 ## Re-buckets every layer in lockstep. Called on unit facing changes and on
 ## camera yaw changes, because either one moves the direction the player sees.
 func _sync_direction() -> void:
@@ -898,6 +920,10 @@ func play_action(action: StringName) -> void:
 	# Shooting does NOT come through here — see play_burst. This drives the
 	# one-shots that fire no rounds, so nothing here emits `muzzle`.
 	if _instant():
+		# Still recorded, so a unit killed out of sight is a body when it next
+		# comes into view rather than standing there in whatever it last played.
+		if action == DOWNED:
+			_settle_dead()
 		return
 	_action = action
 	_play(action)
@@ -911,9 +937,43 @@ func play_action(action: StringName) -> void:
 		await get_tree().create_timer(
 			FALLBACK_TIME.get(action, DEFAULT_FALLBACK_TIME)).timeout
 	_action = &""
-	# DOWNED holds its last frame; every other action returns to the stance.
-	if action != DOWNED:
+	# DOWNED hands over to the corpse; every other action returns to the stance.
+	if action == DOWNED:
+		_settle_dead()
+	else:
 		_play(_stance)
+
+
+## Makes DEAD the stance, where it is drawn. A character with no `dead` art keeps
+## DOWNED's last frame on screen instead — asking for DEAD there would fall
+## through `_play` to IDLE and stand the body up.
+##
+## Checked through `_resolved_base` rather than `_has_any` because this is also
+## reached on the instant path, which can run before the layers are built, and
+## only the former skips a layer with no frames yet.
+func _settle_dead() -> void:
+	if _resolved_base(DEAD) == &"":
+		return
+	_stance = DEAD
+	_play(DEAD)
+
+
+## Plays the flinch for a hit the unit survived, in whatever direction it is
+## already facing, through the cover chain like every other pose — so a unit
+## behind a crate resolves `hit_react_low` and flinches without standing up.
+##
+## Fire-and-forget, and the one action that is: `Unit.take_damage` is
+## synchronous, and nothing about the fight may wait on the victim's reaction.
+## That is also why missing art costs NO time here, unlike play_action — with no
+## flinch drawn the unit simply holds its idle.
+##
+## Skipped rather than stacked when another one-shot is already on screen. Two
+## play_action calls in flight at once would each hand back to the stance when
+## they finished, so the first to end would cut the other off mid-animation.
+func play_hit_react() -> void:
+	if _instant() or _action != &"" or not (_authored and _has_any(HIT_REACT)):
+		return
+	await play_action(HIT_REACT)
 
 
 ## Plays a one-shot that bridges the current stance into `next`, then settles
@@ -1180,7 +1240,7 @@ const PLACEHOLDER_POSES := [
 	IDLE, RUN, WALK, OVERWATCH, AIM_HOLD,
 	BEGIN_SHOOT, FIRE_SHOOT, END_SHOOT, RUN_STOP,
 	MELEE, RELOAD, GRENADE, INTERACT,
-	HIT_REACT, DOWNED, ALERT_SCREAM, IDLE_FIDGET,
+	HIT_REACT, DOWNED, DEAD, ALERT_SCREAM, IDLE_FIDGET,
 ]
 
 
@@ -1194,7 +1254,7 @@ func _placeholder_frames(layer: StringName) -> SpriteFrames:
 		for dir: StringName in [&"n", &"ne", &"e", &"se", &"s"]:
 			var name := &"%s_%s" % [pose, dir]
 			frames.add_animation(name)
-			frames.set_animation_loop(name, pose in [IDLE, RUN, WALK, OVERWATCH, AIM_HOLD])
+			frames.set_animation_loop(name, pose in [IDLE, RUN, WALK, OVERWATCH, AIM_HOLD, DEAD])
 			frames.add_frame(name, _placeholder_texture(layer, pose, dir))
 	return frames
 
@@ -1203,7 +1263,7 @@ func _placeholder_texture(layer: StringName, pose: StringName, dir: StringName) 
 	var image := Image.create(CANVAS, CANVAS, false, Image.FORMAT_RGBA8)
 	image.fill(Color(0, 0, 0, 0))
 	var color: Color = PLACEHOLDER_COLOR.get(layer, Color(0.6, 0.6, 0.6))
-	var prone := pose == DOWNED
+	var prone := pose in [DOWNED, DEAD]
 	var crouched := pose in PLACEHOLDER_CROUCHED
 	# How far the art leans toward the viewer, so the eight buckets are told apart
 	# without reading a label: -1 is facing away, +1 is facing the camera.

@@ -54,7 +54,7 @@ ONE_SHOT_TIME = {
     ## broken rather than the preview being wrong.
     "begin_shoot": 0.45, "fire_shoot": 0.11, "end_shoot": 0.20,
     "melee": 1.20, "reload": 1.20, "throw_grenade": 1.00, "interact": 1.00,
-    "hit_react": 0.47, "downed": 0.80, "alert_scream": 2.80,
+    "hit_react": 0.47, "downed": 12 / 12.0, "alert_scream": 2.80,
 }
 DEFAULT_TIME = 1.6
 

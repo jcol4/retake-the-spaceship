@@ -23,7 +23,7 @@ const POSES := [
 	"idle", "run", "walk", "overwatch_hold", "aim_hold",
 	"begin_shoot", "fire_shoot", "end_shoot",
 	"run_stop", "melee",
-	"reload", "throw_grenade", "interact", "hit_react", "downed",
+	"reload", "throw_grenade", "interact", "hit_react", "downed", "dead",
 	"alert_scream", "idle_fidget",
 ]
 
@@ -44,7 +44,7 @@ const POSES := [
 ## So these are emitted ONLY where art genuinely exists, per direction as well
 ## as per pose. That is what lets the set land one pose at a time.
 const COVER_POSES := [
-	"idle_low", "begin_shoot_low", "end_shoot_low", "reload_low",
+	"idle_low", "begin_shoot_low", "end_shoot_low", "reload_low", "hit_react_low",
 	"idle_high", "begin_shoot_high", "end_shoot_high", "reload_high",
 ]
 
@@ -62,6 +62,8 @@ const DIRECTIONS := ["ne", "n", "nw", "w", "sw", "s", "se", "e"]
 const LOOPING := [
 	"idle", "run", "walk", "overwatch_hold", "aim_hold",
 	"idle_low", "idle_high",
+	# One frame, held for good — a stance, not a one-shot. See unit_visual.gd DEAD.
+	"dead",
 ]
 
 ## Seconds a one-shot occupies, copied from unit_visual.gd's FALLBACK_TIME.
@@ -81,8 +83,16 @@ const ONE_SHOT_TIME := {
 	## with the standing art.
 	"begin_shoot_low": 0.75, "end_shoot_low": 0.45,
 	"begin_shoot_high": 0.75, "end_shoot_high": 0.45,
-	"melee": 1.20, "reload": 3.75, "throw_grenade": 1.00, "interact": 1.00,
-	"hit_react": 0.47, "downed": 0.80, "alert_scream": 2.80,
+	# throw_grenade and interact are Blender frames / render_sprites.py's
+	# SAMPLE_FPS (12) -- see unit_visual.gd GRENADE. Keep in sync with
+	# render_sprites.py's ONE_SHOT_TIME.
+	"melee": 1.20, "reload": 3.75, "throw_grenade": 37 / 12.0,
+	"interact": 30 / 12.0,
+	# 7 frames at 12 fps -- see unit_visual.gd HIT_REACT. The low variant is
+	# drawn to the same length, so a flinch costs the same beat behind a crate.
+	"hit_react": 7 / 12.0, "hit_react_low": 7 / 12.0,
+	# The merc's `die` action: 12 frames at 12 fps -- see unit_visual.gd DOWNED.
+	"downed": 12 / 12.0, "alert_scream": 2.80,
 }
 const DEFAULT_ONE_SHOT_TIME := 0.4
 

@@ -202,6 +202,9 @@ func set_rendered(rendered: bool) -> void:
 		return
 	_rendered = rendered
 	visual.visible = rendered
+	# After `_rendered` is set, so the visual is no longer instant and plays.
+	if rendered:
+		visual.refresh()
 
 
 func _ready() -> void:
@@ -678,18 +681,22 @@ func take_damage(amount: int) -> int:
 		# something came through here as a corpse is.
 		SecurityNetwork.report_evidence(grid_pos, SecurityNetwork.Evidence.CORPSE)
 		downed.emit(self)
-	elif not is_downed:
-		# No flinch: a unit that survives a hit just holds whatever idle its tile
-		# and facing call for. Deliberate and temporary — HIT_REACT exists in the
-		# vocabulary and there is placeholder art for it, but there is no authored
-		# merc flinch yet, so playing it would resolve through the fallback chain
-		# to a pose that reads as nothing happening while still costing the beat
-		# FALLBACK_TIME charges for it. Settling is at least honest about that.
+	elif not is_downed and not is_busy:
+		# Flinch, then hand back to idle. Settled FIRST so the cover family is
+		# current: a soldier hit behind a crate resolves `hit_react_low` and
+		# flinches without standing up to do it.
 		#
-		# Restoring it is one line: swap this for the play_action call. Do that
-		# once `hit_react` is drawn, and draw `hit_react_low` alongside it — a
-		# soldier flinching behind a crate should not stand up to do it.
+		# Not awaited, for the same reason DOWNED is not — see play_hit_react.
+		# And not turned toward the shooter: facing aims the flashlight, so a
+		# turn here would change what is lit, and a hit must stay cosmetic.
+		#
+		# Gated on `is_busy` because the busy case is a unit hit MID-MOVE, by
+		# overwatch or suppression fire on its path. `move_along` owns the stance
+		# until it arrives, so that unit keeps its run cycle and flinches not at
+		# all — settling here used to leave it sliding the rest of the path in
+		# the idle pose.
 		settle_idle()
+		visual.play_hit_react()
 	return amount
 
 
