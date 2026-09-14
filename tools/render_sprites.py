@@ -304,7 +304,11 @@ POSE_ACTION = {
     # Blender action it is now drawn from -- a 32-frame scanning-stance cycle
     # replacing the old placeholder-length hold. See LOOP_TIME below for why
     # the duration is derived rather than a round number.
-    "merc": {"overwatch_hold": "overwatch"},
+    #
+    # `throw_grenade` is the pose name; `grenade` is what the action was
+    # actually named when authored (merc_anim.blend has no `throw_grenade`
+    # action at all, so left unaliased this pose would silently never render).
+    "merc": {"overwatch_hold": "overwatch", "throw_grenade": "grenade"},
 }
 
 ## Frames to sample for a pose, overriding the duration-derived count. Keyed by

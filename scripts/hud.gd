@@ -7,7 +7,7 @@ extends CanvasLayer
 @onready var buttons := {
 	"move": $Actions/Move,
 	"shoot": $Actions/Shoot, "aimed_shot": $Actions/AimedShot,
-	"suppress": $Actions/Suppress, "emp": $Actions/Emp,
+	"suppress": $Actions/Suppress, "grenade": $Actions/Grenade,
 	"hunker": $Actions/Hunker, "overwatch": $Actions/Overwatch,
 	"reload": $Actions/Reload, "face": $Actions/Face,
 	"flashlight": $Actions/Flashlight, "end_turn": $Actions/EndTurn,
@@ -23,12 +23,23 @@ extends CanvasLayer
 }
 @onready var aimed_shot_cancel: Button = $AimedShotMenu/Panel/VBox/Cancel
 
+# Same pattern one throw earlier: appears once Grenade is armed and a legal
+# tile is clicked, asking which payload (PlayerUnit.GrenadeType) to spend the
+# one charge on; picking one throws immediately.
+@onready var grenade_menu: Control = $GrenadeMenu
+@onready var grenade_type_buttons := {
+	PlayerUnit.GrenadeType.EMP: $GrenadeMenu/Panel/VBox/Emp,
+	PlayerUnit.GrenadeType.FRAG: $GrenadeMenu/Panel/VBox/Frag,
+}
+@onready var grenade_cancel: Button = $GrenadeMenu/Panel/VBox/Cancel
+
 @onready var settings_button: Button = $SettingsButton
 @onready var settings_panel: Control = $SettingsPanel
 @onready var fullscreen_check: CheckButton = $SettingsPanel/Panel/VBox/FullscreenCheck
 @onready var settings_close: Button = $SettingsPanel/Panel/VBox/Close
 
 var _aimed_shot_target: Unit = null
+var _grenade_target: Vector3i = PlayerUnit.NO_TILE
 
 
 func _ready() -> void:
@@ -39,10 +50,13 @@ func _ready() -> void:
 	buttons["shoot"].pressed.connect(_set_mode.bind(PlayerUnit.Mode.SHOOT))
 	buttons["aimed_shot"].pressed.connect(_set_mode.bind(PlayerUnit.Mode.AIMED_SHOT))
 	buttons["suppress"].pressed.connect(_set_mode.bind(PlayerUnit.Mode.SUPPRESS))
-	buttons["emp"].pressed.connect(_set_mode.bind(PlayerUnit.Mode.EMP))
+	buttons["grenade"].pressed.connect(_set_mode.bind(PlayerUnit.Mode.GRENADE))
 	for part in body_part_buttons:
 		body_part_buttons[part].pressed.connect(_on_menu_pick.bind(part))
 	aimed_shot_cancel.pressed.connect(_on_aimed_shot_cancel)
+	for type in grenade_type_buttons:
+		grenade_type_buttons[type].pressed.connect(_on_grenade_type_pick.bind(type))
+	grenade_cancel.pressed.connect(_on_grenade_cancel)
 	buttons["hunker"].pressed.connect(_on_hunker)
 	buttons["overwatch"].pressed.connect(_on_overwatch)
 	buttons["reload"].pressed.connect(_on_reload)
@@ -65,11 +79,14 @@ func _active_player() -> PlayerUnit:
 
 func _on_unit_activated(unit: Unit) -> void:
 	_hide_aimed_shot_menu()
+	_hide_grenade_menu()
 	_refresh(unit)
 	if unit is PlayerUnit and not unit.ap_changed.is_connected(_on_ap_changed):
 		unit.ap_changed.connect(_on_ap_changed)
 	if unit is PlayerUnit and not unit.aimed_shot_target_picked.is_connected(_on_aimed_shot_target_picked):
 		unit.aimed_shot_target_picked.connect(_on_aimed_shot_target_picked)
+	if unit is PlayerUnit and not unit.grenade_target_picked.is_connected(_on_grenade_target_picked):
+		unit.grenade_target_picked.connect(_on_grenade_target_picked)
 
 
 func _on_ap_changed(unit: Unit) -> void:
@@ -132,9 +149,11 @@ func _refresh(unit: Unit) -> void:
 		_label_cost(buttons["overwatch"], "Overwatch", player.action_cost(UnitStats.Action.OVERWATCH))
 		_label_cost(buttons["reload"], "Reload", player.action_cost(UnitStats.Action.RELOAD))
 		# Charges are per soldier, so the label has to say how many are left too —
-		# an EMP button showing only its AP cost hides the real constraint.
-		buttons["emp"].text = "EMP (%d)  x%d" % [
-			player.action_cost(UnitStats.Action.GRENADE), player.emp_charges]
+		# a Grenade button showing only its AP cost hides the real constraint.
+		# EMP and Frag draw from the same charge (PlayerUnit.GrenadeType picks
+		# which one it's spent on), so one count covers both.
+		buttons["grenade"].text = "Grenade (%d)  x%d" % [
+			player.action_cost(UnitStats.Action.GRENADE), player.grenade_charges]
 	buttons["move"].disabled = not is_player or player.ap < player.move_ap_per_tile()
 	buttons["shoot"].disabled = not is_player \
 		or player.ap < player.action_cost(UnitStats.Action.SHOOT) or not player.can_shoot()
@@ -144,8 +163,8 @@ func _refresh(unit: Unit) -> void:
 		or player.ap < player.min_aimed_shot_cost() or not player.can_shoot()
 	buttons["suppress"].disabled = not is_player \
 		or player.ap < player.action_cost(UnitStats.Action.SUPPRESS) or not player.can_suppress()
-	buttons["emp"].disabled = not is_player \
-		or player.ap < player.action_cost(UnitStats.Action.GRENADE) or player.emp_charges <= 0
+	buttons["grenade"].disabled = not is_player \
+		or player.ap < player.action_cost(UnitStats.Action.GRENADE) or player.grenade_charges <= 0
 	buttons["hunker"].disabled = not is_player or player.ap < player.action_cost(UnitStats.Action.HUNKER)
 	buttons["overwatch"].disabled = not is_player \
 		or player.ap < player.action_cost(UnitStats.Action.OVERWATCH) or not player.can_shoot()
@@ -163,6 +182,7 @@ func _label_cost(button: Button, label: String, cost: int) -> void:
 
 func _set_mode(mode: PlayerUnit.Mode) -> void:
 	_hide_aimed_shot_menu()
+	_hide_grenade_menu()
 	var player := _active_player()
 	if player:
 		player.set_mode(mode)
@@ -205,8 +225,41 @@ func _hide_aimed_shot_menu() -> void:
 	_aimed_shot_target = null
 
 
+## Mirrors `_on_aimed_shot_target_picked` one throw earlier: a legal tile has
+## already been clicked (`_try_pick_grenade_target` re-validated it), so this
+## just asks which payload to spend the charge on. Both payloads draw from the
+## same charge, so neither button is disabled independently of the other —
+## `buttons["grenade"]` being enabled already means the charge and AP are there.
+func _on_grenade_target_picked(target: Vector3i) -> void:
+	var player := _active_player()
+	if player == null:
+		return
+	_grenade_target = target
+	grenade_menu.visible = true
+
+
+func _on_grenade_type_pick(type: int) -> void:
+	var player := _active_player()
+	var target := _grenade_target
+	_hide_grenade_menu()
+	if player == null or target == PlayerUnit.NO_TILE:
+		return
+	await player._issue(&"_try_throw_grenade", [target, type])
+	_refresh(TurnManager.active_unit)
+
+
+func _on_grenade_cancel() -> void:
+	_hide_grenade_menu()
+
+
+func _hide_grenade_menu() -> void:
+	grenade_menu.visible = false
+	_grenade_target = PlayerUnit.NO_TILE
+
+
 func _on_hunker() -> void:
 	_hide_aimed_shot_menu()
+	_hide_grenade_menu()
 	var player := _active_player()
 	if player:
 		player._issue(&"try_hunker")
@@ -215,6 +268,7 @@ func _on_hunker() -> void:
 
 func _on_overwatch() -> void:
 	_hide_aimed_shot_menu()
+	_hide_grenade_menu()
 	var player := _active_player()
 	if player:
 		player._issue(&"try_overwatch")
@@ -223,6 +277,7 @@ func _on_overwatch() -> void:
 
 func _on_reload() -> void:
 	_hide_aimed_shot_menu()
+	_hide_grenade_menu()
 	var player := _active_player()
 	if player:
 		player._issue(&"try_reload")
@@ -238,6 +293,7 @@ func _on_flashlight() -> void:
 
 func _on_end_turn() -> void:
 	_hide_aimed_shot_menu()
+	_hide_grenade_menu()
 	var player := _active_player()
 	if player:
 		player.end_activation()
@@ -259,6 +315,7 @@ func _on_fullscreen_toggled(pressed: bool) -> void:
 
 func _on_mission_ended(player_won: bool) -> void:
 	_hide_aimed_shot_menu()
+	_hide_grenade_menu()
 	banner.text = "MISSION WON" if player_won else "MISSION FAILED"
 	banner.visible = true
 	for key in buttons:

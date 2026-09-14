@@ -3,20 +3,35 @@ extends Unit
 ## Input handling while this unit is the active (pool-drawn) unit.
 ## The HUD sets `pending_action`; clicks in the world resolve it.
 
-enum Mode { NONE, MOVE, SHOOT, AIMED_SHOT, SUPPRESS, FACE, EMP }
+enum Mode { NONE, MOVE, SHOOT, AIMED_SHOT, SUPPRESS, FACE, GRENADE }
+
+## The payloads Throw Grenade (Sec 4.2) can pick between, chosen from the popup
+## `grenade_target_picked` opens — same shape as Aimed Shot's zone menu, just
+## picking a payload instead of a body-part zone. One throwable slot
+## (`grenade_charges`) covers either: EMP is not a second, always-available
+## charge stacked on top of Frag, it is one of the two things the single charge
+## can be spent on.
+enum GrenadeType { EMP, FRAG }
 
 # EMP grenade (security-robots/design-choices/armor-and-destruction.md). The
 # faction's counter-lever, and the reason a robot-heavy mission rewards a
 # different loadout than an alien-heavy one: it does no damage at all, but it
 # takes a machine's Armor off for a window and burns its next activation.
 #
+# Frag is the GDD's other sketched payload (Sec 6.1.1) — ordinary AoE damage,
+# plus the cover-breaker bonus damage every explosive gets against cover.
+#
 # Implemented as a throw rather than as an equipped weapon because it is neither
 # — it is the Throw Grenade action of Sec 4.2, the first item to actually use it,
 # and it is priced as one (UnitStats.Action.GRENADE) rather than carrying an AP
 # cost of its own.
-const EMP_THROW_RANGE := 6  # tiles, Chebyshev
-const EMP_BLAST_RADIUS := 1  # 3x3, centred on the tile clicked
+const THROW_RANGE := 6  # tiles, Chebyshev
+const BLAST_RADIUS := 1  # 3x3, centred on the tile clicked
 const EMP_STUN_TURNS := 2  # roster default; each unit's own resistance scales it
+## Sec 6.1.1's cover-breaker bonus is TBD roster-wide (GDD open item 8); this is
+## a placeholder in the same spirit as the rest of the faction's unset numbers,
+## not a considered balance figure.
+const FRAG_DAMAGE := 8
 
 signal action_logged(text: String)
 # Fired instead of firing immediately when a valid target is clicked while
@@ -24,6 +39,10 @@ signal action_logged(text: String)
 # Fallout-VATS-style zone menu; `fire_aimed_shot` below does the actual shot
 # once the player picks a zone from it.
 signal aimed_shot_target_picked(target: Unit)
+# Same pattern, one throw earlier: a tile clicked while Grenade is armed opens
+# the EMP/Frag payload menu instead of throwing immediately; `_try_throw_grenade`
+# below does the actual throw once the player picks one.
+signal grenade_target_picked(target: Vector3i)
 
 # Sentinel for "the cursor isn't over a walkable tile". Floor -9999 can never
 # collide with a real grid key.
@@ -36,8 +55,9 @@ var mode: Mode = Mode.NONE
 ## Grenades this soldier deployed with. One each in the alpha: enough that the
 ## squad can open a window on the fight's hardest target, not enough to answer
 ## every armored unit on a deck — which is what keeps positioning the primary
-## plan and EMP the thing that rescues it.
-var emp_charges: int = 1
+## plan and the grenade the thing that rescues it. One throw, EMP or Frag —
+## see GrenadeType.
+var grenade_charges: int = 1
 ## Destination tile -> tiles walked to reach it. Move is priced per tile now
 ## (rework doc Sec 4.1), so this doubles as the AP cost of every candidate
 ## destination once multiplied by `move_ap_per_tile()` — there is no Run band and
@@ -95,7 +115,7 @@ func set_mode(new_mode: Mode) -> void:
 		Mode.SHOOT, Mode.AIMED_SHOT, Mode.SUPPRESS:
 			if highlights:
 				_show_targets(highlights)
-		Mode.EMP:
+		Mode.GRENADE:
 			_throw_tiles = _throwable_tiles()
 			if highlights:
 				highlights.show_throw_range(_throw_tiles)
@@ -138,7 +158,7 @@ func _process(_delta: float) -> void:
 			_update_path_preview(highlights)
 		Mode.SHOOT, Mode.AIMED_SHOT, Mode.SUPPRESS:
 			_update_target_hover(highlights)
-		Mode.EMP:
+		Mode.GRENADE:
 			_update_blast_preview(highlights)
 
 
@@ -177,28 +197,29 @@ func _update_target_hover(highlights: Node) -> void:
 ## Tiles this soldier can put a grenade on: in range, on the grid, and in line of
 ## sight, so a throw cannot be lobbed through a bulkhead into the next
 ## compartment. Unlike a move, the tile may be OCCUPIED — the whole point is to
-## land it on the machine standing there.
+## land it on the machine standing there. Same shell for both payloads
+## (GrenadeType) — which one is being thrown is picked after the tile is.
 func _throwable_tiles() -> Array[Vector3i]:
 	var out: Array[Vector3i] = []
-	for dz in range(-EMP_THROW_RANGE, EMP_THROW_RANGE + 1):
-		for dx in range(-EMP_THROW_RANGE, EMP_THROW_RANGE + 1):
+	for dz in range(-THROW_RANGE, THROW_RANGE + 1):
+		for dx in range(-THROW_RANGE, THROW_RANGE + 1):
 			var tile := grid_pos + Vector3i(dx, 0, dz)
-			if _can_throw_emp_at(tile):
+			if _can_throw_grenade_at(tile):
 				out.append(tile)
 	return out
 
 
-## The single source of truth for "is this tile a legal EMP target" — used both
-## to build the cached `_throw_tiles` overlay above and, critically, by
-## `_try_throw_emp` itself. That method runs on whichever peer is authoritative
-## for this unit (see `_issue`/`_rpc_command`), which in co-op is the HOST's
-## copy — a copy whose `_throw_tiles` cache was never populated, because the
-## host's own UI never armed EMP mode for a squadmate's merc. Re-deriving it
-## live instead of trusting the cache is what keeps a client's throw from being
-## rejected as "no line" every time.
-func _can_throw_emp_at(target: Vector3i) -> bool:
+## The single source of truth for "is this tile a legal grenade target" — used
+## both to build the cached `_throw_tiles` overlay above and, critically, by
+## `_try_pick_grenade_target`/`_try_throw_grenade` themselves. Those run on
+## whichever peer is authoritative for this unit (see `_issue`/`_rpc_command`),
+## which in co-op is the HOST's copy — a copy whose `_throw_tiles` cache was
+## never populated, because the host's own UI never armed Grenade mode for a
+## squadmate's merc. Re-deriving it live instead of trusting the cache is what
+## keeps a client's throw from being rejected as "no line" every time.
+func _can_throw_grenade_at(target: Vector3i) -> bool:
 	var delta := target - grid_pos
-	if absi(delta.x) > EMP_THROW_RANGE or absi(delta.z) > EMP_THROW_RANGE:
+	if absi(delta.x) > THROW_RANGE or absi(delta.z) > THROW_RANGE:
 		return false
 	if not GridManager.has_tile(target):
 		return false
@@ -209,12 +230,49 @@ func _can_throw_emp_at(target: Vector3i) -> bool:
 
 func _blast_tiles(centre: Vector3i) -> Array[Vector3i]:
 	var out: Array[Vector3i] = []
-	for dz in range(-EMP_BLAST_RADIUS, EMP_BLAST_RADIUS + 1):
-		for dx in range(-EMP_BLAST_RADIUS, EMP_BLAST_RADIUS + 1):
+	for dz in range(-BLAST_RADIUS, BLAST_RADIUS + 1):
+		for dx in range(-BLAST_RADIUS, BLAST_RADIUS + 1):
 			var tile := centre + Vector3i(dx, 0, dz)
 			if GridManager.has_tile(tile):
 				out.append(tile)
 	return out
+
+
+## The `throw_grenade` animation (art_src/merc_anim.blend, action `grenade`)
+## releases the grenade 135 degrees off from wherever the merc is actually
+## drawn facing — a cross-body motion baked into the pose itself, not a
+## whole-rig authoring offset like `run`'s (render_sprites.py
+## BUCKET_ZERO_DEGREES), which is why the fix belongs here rather than in the
+## render pipeline: the body still has to visibly face a real direction, it is
+## only the release point that is thrown off.
+##
+## So a grenade actually meant for `target` cannot face `target` directly —
+## `_try_throw_grenade` must face this instead, three of the eight buckets
+## (unit_visual.gd DIRECTIONS) short of it, so the animation's own offset lands
+## the throw back where it was aimed. 3 buckets rather than a signed "left/right"
+## note because that is what's unambiguous: `direction_bucket` is a strictly
+## increasing function of `rotation.y`, so "3 buckets short" is exactly
+## `-3 * (TAU / DIRECTIONS.size())` of yaw with no separate sign to get wrong,
+## and it round-trips through the same eight facings every other pose does.
+##
+## Judge this against a THROWN GRENADE actually landing on the clicked tile in
+## game, never against the rendered PNGs alone — render_sprites.py's own
+## BUCKET_ZERO_DEGREES warns that an offset like this is self-consistent at any
+## sign and only shows up wrong on a moving (or in this case, thrown) unit.
+const GRENADE_RELEASE_OFFSET := 3.0 * (TAU / 8.0)  # 8 == UnitVisual.DIRECTIONS.size()
+
+
+## Where to face so the anim's own throw lands on `target` — see
+## GRENADE_RELEASE_OFFSET. Returns a point out along the compensated yaw rather
+## than a yaw directly, so the caller can hand it straight to `face_toward`
+## and get the same turn/tween/cover-refresh handling every other facing change
+## goes through.
+func _grenade_face_position(target: Vector3i) -> Vector3:
+	var true_yaw := _yaw_toward(GridManager.grid_to_world(target))
+	if is_nan(true_yaw):
+		return global_position  # degenerate (target under our own feet); face_toward no-ops
+	var face_yaw := true_yaw - GRENADE_RELEASE_OFFSET
+	return global_position + Vector3(-sin(face_yaw), 0.0, -cos(face_yaw)) * 5.0
 
 
 func _update_blast_preview(highlights: Node) -> void:
@@ -245,28 +303,52 @@ func _tile_under_mouse_any() -> Vector3i:
 	return _tile_under_mouse()
 
 
-func _try_throw_emp(target: Vector3i) -> void:
-	var cost := action_cost(UnitStats.Action.GRENADE)
-	if ap < cost or emp_charges <= 0 or is_busy:
+## Opens the payload menu (Sec 4.2/6.5-style) rather than throwing immediately —
+## mirrors `_try_shoot`'s AIMED_SHOT branch, including staying LOCAL rather than
+## going through `_issue`: this only pops up UI on the clicking peer, and
+## `_try_throw_grenade` below re-validates everything for real once a payload is
+## picked.
+func _try_pick_grenade_target(target: Vector3i) -> void:
+	if ap < action_cost(UnitStats.Action.GRENADE) or grenade_charges <= 0 or is_busy:
 		return
-	# Re-validated live (see `_can_throw_emp_at`) rather than against the cached
-	# overlay: this may be running on the host's copy of the unit, not the
-	# clicking peer's, so the local `_throw_tiles` cache can't be trusted.
-	if not _can_throw_emp_at(target):
+	if not _can_throw_grenade_at(target):
 		action_logged.emit("%s: no throwing line to %s" % [stats.display_name, target])
 		return
-	emp_charges -= 1
+	grenade_target_picked.emit(target)
+
+
+func _try_throw_grenade(target: Vector3i, type: GrenadeType) -> void:
+	var cost := action_cost(UnitStats.Action.GRENADE)
+	if ap < cost or grenade_charges <= 0 or is_busy:
+		return
+	# Re-validated live (see `_can_throw_grenade_at`) rather than against the
+	# cached overlay: this may be running on the host's copy of the unit, not
+	# the clicking peer's, so the local `_throw_tiles` cache can't be trusted.
+	if not _can_throw_grenade_at(target):
+		action_logged.emit("%s: no throwing line to %s" % [stats.display_name, target])
+		return
+	grenade_charges -= 1
 	spend_ap(cost)
 	set_mode(Mode.NONE)
-	await face_toward(GridManager.grid_to_world(target))
+	# Faces short of the target on purpose — see GRENADE_RELEASE_OFFSET. The
+	# flash still lands exactly on `target`; only which way the merc is drawn
+	# facing while it happens is adjusted.
+	await face_toward(_grenade_face_position(target))
 	await visual.play_action(UnitVisual.GRENADE)
 	var vfx := get_tree().get_first_node_in_group("vfx")
 	if vfx and not is_instant():
 		vfx.impact(GridManager.grid_to_world(target) + Vector3(0, 0.9, 0), true)
-	action_logged.emit("%s throws an EMP grenade at %s" % [stats.display_name, target])
 	# An explosion is loud, and the robots' sound channel is the one thing about
 	# them a grenade does NOT bypass: throwing it announces where you are.
 	SecurityNetwork.report_noise(target, self)
+	match type:
+		GrenadeType.EMP: _resolve_emp_throw(target)
+		GrenadeType.FRAG: _resolve_frag_throw(target)
+	_check_activation_end()
+
+
+func _resolve_emp_throw(target: Vector3i) -> void:
+	action_logged.emit("%s throws an EMP grenade at %s" % [stats.display_name, target])
 	var caught := 0
 	for tile in _blast_tiles(target):
 		var t: GridTileData = GridManager.get_tile(tile)
@@ -281,7 +363,35 @@ func _try_throw_emp(target: Vector3i) -> void:
 		# Deliberately not refunded. The charge is spent on the throw, not on the
 		# outcome, which is what makes range and timing a real decision.
 		action_logged.emit("The EMP burst catches nothing")
-	_check_activation_end()
+
+
+## Ordinary AoE damage, plus Sec 6.1.1's cover-breaker bonus. Unlike EMP this
+## does not discriminate by faction or by unit type — an explosive in a 3x3
+## does not check whose side you are on — so a soldier who throws this into
+## melee range with an ally standing in it catches them too.
+func _resolve_frag_throw(target: Vector3i) -> void:
+	action_logged.emit("%s throws a frag grenade at %s" % [stats.display_name, target])
+	var caught := 0
+	for tile in _blast_tiles(target):
+		var t: GridTileData = GridManager.get_tile(tile)
+		if t == null:
+			continue
+		var victim := t.occupant as Unit
+		if victim == null or victim.is_downed:
+			continue
+		var dealt := victim.take_damage(FRAG_DAMAGE)
+		action_logged.emit("%s takes %d damage from the blast" % [victim.stats.display_name, dealt])
+		# Same edge-lookup a shot uses (Combat.defending_cover), just centred on
+		# the blast rather than on a shooter — whichever side of the victim's
+		# tile faces the explosion is the side that eats the cover-breaker bonus.
+		var defence := Combat.defending_cover(target, victim.grid_pos)
+		if defence[0] != MapData.Cover.NONE:
+			GridManager.damage_cover_edge(victim.grid_pos, defence[1], FRAG_DAMAGE)
+		caught += 1
+		if victim.is_downed:
+			action_logged.emit("%s is DOWN!" % victim.stats.display_name)
+	if caught == 0:
+		action_logged.emit("The frag grenade catches nothing")
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -319,10 +429,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	var hit := _raycast_mouse()
 	if hit.is_empty():
 		return
-	if mode == Mode.EMP:
+	if mode == Mode.GRENADE:
 		# Ahead of the unit lookup, like FACE: landing it on the machine itself is
-		# the normal way to use this.
-		_issue(&"_try_throw_emp", [_tile_under_mouse_any()])
+		# the normal way to use this. Local, not `_issue` — same reasoning as the
+		# AIMED_SHOT branch above: this only opens a menu, it doesn't throw yet.
+		_try_pick_grenade_target(_tile_under_mouse_any())
 		return
 	if mode == Mode.FACE:
 		# Deliberately ahead of the unit lookup: aiming the beam *at* something is
@@ -334,7 +445,7 @@ func _unhandled_input(event: InputEvent) -> void:
 ## dispatches by NAME (see below), so this allowlist is what stops a peer
 ## sending an arbitrary method name and getting it `callv`'d.
 const _COMMANDS := [
-	"_try_move", "_do_shoot", "_try_suppress", "_try_throw_emp", "_try_face",
+	"_try_move", "_do_shoot", "_try_suppress", "_try_throw_grenade", "_try_face",
 	"try_hunker", "try_overwatch", "try_reload", "try_toggle_flashlight", "fire_aimed_shot",
 ]
 
