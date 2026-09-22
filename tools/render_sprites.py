@@ -308,7 +308,16 @@ POSE_ACTION = {
     # `throw_grenade` is the pose name; `grenade` is what the action was
     # actually named when authored (merc_anim.blend has no `throw_grenade`
     # action at all, so left unaliased this pose would silently never render).
-    "merc": {"overwatch_hold": "overwatch", "throw_grenade": "grenade"},
+    #
+    # `hit_react`/`hit_react_low` likewise: the flinch was authored as `get_hit`
+    # and `get_hit_low`.
+    #
+    # `downed` is the collapse the game plays when HP hits zero, authored as
+    # `die`. `dead` needs no alias: it is the one-frame corpse unit_visual.gd
+    # holds for good once `downed` has played out.
+    "merc": {"overwatch_hold": "overwatch", "throw_grenade": "grenade",
+             "hit_react": "get_hit", "hit_react_low": "get_hit_low",
+             "downed": "die"},
 }
 
 ## Frames to sample for a pose, overriding the duration-derived count. Keyed by
@@ -326,6 +335,9 @@ POSE_ACTION = {
 ##      both on a frame and an odd one puts the second contact between two.
 VARIANT_FRAMES = {
     "brawler": {"idle": 1, "melee": 1, "walk": 16},
+    # The corpse is a still by design -- one drawing of the body where `die`
+    # left it, held for the rest of the mission.
+    "merc": {"dead": 1},
 }
 
 
@@ -349,7 +361,7 @@ POSES = [
     "idle", "run", "walk", "overwatch_hold", "aim_hold",
     "begin_shoot", "fire_shoot", "end_shoot",
     "run_stop", "melee",
-    "reload", "throw_grenade", "interact", "hit_react", "downed",
+    "reload", "throw_grenade", "interact", "hit_react", "downed", "dead",
     "alert_scream", "idle_fidget",
     # Cover variants -- a unit posed as using the cover on its tile edge. Each is
     # optional: `build_sprite_frames.gd` emits them only where art exists, and
@@ -359,7 +371,7 @@ POSES = [
     # There is no `fire_shoot_low`, deliberately: `begin_shoot_low` is the step
     # OUT of cover, so by the time rounds leave the barrel the character is in
     # the open and the standing kick is the correct art.
-    "idle_low", "begin_shoot_low", "end_shoot_low",
+    "idle_low", "begin_shoot_low", "end_shoot_low", "hit_react_low",
     "idle_high", "begin_shoot_high", "end_shoot_high",
 ]
 
@@ -391,8 +403,14 @@ ONE_SHOT_TIME = {
     ## Must equal unit_visual.gd COVER_RAISE_TIME and COVER_SETTLE_TIME.
     "begin_shoot_low": 0.75, "end_shoot_low": 0.45,
     "begin_shoot_high": 0.75, "end_shoot_high": 0.45,
-    "melee": 1.20, "reload": 3.75, "throw_grenade": 1.00, "interact": 1.00,
-    "hit_react": 0.47, "downed": 0.80, "alert_scream": 2.80,
+    # throw_grenade and interact are Blender frames / SAMPLE_FPS, so every
+    # authored frame renders 1:1 -- see unit_visual.gd GRENADE.
+    "melee": 1.20, "reload": 3.75, "throw_grenade": 37 / 12.0,
+    "interact": 30 / 12.0,
+    # 7 Blender frames at 12 fps -- see unit_visual.gd HIT_REACT.
+    "hit_react": 7 / 12.0, "hit_react_low": 7 / 12.0,
+    # The merc's `die` action: 12 Blender frames at 12 fps.
+    "downed": 12 / 12.0, "alert_scream": 2.80,
 }
 DEFAULT_ONE_SHOT_TIME = 0.4
 
