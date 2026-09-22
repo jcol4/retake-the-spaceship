@@ -29,6 +29,7 @@ extends SceneTree
 
 const SWARM := "res://scenes/swarm_unit.tscn"
 const BRAWLER := "res://scenes/brawler_unit.tscn"
+const WORM := "res://scenes/worm_unit.tscn"
 const PLAYER := "res://scenes/player_unit.tscn"
 
 # Middle compartment, clear of the deck's own spawn markers.
@@ -53,6 +54,8 @@ func _initialize() -> void:
 	await _check_cannot_close_and_swing()
 	await _check_movement_is_flat()
 	await _check_brawler_shares_the_pace()
+	await _check_worm_crawls_one_tile()
+	await _check_worm_feels_footsteps()
 
 	print("")
 	if _failures == 0:
@@ -129,6 +132,50 @@ func _check_brawler_shares_the_pace() -> void:
 		"and is tougher instead (%d vs %d HP)"
 		% [brawler.stats.max_hp(), swarm.stats.max_hp()])
 	_free([swarm, brawler])
+
+
+## The worm is the named exception to flat movement (WormUnit.AP_PER_TILE): a
+## step costs its whole pool. Asserted as numbers, because the pace is an
+## agreement between three of them — the pool floor, the tile price and the
+## bite price — and none of them says so on its own.
+func _check_worm_crawls_one_tile() -> void:
+	var worm = await _spawn(WORM, ANCHOR, AlienPresets.worm("Worm"))
+	var pool: int = worm.ap_pool()
+	var tile: int = worm.move_ap_per_tile()
+	var bite: int = worm.action_cost(MELEE)
+	_check(tile <= pool and 2 * tile > pool,
+		"a worm crawls exactly one tile per activation (%d AP a tile, %d AP pool)" % [tile, pool])
+	_check(pool >= bite and tile + bite > pool,
+		"and closes OR bites, never both (tile %d + bite %d vs pool %d)" % [tile, bite, pool])
+	_check(worm.stats.max_hp() == 5 and worm.stats.melee_damage == 5,
+		"5 HP, 5 damage (got %d HP, %d damage)" % [worm.stats.max_hp(), worm.stats.melee_damage])
+	_free([worm])
+
+
+## The worm's sense: MOVEMENT within tremor range, lit or not. Sight is switched
+## off here (an unreachable light threshold) so that only the tremor channel can
+## answer, and each _feel_tremors() call stands in for one activation.
+func _check_worm_feels_footsteps() -> void:
+	var worm = await _spawn(WORM, ANCHOR, AlienPresets.worm("Worm"))
+	var player = await _spawn(PLAYER, ANCHOR + Vector3i(3, 0, 0), ClassPresets.roll(UnitStats.UnitClass.ASSAULT, "Reyes"))
+	worm.sight_light_threshold = 1.0e9
+	worm._feel_tremors()
+	_check(not worm._can_see(player), "a soldier standing still in range is not felt")
+	player.grid_pos = ANCHOR + Vector3i(2, 0, 0)
+	worm._feel_tremors()
+	_check(worm._can_see(player), "a soldier who moved within range is felt")
+	worm._feel_tremors()
+	_check(not worm._can_see(player), "and lost again once he stops")
+	player.grid_pos = ANCHOR + Vector3i(worm.tremor_range + 2, 0, 0)
+	worm._feel_tremors()
+	_check(not worm._can_see(player), "movement beyond tremor range (%d) is not felt" % worm.tremor_range)
+	player.grid_pos = ANCHOR + Vector3i(1, 0, 0)
+	worm._feel_tremors()
+	worm._feel_tremors()
+	_check(worm._can_see(player), "contact is always felt, moving or not")
+	# Back onto the tile he occupies, or _free clears the wrong one.
+	player.grid_pos = ANCHOR + Vector3i(3, 0, 0)
+	_free([worm, player])
 
 
 ## Spawns a unit carrying the stat block the mission would actually give it.

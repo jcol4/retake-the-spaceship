@@ -37,8 +37,9 @@ func _combat_turn() -> void:
 				return
 			spend_ap(melee_cost)
 			var result: Combat.ShotResult = await melee_at(quarry)
-			action_logged.emit("%s clawed %s (%d%% acc): %s" % [
-				stats.display_name, quarry.stats.display_name, result.accuracy, Combat.describe(result),
+			action_logged.emit("%s %s %s (%d%% acc): %s" % [
+				stats.display_name, _melee_verb(), quarry.stats.display_name, result.accuracy,
+				Combat.describe(result),
 			])
 			if quarry.is_downed:
 				action_logged.emit("%s is DOWN!" % quarry.stats.display_name)
@@ -48,3 +49,8 @@ func _combat_turn() -> void:
 			# way. It holds back the price of a swing where it can, so arriving
 			# adjacent with AP to spare means arriving with a claw in hand.
 			await _move_toward(quarry, melee_cost)
+
+
+## What the log calls this unit's melee blow. The worm bites.
+func _melee_verb() -> String:
+	return "clawed"

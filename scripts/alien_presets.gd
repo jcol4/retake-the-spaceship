@@ -144,3 +144,32 @@ static func brawler(display_name: String) -> UnitStats:
 	stats.base_hp = randi_range(28, 32)  # -> 29-33 HP, still double the swarm
 	stats.melee_damage = 6
 	return stats
+
+
+## The worm (WormUnit): 5 HP, a 5-damage bite, the slowest thing on the board.
+##
+## Both zeros are dials set to buy a price, like the swarm's Reflexes 40, and
+## neither is a characterisation:
+##
+##   fitness 0   The 6 AP floor of the pool (AP_POOL_BASE), and no HP from
+##               Fitness — so `base_hp` IS max HP. WormUnit prices a tile at the
+##               whole pool, so this buys exactly one tile per activation.
+##   reflexes 0  A bite at the undiscounted 6 AP — the whole pool again. Closes OR
+##               bites, never both: the swarm's turn of warning, kept.
+##
+## So one bite is a full activation, and a worm next to you at the start of its
+## draw is 5 damage you can see coming from the tile before.
+static func worm(display_name: String) -> UnitStats:
+	var stats := UnitStats.new()
+	stats.display_name = display_name
+	stats.perception = randi_range(25, 40)  # the swarm's range: bite accuracy is Perception
+	stats.reflexes = 0
+	stats.fitness = 0
+	stats.luck = 15
+	stats.base_hp = 5
+	# Unarmed at range like the rest of the melee tier — stats.weapon stays null.
+	stats.melee_base_accuracy = 45
+	stats.melee_damage = 5
+	stats.base_initiative = 17  # -> 19, below the swarm: the last thing to act
+	stats.equipment_initiative = 2
+	return stats

@@ -8,6 +8,7 @@ const SWARM_SCENE := preload("res://scenes/swarm_unit.tscn")
 const BRAWLER_SCENE := preload("res://scenes/brawler_unit.tscn")
 const MERC_SCENE := preload("res://scenes/merc_unit.tscn")
 const HUNTER_SCENE := preload("res://scenes/agile_hunter_unit.tscn")
+const WORM_SCENE := preload("res://scenes/worm_unit.tscn")
 
 ## Fixed ratio for Phase 1 of the rival-mercs plan (see
 ## docs/design/factions/rival-mercs/README.md Sec 2) — a placeholder roll until
@@ -142,6 +143,15 @@ func _spawn_and_start() -> void:
 		add_child(hunter)
 		hunter.action_logged.connect(_on_unit_log)
 		hunter_index += 1
+
+	var worm_index := 1
+	for spawn in map.worm_spawns:
+		var worm: WormUnit = WORM_SCENE.instantiate()
+		worm.stats = AlienPresets.worm("Worm_%d" % worm_index)
+		worm.position = GridManager.grid_to_world(spawn)
+		add_child(worm)
+		worm.action_logged.connect(_on_unit_log)
+		worm_index += 1
 
 	var merc_index := 1
 	# One LMG per squad, handed to whichever member is placed first in a room.

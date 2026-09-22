@@ -13,7 +13,9 @@ failing power, things that come out of the dark.
 
 - **Same detection rules as the player** — light and sound (GDD Section 5). No special alien
   senses. This is a deliberate symmetry: darkness is a tool aliens use against the player and
-  vice versa, not an asymmetric "aliens see in the dark" cheat.
+  vice versa, not an asymmetric "aliens see in the dark" cheat. **One named exception:** the
+  [Worm](units/worm/) feels footsteps through the deck, lit or not. Its counterplay is standing
+  still instead of killing the lights.
 - **No flashlights** (`has_flashlight = false` on `EnemyUnit`, see `scripts/enemy_unit.gd`) —
   aliens rely on their own senses rather than a rig-mounted light, which reinforces the Agile
   Hunter's darkness-dependent ambush design (see [`units/agile-hunter/`](units/agile-hunter/)).
@@ -35,6 +37,7 @@ failing power, things that come out of the dark.
 | [Fodder](units/fodder/) | Slow | Tanky | Swarms | Attrition |
 | [Agile Hunter](units/agile-hunter/) | Fast | Fragile-moderate | Solo/pairs | Ambush striker |
 | [Spitter](units/spitter/) | Slow-moderate | Fragile | Solo, or screens Fodder | Ranged pressure |
+| [Worm](units/worm/) | Slowest (1 tile/turn) | Fragile | Placed per map | Hidden bite |
 
 ## Design choices
 

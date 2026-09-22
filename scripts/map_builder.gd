@@ -74,6 +74,7 @@ var swarm_spawns: Array[Vector3i] = []
 var brawler_spawns: Array[Vector3i] = []
 var merc_spawns: Array[Vector3i] = []
 var hunter_spawns: Array[Vector3i] = []
+var worm_spawns: Array[Vector3i] = []
 ## MapData.Spawn kind -> Array[Vector3i], for the four security-robot types. One
 ## dictionary rather than four named arrays because the roster is expected to
 ## change and the spawner iterates it either way.
@@ -183,6 +184,7 @@ func build(map_data: MapData) -> void:
 	brawler_spawns = data.spawns(MapData.Spawn.BRAWLER)
 	merc_spawns = data.spawns(MapData.Spawn.MERC)
 	hunter_spawns = data.spawns(MapData.Spawn.HUNTER)
+	worm_spawns = data.spawns(MapData.Spawn.WORM)
 	cerberus_spawns.clear()
 	for kind: int in MapData.CERBERUS_SPAWNS:
 		cerberus_spawns[kind] = data.spawns(kind)

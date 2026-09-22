@@ -258,6 +258,14 @@ BUCKET_ZERO_DEGREES = 90.0
 ## files one bucket rather than by re-rendering.
 VARIANT_BUCKET_ZERO = {
     "brawler": 180.0,
+    # worm_anims.blend: the Z rotation that points the head (the spiked +Y end)
+    # along Blender +Y, MEASURED off the rest mesh -- its tail-to-head axis sits
+    # 5.3 deg anticlockwise of +Y with the rig at 25.5. The rig also lies ~93 deg
+    # about X (the bone chain was built upright and laid flat), which the
+    # turntable leaves alone since it only ever writes Z. Not yet judged on a
+    # moving unit, and a wrong bucket is cheap to fix (rename files, do not
+    # re-render).
+    "worm": 20.2,
 }
 
 ## Per-pose overrides, keyed by variant then pose, for an action posed at a
@@ -318,6 +326,10 @@ POSE_ACTION = {
     "merc": {"overwatch_hold": "overwatch", "throw_grenade": "grenade",
              "hit_react": "get_hit", "hit_react_low": "get_hit_low",
              "downed": "die"},
+    # The worm has three actions and no attack: its bite plays the idle thrash,
+    # by decision, the way the brawler's swing plays its stance. Its third
+    # action, `just emerged`, is not wired to any pose yet.
+    "worm": {"idle": "worm idle", "walk": "walking", "melee": "worm idle"},
 }
 
 ## Frames to sample for a pose, overriding the duration-derived count. Keyed by
@@ -338,6 +350,9 @@ VARIANT_FRAMES = {
     # The corpse is a still by design -- one drawing of the body where `die`
     # left it, held for the rest of the mission.
     "merc": {"dead": 1},
+    # `walking` is drawn as 24 frames at 12 fps; sampled at the soldier's 1.4 s
+    # walk it would come out 17 and drop every third drawing.
+    "worm": {"walk": 24},
 }
 
 
@@ -857,6 +872,32 @@ def renderable_meshes():
             if o.type == "MESH" and not o.hide_render]
 
 
+def unlink_missing_images():
+    """Drops image textures whose file cannot be found, loudly.
+
+    Cycles renders a missing image as solid MAGENTA, and it would be baked into
+    every frame of every facing. Unlinking the node instead lets the shader fall
+    back to its own base colour: plainly placeholder art, not plausibly wrong
+    art. In memory only -- the .blend is never written -- and printed every run,
+    so grey sprites are never mistaken for finished ones. Pack the texture into
+    the .blend (File > External Data > Pack Resources) and re-render to fix.
+    """
+    for material in bpy.data.materials:
+        if material.node_tree is None:
+            continue
+        for node in material.node_tree.nodes:
+            image = getattr(node, "image", None)
+            if node.type != "TEX_IMAGE" or image is None or image.packed_file:
+                continue
+            if os.path.exists(bpy.path.abspath(image.filepath)):
+                continue
+            for link in list(node.outputs[0].links) + list(node.outputs[1].links):
+                material.node_tree.links.remove(link)
+            print("[render_sprites] *** MISSING TEXTURE %r (%s) on material %r -- "
+                  "rendering UNTEXTURED. Pack it into the .blend and re-render. ***"
+                  % (image.name, image.filepath, material.name))
+
+
 def lowest_point_on_screen(scene, camera, meshes):
     """Lowest normalised screen height of any rendered vertex this frame.
 
@@ -1004,6 +1045,7 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
     # A locator, not art. Forced off the film before the first frame -- see
     # MARKER_MATERIAL for why stripping it out afterwards is not an option.
     hide_marker(find_marker())
+    unlink_missing_images()
 
     # NOT read from the character -- see BUCKET_ZERO_DEGREES for the bug that
     # caused. Printed because it is the one number that silently re-aims every

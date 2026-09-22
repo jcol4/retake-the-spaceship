@@ -30,6 +30,7 @@ extends RefCounted
 ##   'V' rival merc spawn — 'M' was already the Sagittarii's, so this takes the
 ##       free letter out of "rival"
 ##   'A' Agile Hunter spawn (Sec 11.5) — its own initial, still free rather than bumping an established glyph
+##   'W' worm spawn
 ##   'o' overhead light        'm' monitor light       'f' flickering light
 ##   '!' alarm panel — emits no light; tripped by anything non-alien walking onto
 ##       it, and fires once (Sec 6)
@@ -81,6 +82,8 @@ const GLYPHS := {
 	# Agile Hunter (Sec 11.5). 'A' for the name's own initial — free, unlike the
 	# melee tier's 'S'/'B', which were taken before it existed.
 	"A": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.HUNTER, false],
+	# Worm. Its own initial, which was free.
+	"W": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.WORM, false],
 	"F": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.LICTOR, false],
 	"o": [MapData.Terrain.FLOOR, MapData.Fixture.OVERHEAD, MapData.Spawn.NONE, false],
 	"m": [MapData.Terrain.FLOOR, MapData.Fixture.MONITOR, MapData.Spawn.NONE, false],
@@ -249,6 +252,7 @@ static func _glyph_for(cell: MapData.Cell) -> String:
 		MapData.Spawn.SECURUS: return "J"
 		MapData.Spawn.MERC: return "V"
 		MapData.Spawn.HUNTER: return "A"
+		MapData.Spawn.WORM: return "W"
 		MapData.Spawn.LICTOR: return "F"
 	match cell.fixture:
 		MapData.Fixture.OVERHEAD: return "o"

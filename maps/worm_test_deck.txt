@@ -1,0 +1,51 @@
+##################################
+#.....#..........................#
+#.P...#......W...................#
+#.....D..........................#
+#.P.o.#...........W..............#
+#.....D..........................#
+#.P...#................W.........#
+#.....#..........................#
+#########D################D#######
+#...........#########............#
+#........W..D...W...D....o..RR...#
+#...........#########.......RR...#
+#...........#########...W...s....#
+##################################
+
+[notes]
+A deck for testing the worm and nothing else. No other alien, no robots, no
+rival mercs: anything that happens here is a worm.
+
+Run it with:
+    godot --path . -- --map=worm_test_deck
+
+Six worms, one per thing worth checking:
+
+(13,2) (18,4) (23,6)  THE DARK HALL. No fixture lights it, so these three can
+    only feel you. Walk in and they start crawling; they are the pace test --
+    one tile per activation, outrunnable at a stroll. They are also the
+    standing-still test: let one close, then kill your flashlight and hold
+    still for two turns and it should lose you. Move again and it feels you
+    again. (Your own flashlight lights your tile, so it will SEE you at up to
+    8 tiles with the beam on -- turn it off or the sense being tested never
+    gets a say.)
+
+(9,10)  THE DARK SIDE ROOM. Far from the door, so it is the one to walk past
+    at range: outside 4 tiles it never notices you at all.
+
+(16,10) THE CORRIDOR. One tile wide with a door at each end. Nothing to walk
+    around, so this is where the bite happens -- it should cost the worm its
+    whole activation, one bite, never a step-and-bite.
+
+(24,12) THE LIT ROOM. Standing in the light of the fixture at (25,10), so it
+    is the control: normal sight, same as any other alien, and it is the one
+    you can actually SEE it clearly against a lit floor.
+
+The platform at (28-29, 10-11), up the stair at (28,12), is for the deck
+clause in the sense: standing on it puts you one deck up, and the worm at
+(24,12) should not feel you through it however close you stand.
+
+This section is ignored by the parser (MapAscii reads the grid up to the
+first [section], and knows only [cover] and [obstacles]). It will not survive
+a round-trip through MapAscii.to_text().

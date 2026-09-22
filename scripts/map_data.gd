@@ -35,7 +35,7 @@ enum Fixture { NONE, OVERHEAD, MONITOR, FLICKER, ALARM }
 enum Spawn {
 	NONE, PLAYER, ENEMY, SWARM, BRAWLER,
 	AUXILIUM, SAGITTARII, PROCTOR, SECURUS, LICTOR,
-	MERC, HUNTER,
+	MERC, HUNTER, WORM,
 }
 
 ## The Cerberus half of `Spawn`, in roster order. Iterated by MapBuilder and by

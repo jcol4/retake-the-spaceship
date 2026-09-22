@@ -1,0 +1,49 @@
+[gd_scene load_steps=4 format=3 uid="uid://cwormunit001"]
+
+[ext_resource type="Script" path="res://scripts/worm_unit.gd" id="1_script"]
+[ext_resource type="Script" path="res://scripts/unit_visual.gd" id="2_visual"]
+
+; A PICK volume, not the worm's size. The art is 0.5 m long and 6 cm thick, but
+; this body is what `PlayerUnit._raycast_mouse` hits (mask 1 | 2) when a soldier
+; targets it, and a collider cut to the art would be a few pixels to click on.
+; Grid LOS and lighting raycast layer 1 only, so its size costs nothing there.
+[sub_resource type="CapsuleShape3D" id="capsule_shape"]
+radius = 0.3
+height = 0.6
+
+[node name="WormUnit" type="Node3D" groups=["enemy_units", "units"]]
+script = ExtResource("1_script")
+
+; ONE gait, and it is the walk — the worm is animated to a slither and nothing
+; else. See Unit.walks_only.
+walks_only = true
+
+; Cosmetic, and free in a way the brawler's is not: the `walking` action has no
+; root motion and no contacts to keep planted, so there is nothing to moonwalk.
+; 0.75 m/s crosses its one tile a turn in two seconds — one pass of the 2.0 s
+; cycle (build_sprite_frames.gd VARIANT_LOOP_TIME).
+move_speed = 0.75
+
+; ONE layer, for the swarm's reasons. canvas_height mirrors render_sprites.py
+; CANVAS_HEIGHT; foot_anchor is MEASURED from the rendered PNGs (the lowest
+; opaque row across every pose), not derived.
+[node name="Visual" type="Node3D" parent="."]
+script = ExtResource("2_visual")
+layers = Array[StringName]([&"body"])
+variant = &"worm"
+canvas_height = 2.56
+foot_anchor = Vector2(0.5, 0.90781518)
+has_light = false
+
+[node name="Body" type="StaticBody3D" parent="."]
+collision_layer = 2
+collision_mask = 0
+
+[node name="Collision" type="CollisionShape3D" parent="Body"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.3, 0)
+shape = SubResource("capsule_shape")
+
+[node name="NameLabel" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.8, 0)
+billboard = 1
+text = "Worm"

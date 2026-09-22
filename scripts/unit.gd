@@ -12,7 +12,8 @@ signal moved(unit: Unit)
 ## the same one AP a cardinal does because the grid is eight-way at uniform cost
 ## (Sec 4.0 — GridManager.get_reachable_tiles is a BFS for exactly this reason).
 ##
-## The only thing that raises it is injury; see `move_ap_per_tile`.
+## The only things that raise it are injury (see `move_ap_per_tile`) and the
+## worm, which overrides it outright — see WormUnit.AP_PER_TILE for why.
 const MOVE_AP_PER_TILE := 1
 const TURN_TIME := 0.09  # seconds to swing toward the next tile
 
