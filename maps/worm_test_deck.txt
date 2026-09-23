@@ -1,6 +1,6 @@
 ##################################
 #.....#..........................#
-#.P...#......W...................#
+#.P.N.#......W...................#
 #.....D..........................#
 #.P.o.#...........W..............#
 #.....D..........................#
@@ -11,11 +11,28 @@
 #........W..D...W...D....o..RR...#
 #...........#########.......RR...#
 #...........#########...W...s....#
+#####D############################
+#.......o........................#
+##D###D###D###D###################
+#oW.#oW.#oW.#oW.##################
 ##################################
+
+[worms]
+2,16 5
+6,16 9
+10,16 13
+14,16 16
 
 [notes]
 A deck for testing the worm and nothing else. No other alien, no robots, no
-rival mercs: anything that happens here is a worm.
+rival mercs: anything that MOVES here is a worm.
+
+The one exception is the nest at (4,2), and it is an exception only in the
+sense that it is drawn — it has no senses, never acts and never spawns
+anything yet, so it cannot interfere with a single thing this deck tests.
+It is parked in the spawn room, two tiles north of the light at (4,4), so it
+is lit and on screen the moment the deck loads. Move the 'N' anywhere with a
+floor if you want to look at it somewhere else.
 
 Run it with:
     godot --path . -- --map=worm_test_deck
@@ -46,6 +63,65 @@ The platform at (28-29, 10-11), up the stair at (28,12), is for the deck
 clause in the sense: standing on it puts you one deck up, and the worm at
 (24,12) should not feel you through it however close you stand.
 
+
+THE TIER GALLERY, through the door at (5,13).
+
+Four alcoves off a lit corridor, one per tier of the worm mass
+(docs/design/factions/aliens/design-choices/worm-mass.md), each at the TOP of
+its tier so the sculpt is drawn at full scale rather than scaled down:
+
+    (2,16)   5 worms   CLUTCH   1 tile/turn    10 damage    25 HP
+    (6,16)   9 worms   KNOT     2 tiles/turn   18 damage    45 HP
+    (10,16) 13 worms   SWELL    3 tiles/turn   26 damage    65 HP
+    (14,16) 16 worms   TIDE     4 tiles/turn   32 damage    80 HP
+
+Each alcove carries its own overhead light, because the whole point of the
+gallery is to LOOK at the four sizes -- this is the one part of the deck that
+is not a darkness test. Walk the corridor with the alcove doors in view and
+the ladder reads left to right.
+
+The counts come from the `[worms]` section above, not from the grid. A mass is
+one WormUnit holding more HP rather than a separate unit type, so there is no
+glyph that could say "nine worms here"; the grid marks the tile 'W' like any
+other worm and the section attaches the number. A 'W' with no entry is one
+worm, which is why the six above still read exactly as they did.
+
+WHY THE GALLERY IS WALLED OFF FROM THE REST OF THE DECK. Masses rally: a worm
+that enters combat below terminal walks to the biggest pile in its compartment
+instead of at you. Put a Tide in the dark hall and the three pace-test worms
+stop being a pace test and become its feeder. One alcove per tier keeps each
+ladder rung a thing you can meet on its own.
+
+That isolation is REAL and was checked rather than assumed: MapData.compute_rooms
+resolves the four alcoves as rooms 3, 5, 7 and 8, so a mass roused in one of
+them cannot call the other three. If that ever stops being true the symptom is
+three empty alcoves and one very large pile, and it is a finding about the room
+graph rather than about the worm.
+
+
+THE SIX SINGLES DO NOT STAND ALONE ANY MORE, and the deck notes above were
+written before they did anything but crawl at you. The room graph puts
+
+    (13,2) (18,4) (23,6)          in room 0, together
+    (9,10) (16,10) (24,12)        in room 1, together
+
+-- the corridor and the lit room are NOT their own compartments the way the
+alcoves are. So the moment one of a group notices you, the other two in its
+room stop walking at you and start walking at IT, and what the dark hall now
+demonstrates is three worms forming a Clutch rather than three worms crawling.
+
+That is the worm behaving correctly, not a broken deck. But it does mean the
+pace and standing-still tests above are no longer clean single-unit tests: to
+run one properly, meet a worm in an alcove, where it genuinely is alone.
+
+Two tiers are worth meeting in a specific order. The SWELL at (10,16) is the
+first rung that one-shots a soldier (26 damage against 19-21 HP) and the first
+that moves faster than the merc tier expects. The TIDE at (14,16) is the cap:
+it has no attack animation at all, it simply walks through the tile you are
+standing on, and four tiles of movement means it can do that to more than one
+of you in an activation if you line up.
+
 This section is ignored by the parser (MapAscii reads the grid up to the
-first [section], and knows only [cover] and [obstacles]). It will not survive
-a round-trip through MapAscii.to_text().
+first [section], and knows only [cover], [obstacles] and [worms]). It will not
+survive a round-trip through MapAscii.to_text() -- the [worms] block will,
+this prose will not.

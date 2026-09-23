@@ -75,6 +75,11 @@ var brawler_spawns: Array[Vector3i] = []
 var merc_spawns: Array[Vector3i] = []
 var hunter_spawns: Array[Vector3i] = []
 var worm_spawns: Array[Vector3i] = []
+## Vector3i -> worms standing there, from the map's `[worms]` section. A spawn
+## missing from this is a single worm; see `MapData.worms_at`, which is the one
+## place that default lives.
+var worm_counts: Dictionary = {}
+var nest_spawns: Array[Vector3i] = []
 ## MapData.Spawn kind -> Array[Vector3i], for the four security-robot types. One
 ## dictionary rather than four named arrays because the roster is expected to
 ## change and the spawner iterates it either way.
@@ -185,6 +190,8 @@ func build(map_data: MapData) -> void:
 	merc_spawns = data.spawns(MapData.Spawn.MERC)
 	hunter_spawns = data.spawns(MapData.Spawn.HUNTER)
 	worm_spawns = data.spawns(MapData.Spawn.WORM)
+	worm_counts = data.worm_counts.duplicate()
+	nest_spawns = data.spawns(MapData.Spawn.NEST)
 	cerberus_spawns.clear()
 	for kind: int in MapData.CERBERUS_SPAWNS:
 		cerberus_spawns[kind] = data.spawns(kind)
@@ -198,6 +205,20 @@ func _build_cell(pos: Vector3i, cell: MapData.Cell) -> void:
 		MapData.Terrain.VOID:
 			return
 		MapData.Terrain.WALL:
+			# Floor under the wall too, even though nothing can stand here.
+			#
+			# A wall MODULE is thinner than the tile it occupies — 1.03 m and
+			# 0.76 m against a 1.50 m tile — and `_hug_direction` shoves it to
+			# one side of that tile, so up to 0.74 m of the cell is not covered
+			# by the wall. With floor drawn only on walkable cells that strip was
+			# bare ground, and at this camera pitch it read as a shadow gap
+			# between the wall and the deck.
+			#
+			# Purely cosmetic: no GridManager.add_tile, so the cell stays
+			# unwalkable and blocks LOS exactly as before. The quad is coplanar
+			# with the module's underside, which never draws — it faces down, and
+			# the camera only ever looks at this from above.
+			_add_floor_quad(world, _floor_mat)
 			_add_wall_collision(world)  # every WALL cell blocks LOS, however it's drawn
 			if not _handled_walls.has(pos):
 				# _build_wall_runs couldn't cover it with a real module — a

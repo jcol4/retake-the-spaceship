@@ -21,6 +21,7 @@ config/features=PackedStringArray("4.6", "Forward Plus")
 [autoload]
 
 GameSettings="*res://scripts/game_settings.gd"
+Sfx="*res://scripts/sfx_manager.gd"
 GridManager="*res://scripts/grid_manager.gd"
 LightingManager="*res://scripts/lighting_manager.gd"
 TurnManager="*res://scripts/turn_manager.gd"

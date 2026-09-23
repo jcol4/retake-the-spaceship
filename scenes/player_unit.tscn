@@ -30,12 +30,43 @@ albedo_color = Color(0.4, 1, 0.65, 1)
 [node name="PlayerUnit" type="Node3D" unique_id=1752049843 groups=["player_units", "units"]]
 script = ExtResource("1_script")
 
+; canvas_height mirrors render_sprites.py CANVAS_HEIGHT. foot_anchor is row 17
+; of 256, MEASURED from the rendered PNGs as the MEAN lowest opaque row over the
+; eight idle facings.
+;
+; The mean, not the minimum, and that is the whole point. The sprite is a
+; vertical billboard, so the row the anchor names is the row that sits ON the
+; floor; every row below it is drawn under the floor mesh and occluded. Which
+; row the boots reach depends on the FACING, because the tilted camera projects
+; a foot planted toward the viewer lower than one planted across: idle bottoms
+; out at row 8 facing south and row 32 facing west. Anchoring on the global
+; minimum (row 4, which is what this was) guarantees nothing is ever clipped and
+; costs the character up to 28 px of AIR under its boots -- the float. Anchoring
+; on the world origin (row 41) is geometrically exact and eats the legs to the
+; knee. The mean splits it: a toe or two under the floor on the facings that
+; reach lowest, which reads as planted, and no visible gap on the rest.
+;
+; `flash` is the muzzle-flash OVERLAY, and it is LAST in `layers` because layers
+; draw back to front. It is the one layer that is not the character: it carries a
+; single frame of `fire_shoot` and shows nothing the rest of the time, which
+; UnitVisual._play already does for any layer with no art for the current pose.
+;
+; layer_canvas_scale says its art is drawn on a canvas twice the size, and the
+; reason is that the flash does not FIT in 2.56 m -- the barrel tip is 29 px from
+; the top edge of the frame facing nw. `render_sprites.py --flash` renders it
+; through the same camera at the same centre with double the extent and double
+; the resolution, so metres-per-pixel is unchanged. canvas_height and foot_anchor
+; above are still the body's and are not restated here: UnitVisual derives this
+; layer's own from the 2.0, which is what keeps the two from drifting apart.
 [node name="Visual" type="Node3D" parent="." unique_id=208281447]
 script = ExtResource("3_visual")
-layers = Array[StringName]([&"body"])
+layers = Array[StringName]([&"body", &"flash"])
 variant = &"merc"
 canvas_height = 2.56
-foot_anchor = Vector2(0.5, 0.984375)
+foot_anchor = Vector2(0.5, 0.93359375)
+layer_canvas_scale = {
+&"flash": 2.0
+}
 
 [node name="Body" type="StaticBody3D" parent="." unique_id=2091734915]
 collision_layer = 2

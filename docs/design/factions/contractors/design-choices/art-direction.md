@@ -43,12 +43,20 @@ rounder knee pads.
 
 ## Why camera distance changes the whole art calculus
 
-> ✅ **RESOLVED 2026-07-30, corrected 2026-08-04.** The camera is fixed orthographic with no
-> zoom, at a `Camera3D.size` of **10.5** — putting a character at **14.9% of viewport
-> height**, inside the reference band. The section's own practical implication ("settle
-> framing before investing in detail") has therefore been honoured: framing is settled, and
-> it cannot drift, because there is no zoom control left to drift it. See
+> ✅ **RESOLVED 2026-07-30, corrected 2026-08-04 and 2026-09-22.** The camera is orthographic
+> at a fixed pitch, and starts at a `Camera3D.size` of **10.5** — putting a character at
+> **14.9% of viewport height**, inside the reference band. The section's own practical
+> implication ("settle framing before investing in detail") has therefore been honoured: the
+> **authoring** framing is settled, because 10.5 is `camera_rig.gd` `MIN_ZOOM_SIZE` and the
+> player cannot scroll closer than the scale the art was drawn against. See
 > [presentation-direction.md](../../../../presentation-direction.md).
+>
+> *The 2026-09-22 correction:* this previously said the camera had no zoom and no rotation,
+> and both came back. The yaw snaps in quarter turns (`SNAP_STEP`) and the scroll wheel moves
+> `Camera3D.size` between `MIN_ZOOM_SIZE` 10.5 and `MAX_ZOOM_SIZE` 30.0. Neither costs art —
+> a quarter turn shifts the eight direction buckets by two whole steps, and zooming OUT only
+> ever shows a character smaller than the scale it was authored at — but "framing cannot
+> drift" was true only of the closest zoom, and is what this entry now says.
 >
 > *The first answer was `size = 12` for "16%", and it was wrong by a cosine.* An upright
 > figure seen at 35.264° is foreshortened and occupies `1.92 × cos(pitch) = 1.568 m` of

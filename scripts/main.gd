@@ -9,6 +9,7 @@ const BRAWLER_SCENE := preload("res://scenes/brawler_unit.tscn")
 const MERC_SCENE := preload("res://scenes/merc_unit.tscn")
 const HUNTER_SCENE := preload("res://scenes/agile_hunter_unit.tscn")
 const WORM_SCENE := preload("res://scenes/worm_unit.tscn")
+const NEST_SCENE := preload("res://scenes/nest_unit.tscn")
 
 ## Fixed ratio for Phase 1 of the rival-mercs plan (see
 ## docs/design/factions/rival-mercs/README.md Sec 2) — a placeholder roll until
@@ -144,6 +145,14 @@ func _spawn_and_start() -> void:
 		hunter.action_logged.connect(_on_unit_log)
 		hunter_index += 1
 
+	# Worms, and the masses a map may place pre-formed. A mass is not a second
+	# scene — it is this same unit carrying more HP — so the map's `[worms]`
+	# count is applied by writing HP and letting `WormUnit` derive the rest:
+	# damage, pace, sprite and label all follow from `current_hp` alone.
+	#
+	# AFTER `add_child`, and that ordering is the whole of it: `Unit._ready`
+	# sets `current_hp` from the stat block, so a count written before the node
+	# enters the tree is overwritten by the single worm's 5 HP.
 	var worm_index := 1
 	for spawn in map.worm_spawns:
 		var worm: WormUnit = WORM_SCENE.instantiate()
@@ -151,7 +160,23 @@ func _spawn_and_start() -> void:
 		worm.position = GridManager.grid_to_world(spawn)
 		add_child(worm)
 		worm.action_logged.connect(_on_unit_log)
+		var worms: int = maxi(1, map.worm_counts.get(spawn, 1))
+		if worms > 1:
+			worm.current_hp = mini(worms, WormUnit.MAX_WORMS) * WormUnit.HP_PER_WORM
+			worm._apply_count()
 		worm_index += 1
+
+	# Nests (Sec 11.7). Placed exactly like a unit and drawn from the same pool,
+	# but they are the mission objective rather than a threat — see NestUnit for
+	# why an objective is a Unit here, and for what is still missing from it.
+	var nest_index := 1
+	for spawn in map.nest_spawns:
+		var nest: NestUnit = NEST_SCENE.instantiate()
+		nest.stats = AlienPresets.nest("Nest_%d" % nest_index)
+		nest.position = GridManager.grid_to_world(spawn)
+		add_child(nest)
+		nest.action_logged.connect(_on_unit_log)
+		nest_index += 1
 
 	var merc_index := 1
 	# One LMG per squad, handed to whichever member is placed first in a room.

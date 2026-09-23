@@ -31,6 +31,8 @@ extends RefCounted
 ##       free letter out of "rival"
 ##   'A' Agile Hunter spawn (Sec 11.5) — its own initial, still free rather than bumping an established glyph
 ##   'W' worm spawn
+##   'N' spawn nest (Sec 11.7) — a destructible OBJECTIVE, not a unit. It draws
+##       from the turn pool and passes; clear-out is not won while one stands
 ##   'o' overhead light        'm' monitor light       'f' flickering light
 ##   '!' alarm panel — emits no light; tripped by anything non-alien walking onto
 ##       it, and fires once (Sec 6)
@@ -53,6 +55,12 @@ extends RefCounted
 ## Naming the same edge from the other tile costs one subtraction and keeps the
 ## file a single source of truth. Rooms are NOT stored: they are derived from the
 ## layout by MapData.compute_rooms, so they cannot drift out of sync with it.
+##
+## `[worms]` is the same idea for a worm MASS. A mass is one `WormUnit` holding
+## more HP rather than a separate unit type, so there is no glyph that could say
+## "nine worms here" — the grid marks the tile 'W' as usual and this section
+## attaches the count. Each line is `x,z count`; absent means one, which is what
+## keeps every deck written before this existed reading exactly as it did.
 ##
 ## `[obstacles]` is the same idea for multi-tile furniture: a footprint spans
 ## several tiles, which a one-glyph-per-tile grid can't name any better than it
@@ -84,6 +92,8 @@ const GLYPHS := {
 	"A": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.HUNTER, false],
 	# Worm. Its own initial, which was free.
 	"W": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.WORM, false],
+	# Spawn nest (Sec 11.7). 'N' for the name, and free — never claimed.
+	"N": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.NEST, false],
 	"F": [MapData.Terrain.FLOOR, MapData.Fixture.NONE, MapData.Spawn.LICTOR, false],
 	"o": [MapData.Terrain.FLOOR, MapData.Fixture.OVERHEAD, MapData.Spawn.NONE, false],
 	"m": [MapData.Terrain.FLOOR, MapData.Fixture.MONITOR, MapData.Spawn.NONE, false],
@@ -96,6 +106,7 @@ const GLYPHS := {
 
 const COVER_SECTION := "[cover]"
 const OBSTACLES_SECTION := "[obstacles]"
+const WORMS_SECTION := "[worms]"
 
 const SIDE_NAMES := {"E": MapData.Side.EAST, "S": MapData.Side.SOUTH}
 const SIDE_GLYPH := {MapData.Side.EAST: "E", MapData.Side.SOUTH: "S"}
@@ -122,6 +133,7 @@ static func parse(rows: PackedStringArray, deck: int = 0) -> MapData:
 			data.set_cell(Vector3i(x, deck, z), cell)
 	_parse_cover(data, rows, deck)
 	_parse_obstacles(data, rows, deck)
+	_parse_worms(data, rows, deck)
 	data.resolve_stairs()
 	# Derived here rather than by the caller so every route into a MapData —
 	# file, string, or test fixture — arrives with the same graph populated.
@@ -188,6 +200,40 @@ static func _parse_obstacles(data: MapData, rows: PackedStringArray, deck: int) 
 		data.obstacles.append([footprint, tier])
 
 
+## `[worms]` names a COUNT for a tile the grid has already marked 'W'. Each line
+## is `x,z count`.
+##
+## The grid cannot carry this itself. A worm mass is one `WormUnit` holding more
+## HP rather than a distinct type (see the worm-mass design doc), so there is no
+## per-tier glyph to spend — and spending four of them would be worse than the
+## problem, since the tiers are a continuum of sixteen sizes and only the
+## boundaries have names.
+##
+## Placing a count on a tile with no worm on it is an authoring mistake rather
+## than a way to spawn one, and is rejected as such: the grid stays the single
+## statement of WHERE things are, and this section only ever says how many.
+static func _parse_worms(data: MapData, rows: PackedStringArray, deck: int) -> void:
+	var inside := false
+	for raw in rows:
+		var line: String = (raw as String).strip_edges()
+		if line.begins_with("["):
+			inside = line == WORMS_SECTION
+			continue
+		if not inside or line.is_empty():
+			continue
+		var parts := line.split(" ", false)
+		var coords := parts[0].split(",") if parts.size() == 2 else PackedStringArray()
+		if coords.size() != 2 or not parts[1].is_valid_int():
+			push_error("MapAscii: bad [worms] line '%s' (want 'x,z count')" % line)
+			continue
+		var pos := Vector3i(int(coords[0]), deck, int(coords[1]))
+		var cell := data.get_cell(pos)
+		if cell == null or cell.spawn != MapData.Spawn.WORM:
+			push_error("MapAscii: [worms] line '%s' names a tile with no 'W' on it" % line)
+			continue
+		data.worm_counts[pos] = maxi(1, int(parts[1]))
+
+
 static func encode(data: MapData, deck: int = 0) -> PackedStringArray:
 	# Grid block only. to_text is what round-trips a whole file.
 	var rows := PackedStringArray()
@@ -230,6 +276,30 @@ static func encode_obstacles(data: MapData, deck: int = 0) -> PackedStringArray:
 	return rows
 
 
+## Counts above one only. A lone worm is what an absent entry already means, so
+## writing `13,2 1` would grow a section onto every deck that has ever held a
+## worm and make the round-trip test fail on files nobody edited.
+##
+## Sorted, because `worm_counts` is a Dictionary and its iteration order is
+## insertion order — which is parse order for a file, but arbitrary for a
+## generated or hand-built MapData. Without this, `to_text` of the same deck
+## could emit the same lines in a different sequence.
+static func encode_worms(data: MapData, deck: int = 0) -> PackedStringArray:
+	var rows := PackedStringArray()
+	var positions: Array = []
+	for pos: Vector3i in data.worm_counts:
+		if pos.y == deck and data.worm_counts[pos] > 1:
+			positions.append(pos)
+	positions.sort_custom(func(a: Vector3i, b: Vector3i) -> bool:
+		return a.z < b.z if a.z != b.z else a.x < b.x)
+	for pos: Vector3i in positions:
+		if rows.is_empty():
+			rows.append("")
+			rows.append(WORMS_SECTION)
+		rows.append("%d,%d %d" % [pos.x, pos.z, data.worm_counts[pos]])
+	return rows
+
+
 static func _glyph_for(cell: MapData.Cell) -> String:
 	# Precedence: terrain first (a wall can hold nothing), then the feature that
 	# most changes how the tile plays.
@@ -253,6 +323,7 @@ static func _glyph_for(cell: MapData.Cell) -> String:
 		MapData.Spawn.MERC: return "V"
 		MapData.Spawn.HUNTER: return "A"
 		MapData.Spawn.WORM: return "W"
+		MapData.Spawn.NEST: return "N"
 		MapData.Spawn.LICTOR: return "F"
 	match cell.fixture:
 		MapData.Fixture.OVERHEAD: return "o"
@@ -287,4 +358,5 @@ static func to_text(data: MapData, deck: int = 0) -> String:
 	var rows := encode(data, deck)
 	rows.append_array(encode_cover(data, deck))
 	rows.append_array(encode_obstacles(data, deck))
+	rows.append_array(encode_worms(data, deck))
 	return "\n".join(rows)

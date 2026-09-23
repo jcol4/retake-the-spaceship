@@ -16,9 +16,11 @@ extends Node3D
 ## and it keeps action pacing identical across the swap — the same guarantee the
 ## no-AnimationPlayer fallback used to give.
 
-## Fired at the shot's muzzle-flash frame. Drives the VFX tracer, so the beam
-## leaves the barrel when the arm is up rather than the instant the order was
-## given.
+## Fired at the shot's muzzle frame. Drives the shot SFX and the impact at the
+## far end, so a round arrives when the arm is up rather than the instant the
+## order was given. The drawn flash is NOT fired from here — it is a frame of
+## the `fire_shoot` art on the `flash` layer, played by the same call that emits
+## this.
 signal muzzle
 
 ## Fired as each boot lands during the run stance. Hook for footstep SFX and a
@@ -276,6 +278,23 @@ const BUCKET_OFFSET := PI / 4.0
 ## the bottom edge by exactly that fraction -- see that file for the arithmetic.
 @export var foot_anchor: Vector2 = Vector2(0.5, 1.0)
 
+## Layers drawn on a BIGGER canvas than `canvas_height`, as layer -> how many
+## times bigger. Anything absent is 1.0, which is every layer that draws the
+## character itself.
+##
+## The muzzle flash is what this exists for, and the reason is FRAMING. The
+## barrel tip sits 29 px from the top edge of the merc's 256 px canvas facing
+## NW, so a flash of any real size runs off the frame -- and it cannot simply be
+## rendered bigger into the body layer, because `_apply_frame_scale` sizes a
+## layer ONCE for all of its frames. `render_sprites.py --flash` renders it
+## through the same camera at the same centre with the ortho extent and the
+## resolution both multiplied, which leaves metres-per-pixel untouched and puts
+## a world point at fraction 0.5 + (f - 0.5) / scale of the larger image. This
+## number is the ONLY thing the scene states; `_layer_anchor` undoes that
+## fraction and the height falls out of the multiply, so there is no second
+## hand-measured anchor to disagree with the first.
+@export var layer_canvas_scale: Dictionary = {}
+
 ## Whether this character carries the rig-mounted light (Sec 5.2). Aliens do not.
 @export var has_light: bool = true
 
@@ -324,10 +343,16 @@ const MIN_TINT := 0.35
 ## is the thing emitting, not the thing being lit — and dimming it in a dark room
 ## would put out the one readability aid the security robots have in exactly the
 ## conditions it exists for.
-const SELF_LIT_LAYERS: Array[StringName] = [&"status"]
+##
+## The muzzle flash is the same argument at its strongest, and it is now the
+## ONLY thing on screen making that argument: the room-filling `OmniLight3D`
+## that used to fire alongside it is gone (see vfx_manager.gd), so if this layer
+## is dimmed nothing else says the gun went off. A shot in an unlit corridor is
+## not a dim flash — it is the brightest thing in frame.
+const SELF_LIT_LAYERS: Array[StringName] = [&"status", &"flash"]
 
 ## Where a shot leaves the weapon, relative to the unit: shoulder height, and
-## forward of the body so a tracer does not visibly start inside the chest.
+## forward of the body so a shot does not visibly start inside the chest.
 ## Derived from unit yaw in world space rather than from a per-direction table,
 ## because the muzzle is a world point and the camera must not move it.
 const MUZZLE_HEIGHT := 1.4
@@ -380,6 +405,14 @@ var _direction := 0
 ## True once real authored art is found. Decides whether an action's length comes
 ## from the animation or from FALLBACK_TIME — see play_action.
 var _authored := false
+## Which layers are showing RENDERED art rather than the code placeholder.
+##
+## Per layer, not one flag for the visual, because only rendered art carries the
+## camera's foreshortening baked into it and therefore only rendered art wants it
+## undone — see `_view_stretch`. A placeholder beside authored art on the same
+## unit is already a mistake (`_build_layers` paints a grey disc over the face),
+## but it should not additionally be stretched 22% too tall.
+var _authored_layers := {}
 var _stepping: bool = false
 var _fidgeting: bool = false
 ## COVER_LOW, COVER_HIGH, or "" for a unit not using cover. Written by the unit
@@ -409,6 +442,9 @@ func _ready() -> void:
 	if LightingManager:
 		LightingManager.lighting_changed.connect(_apply_tile_light)
 	_sync_direction()
+	# Before the first _process, so a tool that builds a scene and grabs one
+	# frame sees the same thing the running game does.
+	_update_ground_depth()
 
 
 ## Whether playback should resolve with no time on the clock. Delegated to the
@@ -440,8 +476,9 @@ func _build_layers() -> void:
 		return
 	for layer in layers:
 		var frames := _load_frames(layer)
+		_authored_layers[layer] = frames != null
 		if frames == null:
-			frames = _placeholder_frames(layer)
+			frames = _unauthored_frames(layer)
 		else:
 			_authored = true
 		_frames[layer] = frames
@@ -452,7 +489,7 @@ func _build_layers() -> void:
 		# the pivot contract: every layer resolves to the same world height with
 		# its origin on `foot_anchor`, so reassigning one layer's frames can never
 		# shift it against the others no matter what resolution it was drawn at.
-		_apply_frame_scale(sprite, frames)
+		_apply_frame_scale(sprite, frames, layer)
 		# Always face the viewer, upright. Direction is carried by WHICH art is
 		# shown, never by turning the quad — that is the whole point of drawing
 		# eight of them.
@@ -503,13 +540,61 @@ func _load_frames(layer: StringName) -> SpriteFrames:
 ## their origin at the feet.
 ##
 ## Reads the first frame it can find: a set whose frames disagree on size would
-## need a per-frame pivot, which is a problem no art has posed yet.
-func _apply_frame_scale(sprite: AnimatedSprite3D, frames: SpriteFrames) -> void:
+## need a per-frame pivot, which is a problem no art has posed yet. An OVERLAY
+## drawn on a bigger canvas is not that problem and must not be solved as if it
+## were — its frames all agree with each other, they just agree on something
+## other than the body's, which is what `layer_canvas_scale` states.
+func _apply_frame_scale(sprite: AnimatedSprite3D, frames: SpriteFrames,
+		layer: StringName) -> void:
 	var size := _frame_size(frames)
-	sprite.pixel_size = canvas_height / size.y
+	var scale := _canvas_scale(layer)
+	var anchor := _layer_anchor(layer)
+	sprite.pixel_size = canvas_height * scale / size.y
 	sprite.offset = Vector2(
-		size.x * (0.5 - foot_anchor.x),
-		size.y * (foot_anchor.y - 0.5))
+		size.x * (0.5 - anchor.x),
+		size.y * (anchor.y - 0.5))
+
+
+## How many times bigger this layer's canvas is than `canvas_height`.
+##
+## Guarded rather than trusted: a zero or negative scale is not a smaller
+## canvas, it is a division by zero in `pixel_size` and an invisible character.
+func _canvas_scale(layer: StringName) -> float:
+	var scale := float(layer_canvas_scale.get(layer, 1.0))
+	return scale if scale > 0.0 else 1.0
+
+
+## `foot_anchor` restated in this layer's own canvas.
+##
+## The enlarged canvas grows about the SAME centre as the body's (the sprite
+## camera is not moved for it — see `render_sprites.py` `build_camera`), so the
+## pivot keeps its world position by moving toward the middle of the frame by
+## exactly the scale. Derived here rather than measured again per layer, because
+## two anchors for one pivot is two things to keep in step.
+func _layer_anchor(layer: StringName) -> Vector2:
+	var scale := _canvas_scale(layer)
+	if is_equal_approx(scale, 1.0):
+		return foot_anchor
+	var centre := Vector2(0.5, 0.5)
+	return centre + (foot_anchor - centre) / scale
+
+
+## What a layer shows before its art exists.
+##
+## A layer that draws the character gets the code placeholder, which is what
+## lets the game run at all on a half-drawn character. An OVERLAY gets nothing —
+## an empty set, which `_play` reads as "this layer has nothing for this pose"
+## and hides. A placeholder body drawn at twice the canvas size on top of the
+## real one is not a degraded muzzle flash; it is a bug that looks like one, and
+## it would show up the moment a layer was named in the scene before its PNGs
+## had been rendered. Declaring the layer first and rendering after is the
+## normal order of work, so it has to be the safe one.
+func _unauthored_frames(layer: StringName) -> SpriteFrames:
+	if not is_equal_approx(_canvas_scale(layer), 1.0):
+		var empty := SpriteFrames.new()
+		empty.remove_animation(&"default")
+		return empty
+	return _placeholder_frames(layer)
 
 
 ## Pixel size of the art in `frames`, falling back to the placeholder canvas when
@@ -530,9 +615,17 @@ func _frame_size(frames: SpriteFrames) -> Vector2:
 func set_variant(new_variant: StringName) -> void:
 	variant = new_variant
 	for layer in layers:
+		# Headless builds no layers at all (`_build_layers` returns early), so
+		# `_sprites` is empty and there is nothing to reassign. Recorded here as
+		# well as there because a variant swap is no longer only a gear change
+		# the player triggers — `WormUnit` swaps art as a pile grows, which
+		# happens in the AI's own turn and therefore in every headless test run.
+		if not _sprites.has(layer):
+			continue
 		var frames := _load_frames(layer)
+		_authored_layers[layer] = frames != null
 		if frames == null:
-			frames = _placeholder_frames(layer)
+			frames = _unauthored_frames(layer)
 		else:
 			_authored = true
 		_frames[layer] = frames
@@ -540,7 +633,7 @@ func set_variant(new_variant: StringName) -> void:
 		sprite.sprite_frames = frames
 		# Re-derived, not carried over: the incoming art may be a different
 		# resolution from what this layer was showing.
-		_apply_frame_scale(sprite, frames)
+		_apply_frame_scale(sprite, frames, layer)
 	# New art brings its own barrel with it.
 	_read_markers()
 	_play(_stance)
@@ -674,7 +767,11 @@ func muzzle_world() -> Vector3:
 	# right IS the camera's horizontal right and its up IS world up — exactly the
 	# pair this offset decomposes onto.
 	var dx := (u - foot_anchor.x) * _canvas_metres.x
-	var dy := (foot_anchor.y - here.y) * _canvas_metres.y
+	# `_canvas_metres` is the canvas at its `pixel_size`, but the card is DRAWN
+	# `_view_stretch` taller than that, so the drawn barrel is that much further
+	# up than the un-stretched canvas says. Vertical only, for the same reason
+	# the stretch is: `dx` is already right, because horizontal maps 1:1.
+	var dy := (foot_anchor.y - here.y) * _canvas_metres.y * _view_stretch()
 	var right := _rig.global_transform.basis.x.normalized() if _rig else Vector3.RIGHT
 	return global_position + right * dx + Vector3.UP * dy
 
@@ -798,6 +895,10 @@ func _process(_delta: float) -> void:
 	# a pose: the answer changes on every sprite frame, not just when the facing
 	# does.
 	_update_light_rig()
+	# Depends on BOTH yaws — the camera's, which sets the view axis, and the
+	# unit's, which sets the space the offset is assigned in — so it is polled
+	# beside them rather than hung off yaw_changed alone.
+	_update_ground_depth()
 
 
 ## Re-asserts whatever the unit should be showing, for a unit coming back into
@@ -822,6 +923,134 @@ func _sync_direction() -> void:
 
 func _camera_yaw() -> float:
 	return _rig.rotation.y if _rig else 0.0
+
+
+# --- Ground depth ------------------------------------------------------------
+#
+# The sprite is a flat VERTICAL card standing at the tile centre, but the art on
+# it has real depth: the render was shot at 35.264 degrees, so a boot planted
+# toward the viewer was a boot genuinely in FRONT of the character's root,
+# standing on floor that is nearer the camera. The card draws it at the tile
+# centre's depth instead, the deck quad in front wins the depth test, and the
+# boot is sliced off along a screen-horizontal line -- horizontal because that is
+# where the y=0 plane meets a vertical billboard.
+#
+# `foot_anchor` cannot fix this, and no value of it can. The anchor names the row
+# that sits ON the floor; every row beneath it is beneath the floor by
+# construction. Raising the anchor until nothing clips just hangs the character
+# in the air instead, and which row the feet reach depends on the FACING (idle
+# spans 24 px across the merc's eight buckets), so one number cannot satisfy them
+# all. The clipping is a DEPTH problem and has to be answered in depth.
+#
+# What makes the answer free is that the camera is ORTHOGRAPHIC. Translating
+# along the view axis changes depth and nothing else -- there is no perspective
+# divide to scale the result -- so the sprite can be pushed toward the camera
+# until it beats the floor without moving on screen by so much as a pixel.
+
+
+## How far the sprite must travel along the view axis to clear the floor it
+## stands on, in metres.
+##
+## `d / sin(pitch)`, where `d` is how far below the origin the canvas reaches.
+## Both terms of the gap contribute and they collapse neatly: a card point `d`
+## below the origin sits `d*sin(pitch)` FURTHER from the camera than the origin,
+## while the floor pixel it collides with is `d*cos(pitch)^2/sin(pitch)` NEARER,
+## and `sin^2 + cos^2 = 1` does the rest.
+##
+## `d` is measured to the bottom EDGE of the canvas rather than to the lowest
+## opaque pixel, so it is the worst case no art can exceed and it costs no
+## measurement -- and it falls to zero on its own for placeholder art, which is
+## drawn with `foot_anchor.y` of 1.0 and has nothing below the anchor at all.
+## Never take more depth than this fraction of the nearest occluder's.
+##
+## The unit gains depth, so anything it gains MORE of than a legitimate occluder
+## has, it punches through. The nearest legitimate one is a wall on the near edge
+## of the unit's own tile — half a tile of ground — and 0.8 of that leaves a
+## visible margin rather than a photo finish.
+##
+## Costs nothing in practice: `_ground_depth_offset` measures to the bottom EDGE
+## of the canvas, while the art's real reach is shorter, so the cap only ever
+## bites into slack. On the nest, the widest case in the game, it gives up about
+## one pixel of clearance.
+const GROUND_DEPTH_SAFETY := 0.8
+
+
+func _ground_depth_offset() -> float:
+	# Through `_view_stretch`, because the card is drawn taller than its
+	# `pixel_size`: the rows below the anchor reach that much further below the
+	# floor, and a drop measured in un-stretched metres would under-clear them.
+	var drop := (1.0 - foot_anchor.y) * canvas_height * _view_stretch()
+	if drop <= 0.0 or _rig == null:
+		return 0.0
+	# basis.z of the rig points back along the view axis, so its Y component is
+	# sin(pitch) and its horizontal length is cos(pitch) — both read off the rig
+	# rather than recomputed from a copied constant, so a change to the camera's
+	# pitch carries here by itself.
+	var axis: Vector3 = _rig.global_transform.basis.z
+	var sin_pitch := axis.y
+	if sin_pitch <= 0.001:
+		return 0.0
+	var cos_pitch := Vector2(axis.x, axis.z).length()
+	var nearest_occluder := GridManager.TILE_SIZE * 0.5 * cos_pitch
+	return minf(drop / sin_pitch, nearest_occluder * GROUND_DEPTH_SAFETY)
+
+
+## How much taller than its `pixel_size` a RENDERED layer must be drawn, so that
+## a texel lands on screen exactly where the render put it.
+##
+## `1 / cos(pitch)`, and the reason is that the projection is applied TWICE.
+## `CANVAS_HEIGHT` is Blender's `ortho_scale`, which is a SCREEN extent: a point
+## at world height h, at the unit's own depth, was drawn `h * cos(pitch)` of
+## canvas above the origin. `pixel_size = canvas_height / texture_height` then
+## makes the card that many metres tall in WORLD, and the card is upright, so the
+## camera foreshortens the already-foreshortened image a second time. Measured
+## end to end at 0.81 before this, against a predicted cos(pitch) of 0.8165.
+##
+## Vertical only. Horizontally the card maps 1:1 to the screen under this camera,
+## so `pixel_size` is already right across and stretching both axes -- which is
+## all a scalar `pixel_size` can do -- would fix the height by making the figure
+## fat. A non-uniform `scale` is the only lever that separates them, and Godot's
+## billboard shader does preserve it (verified; it is `billboard_keep_scale` that
+## a scaled billboard would otherwise need).
+##
+## NOT applied to the code placeholder, which is drawn filling its canvas and so
+## has no baked foreshortening to undo -- stretching it would just make it 22%
+## too tall. See `_authored_layers`.
+func _view_stretch() -> float:
+	if _rig == null:
+		return 1.0
+	# Horizontal length of the rig's view axis IS cos(pitch); read off the rig so
+	# a change to the camera's pitch carries here by itself.
+	var axis: Vector3 = _rig.global_transform.basis.z
+	var cos_pitch := Vector2(axis.x, axis.z).length()
+	return 1.0 / cos_pitch if cos_pitch > 0.001 else 1.0
+
+
+## Reconciles every layer with the camera: how tall the card is drawn, and how
+## much depth it is given.
+##
+## Applied to the LAYERS, not to this node: `muzzle_world` and `muzzle_origin`
+## both build from this node's `global_position`, and the flashlight hangs off
+## `LightMount` beside them. Moving or scaling the whole `Visual` would drag the
+## lamp and the shot origin off the unit for a change that is purely about what
+## the rasteriser does with the card.
+##
+## Polled rather than done once at build time because `_rig` is found in `_ready`
+## and a unit may be spawned before the rig exists; re-asserting it every frame
+## costs a basis multiply and cannot get stuck wrong.
+func _update_ground_depth() -> void:
+	if _sprites.is_empty():
+		return
+	var offset := _rig.global_transform.basis.z * _ground_depth_offset() if _rig \
+		else Vector3.ZERO
+	# Into this node's space: the unit turns to face, so a world-space offset
+	# would be spun around by the facing if it were assigned raw.
+	var local := global_transform.basis.inverse() * offset
+	var stretch := _view_stretch()
+	for layer in _sprites:
+		var sprite := _sprites[layer] as AnimatedSprite3D
+		sprite.position = local
+		sprite.scale.y = stretch if _authored_layers.get(layer, false) else 1.0
 
 
 ## Static so the mapping can be checked without a scene — see
@@ -1046,9 +1275,9 @@ func _phase_time(base: StringName, resolved: StringName, plain: float,
 ## Where a shot leaves the weapon, in world space.
 ##
 ## Derived from the UNIT's yaw rather than from the sprite's screen direction, on
-## purpose: the muzzle is a point in the world that LOS and the tracer both read,
-## and rotating the camera must not move it. A per-direction table would be an
-## art refinement on top of this, not a replacement for it.
+## purpose: the muzzle is a point in the world that LOS and the shot VFX both
+## read, and rotating the camera must not move it. A per-direction table would be
+## an art refinement on top of this, not a replacement for it.
 func muzzle_origin() -> Vector3:
 	var yaw: float = _unit.rotation.y if _unit else 0.0
 	var forward := Vector3(-sin(yaw), 0.0, -cos(yaw))
@@ -1125,7 +1354,20 @@ func _apply_tile_light() -> void:
 	for layer in layers:
 		var sprite: AnimatedSprite3D = _sprites.get(layer)
 		if sprite:
-			sprite.modulate = _status_color if layer in SELF_LIT_LAYERS else tint
+			sprite.modulate = _emitted_tint(layer) if layer in SELF_LIT_LAYERS \
+				else tint
+
+
+## What a SELF_LIT layer is modulated by, given that it is not being dimmed by
+## the tile it stands on.
+##
+## The status light carries a colour the unit assigns — that is the whole point
+## of it. Every other self-lit layer is simply left alone at white, the muzzle
+## flash included, and the faction tint has no business on it either: a merc
+## recoloured rust still fires a white flash, because the tint is a stand-in for
+## a second sprite set and not a property of the character's ammunition.
+func _emitted_tint(layer: StringName) -> Color:
+	return _status_color if layer == &"status" else Color.WHITE
 
 
 ## Recolours the self-lit `status` layer. The security robots' one concession to

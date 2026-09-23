@@ -56,6 +56,10 @@ func _initialize() -> void:
 	await _check_brawler_shares_the_pace()
 	await _check_worm_crawls_one_tile()
 	await _check_worm_feels_footsteps()
+	await _check_mass_trades_the_warning_for_a_gather()
+	await _check_damage_shrinks_the_mass()
+	await _check_absorption_leaves_no_corpses()
+	await _check_the_cap_spills()
 
 	print("")
 	if _failures == 0:
@@ -134,7 +138,7 @@ func _check_brawler_shares_the_pace() -> void:
 	_free([swarm, brawler])
 
 
-## The worm is the named exception to flat movement (WormUnit.AP_PER_TILE): a
+## The worm is the named exception to flat movement (`WormUnit.move_ap_per_tile`): a
 ## step costs its whole pool. Asserted as numbers, because the pace is an
 ## agreement between three of them — the pool floor, the tile price and the
 ## bite price — and none of them says so on its own.
@@ -147,9 +151,136 @@ func _check_worm_crawls_one_tile() -> void:
 		"a worm crawls exactly one tile per activation (%d AP a tile, %d AP pool)" % [tile, pool])
 	_check(pool >= bite and tile + bite > pool,
 		"and closes OR bites, never both (tile %d + bite %d vs pool %d)" % [tile, bite, pool])
-	_check(worm.stats.max_hp() == 5 and worm.stats.melee_damage == 5,
-		"5 HP, 5 damage (got %d HP, %d damage)" % [worm.stats.max_hp(), worm.stats.melee_damage])
+	_check(worm.stats.max_hp() == 5 and worm.stats.melee_damage == 2,
+		"5 HP, 2 damage (got %d HP, %d damage)" % [worm.stats.max_hp(), worm.stats.melee_damage])
 	_free([worm])
+
+
+## THE MASS IS EXEMPT FROM THE WARNING TURN, AND THAT IS A DECISION.
+##
+## Everything above this line defends one property: a melee unit closes OR
+## swings in an activation, never both, so the player gets one turn between
+## "that thing is near" and "that thing is on me". The worm mass BREAKS it —
+## from count 2 there is no swing to price at all, because movement is the
+## attack (docs/design/factions/aliens/design-choices/worm-mass.md).
+##
+## This case exists so that break is asserted rather than merely absent. A test
+## file that simply stopped checking the worm would look identical to one where
+## somebody deleted an inconvenient failure, and the next person to read it
+## could not tell which had happened.
+##
+## What the mass pays instead is stated in the tiers below: it is slower than
+## anything it hunts at every size, so the warning moved from the moment of
+## contact to the whole approach.
+func _check_mass_trades_the_warning_for_a_gather() -> void:
+	var worm = await _spawn(WORM, ANCHOR, AlienPresets.worm("Worm"))
+	var soldier = await _spawn(PLAYER, ANCHOR + Vector3i(4, 0, 0),
+		ClassPresets.roll(UnitStats.UnitClass.ASSAULT, "Reyes"))
+
+	# A lone worm keeps the invariant the rest of this file defends.
+	_check(worm.move_ap_per_tile() + worm.action_cost(MELEE) > worm.ap_pool(),
+		"one worm still closes OR bites (tile %d + bite %d vs pool %d)"
+		% [worm.move_ap_per_tile(), worm.action_cost(MELEE), worm.ap_pool()])
+
+	# The ladder. HP is the only state, so every tier is reached by setting it.
+	var ladder := [[1, 1, 2], [5, 1, 10], [9, 2, 18], [13, 3, 26], [16, 4, 32]]
+	var ok := true
+	var seen := []
+	for rung in ladder:
+		var count: int = rung[0]
+		worm.current_hp = count * 5
+		worm._apply_count()
+		var tiles: int = worm.ap_pool() / worm.move_ap_per_tile()
+		seen.append("%dx=%dt/%ddmg" % [worm.worm_count(), tiles, worm.stats.melee_damage])
+		if worm.worm_count() != count or tiles != rung[1] or worm.stats.melee_damage != rung[2]:
+			ok = false
+	_check(ok, "the ladder is 1/1/2, 5/1/10, 9/2/18, 13/3/26, 16/4/32 (got %s)"
+		% ", ".join(PackedStringArray(seen)))
+
+	# The trade: even at its fastest the mass is slower than what it hunts, so it
+	# can cut a squad off but never run one down. This is the counterweight to
+	# the deleted warning turn, and it is the number that would quietly vanish if
+	# somebody "fixed" the mass's pace.
+	worm.current_hp = 16 * 5
+	worm._apply_count()
+	var mass_tiles: int = worm.ap_pool() / worm.move_ap_per_tile()
+	var soldier_tiles: int = soldier.ap_pool() / soldier.move_ap_per_tile()
+	_check(mass_tiles < soldier_tiles,
+		"a full Tide is still outrun by a soldier (%d vs %d tiles)" % [mass_tiles, soldier_tiles])
+
+	_free([worm, soldier])
+
+
+## Damage removes WORMS, which is the whole counterplay loop: shooting a mass
+## makes it weaker, slower and smaller on the same hit. Asserted on all three at
+## once, because a change that kept the count honest while letting damage or
+## pace drift would pass any one of them alone.
+func _check_damage_shrinks_the_mass() -> void:
+	var worm = await _spawn(WORM, ANCHOR, AlienPresets.worm("Worm"))
+	worm.current_hp = 16 * 5
+	worm._apply_count()
+	var was_tiles: int = worm.ap_pool() / worm.move_ap_per_tile()
+	var was_damage: int = worm.stats.melee_damage
+
+	# Six worms killed: 30 damage, which is four assault-rifle hits. This is the
+	# number the design promises the player — de-fanging a Tide is four hits,
+	# where killing it outright is ten.
+	worm.take_damage(30)
+	_check(worm.worm_count() == 10,
+		"30 damage kills exactly six worms (16 -> %d)" % worm.worm_count())
+	_check(worm.stats.melee_damage < was_damage,
+		"and the bite shrinks with it (%d -> %d)" % [was_damage, worm.stats.melee_damage])
+	_check(worm.ap_pool() / worm.move_ap_per_tile() < was_tiles,
+		"and so does the pace (%d -> %d tiles)"
+		% [was_tiles, worm.ap_pool() / worm.move_ap_per_tile()])
+	_check(worm.stats.melee_damage == 20,
+		"10 worms still one-shots most of the roster (%d vs 19-21 HP)" % worm.stats.melee_damage)
+	_free([worm])
+
+
+## Absorbing is not killing. The distinction is invisible in a damage number and
+## very visible to a Proctor: `take_damage`'s death path reports a CORPSE to the
+## security network, and a pile that merely FORMED must not leave sixteen of
+## them in a room where nothing died.
+func _check_absorption_leaves_no_corpses() -> void:
+	var big = await _spawn(WORM, ANCHOR, AlienPresets.worm("Big"))
+	var small = await _spawn(WORM, ANCHOR + Vector3i(1, 0, 0), AlienPresets.worm("Small"))
+	big.current_hp = 25  # five worms, so it outranks the newcomer
+	big._apply_count()
+
+	var network = root.get_node_or_null("SecurityNetwork")
+	var before: int = network._evidence.size() if network else 0
+
+	big.absorb(small)
+	await process_frame
+
+	_check(big.worm_count() == 6, "five worms plus one is six (got %d)" % big.worm_count())
+	_check(big.current_hp == 30, "and the HP came with it (got %d)" % big.current_hp)
+	_check(not is_instance_valid(small) or small.is_downed,
+		"the absorbed worm has left the board")
+	_check(_grid.get_tile(ANCHOR + Vector3i(1, 0, 0)).occupant == null,
+		"and released its tile")
+	var after: int = network._evidence.size() if network else 0
+	_check(after == before,
+		"and left no corpse behind (%d evidence before, %d after)" % [before, after])
+	_free([big])
+
+
+## The cap is a FRONT, not a ceiling: a worm arriving at a full pile does not
+## vanish into it, it spills alongside and seeds the next mass.
+func _check_the_cap_spills() -> void:
+	var full = await _spawn(WORM, ANCHOR, AlienPresets.worm("Full"))
+	var extra = await _spawn(WORM, ANCHOR + Vector3i(1, 0, 0), AlienPresets.worm("Extra"))
+	full.current_hp = 16 * 5
+	full._apply_count()
+
+	full.absorb(extra)
+	await process_frame
+
+	_check(full.worm_count() == 16, "a full pile stays at the cap (got %d)" % full.worm_count())
+	_check(is_instance_valid(extra) and not extra.is_downed and extra.current_hp == 5,
+		"and the newcomer survives alongside it as its own worm")
+	_free([full, extra])
 
 
 ## The worm's sense: MOVEMENT within tremor range, lit or not. Sight is switched

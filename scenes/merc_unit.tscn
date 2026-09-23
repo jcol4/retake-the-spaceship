@@ -28,12 +28,31 @@ script = ExtResource("1_script")
 ; warm rust reads at XCOM camera distance and collides with nothing: the security
 ; robots' status lights are the only other tinted thing on the field, and those
 ; are green/amber/red on a self-lit layer.
+;
+; foot_anchor is row 17 of 256, the MEAN lowest opaque row over the eight idle
+; facings -- see player_unit.tscn, which shares this art and carries the working.
+;
+; `flash` is the muzzle-flash OVERLAY, and it is LAST in `layers` because layers
+; draw back to front. It is the one layer that is not the character: it carries a
+; single frame of `fire_shoot` and shows nothing the rest of the time, which
+; UnitVisual._play already does for any layer with no art for the current pose.
+;
+; layer_canvas_scale says its art is drawn on a canvas twice the size, and the
+; reason is that the flash does not FIT in 2.56 m -- the barrel tip is 29 px from
+; the top edge of the frame facing nw. `render_sprites.py --flash` renders it
+; through the same camera at the same centre with double the extent and double
+; the resolution, so metres-per-pixel is unchanged. canvas_height and foot_anchor
+; above are still the body's and are not restated here: UnitVisual derives this
+; layer's own from the 2.0, which is what keeps the two from drifting apart.
 [node name="Visual" type="Node3D" parent="."]
 script = ExtResource("2_visual")
-layers = Array[StringName]([&"body"])
+layers = Array[StringName]([&"body", &"flash"])
 variant = &"merc"
 canvas_height = 2.56
-foot_anchor = Vector2(0.5, 0.984375)
+foot_anchor = Vector2(0.5, 0.93359375)
+layer_canvas_scale = {
+&"flash": 2.0
+}
 has_light = true
 faction_tint = Color(1, 0.66, 0.48, 1)
 

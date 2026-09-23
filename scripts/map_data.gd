@@ -36,6 +36,11 @@ enum Spawn {
 	NONE, PLAYER, ENEMY, SWARM, BRAWLER,
 	AUXILIUM, SAGITTARII, PROCTOR, SECURUS, LICTOR,
 	MERC, HUNTER, WORM,
+	# Not a unit type like the rest of this list — a destructible objective
+	# (Sec 11.7) that is merely PLACED the same way. Kept in `Spawn` rather
+	# than given its own field because the map format's whole contract is one
+	# glyph per tile, and a nest occupies a tile exactly as a unit does.
+	NEST,
 }
 
 ## The Cerberus half of `Spawn`, in roster order. Iterated by MapBuilder and by
@@ -104,6 +109,26 @@ var room_of: Dictionary = {}  # Vector3i cell pos -> index into `rooms`
 ## cover this implies is stored as ordinary `cover_edges` like any other
 ## crate — there is no separate cover concept for furniture.
 var obstacles: Array = []
+
+## How many worms stand on a `Spawn.WORM` tile: `Vector3i -> int`.
+##
+## A worm mass is not a second unit type — it is one `WormUnit` carrying more HP
+## (see docs/design/factions/aliens/design-choices/worm-mass.md) — so a map
+## cannot express one with a glyph the way it expresses a Brawler. What it needs
+## to name is a NUMBER attached to a tile that already has a worm on it, which is
+## the same shape of problem `[cover]` and `[obstacles]` exist for: a detail the
+## one-glyph-per-tile grid has no room to carry.
+##
+## ABSENT MEANS ONE. Every existing deck therefore reads exactly as it did, and
+## `MapAscii.encode_worms` writes nothing for a count of 1, so a deck that never
+## had a `[worms]` section does not grow one on the way out.
+var worm_counts: Dictionary = {}
+
+
+## Worms standing on `pos`. The single place the "absent means one" rule is
+## spelled out, so no caller has to remember it.
+func worms_at(pos: Vector3i) -> int:
+	return maxi(1, worm_counts.get(pos, 1))
 
 
 func set_cell(pos: Vector3i, cell: Cell) -> void:

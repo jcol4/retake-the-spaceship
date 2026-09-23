@@ -204,10 +204,43 @@ func get_reachable_tiles(from: Vector3i, max_tiles: int) -> Array[Vector3i]:
 	return reached
 
 
-func find_path(from: Vector3i, to: Vector3i, max_tiles: int, allow_occupied_goal := false) -> Array[Vector3i]:
+## Whether the path may step onto `n`.
+##
+## Three answers, and the third is the worm mass's (see `find_path`):
+##   free                 anybody may walk there
+##   the occupied GOAL    for pathing *toward* another unit, stopping short
+##   a hostile of `trample_for`  a unit that does not go around
+##
+## `trample_for` deliberately opens ONLY tiles held by something that unit would
+## engage. An ally's tile stays closed at every step including the goal, so a
+## mass still routes around its own kind rather than pathing through the pile it
+## is walking toward — merging is a thing that happens on ARRIVAL, not a way to
+## pass through a friend.
+func _path_open(n: Vector3i, goal: Vector3i, allow_occupied_goal: bool, trample_for: Unit) -> bool:
+	if is_free(n):
+		return true
+	if allow_occupied_goal and n == goal:
+		return true
+	if trample_for == null:
+		return false
+	var t: GridTileData = tiles.get(n)
+	if t == null or not t.passable:
+		return false  # a wall is a wall; nothing tramples geometry
+	var occupant := t.occupant as Unit
+	return occupant != null and not occupant.is_downed and trample_for.is_hostile_to(occupant)
+
+
+func find_path(from: Vector3i, to: Vector3i, max_tiles: int, allow_occupied_goal := false,
+		trample_for: Unit = null) -> Array[Vector3i]:
 	# BFS with parent tracking; returns path excluding `from`, empty if
 	# unreachable. With allow_occupied_goal the goal tile itself may be
 	# occupied (used to path *toward* another unit).
+	#
+	# `trample_for` is the worm mass's exception and the only one: a unit that
+	# attacks BY MOVING needs hostile-held tiles traversable en route, not merely
+	# as a destination, or it paths around the soldier it means to roll over.
+	# Everything else on the board passes null and sees the old two-answer gate.
+	# See `_path_open`, and docs/design/factions/aliens/design-choices/worm-mass.md.
 	#
 	# On an eight-way grid with uniform cost, a tile off both axes is reached in
 	# max(dx, dz) steps by MANY routes -- the diagonal steps may be taken in any
@@ -245,7 +278,7 @@ func find_path(from: Vector3i, to: Vector3i, max_tiles: int, allow_occupied_goal
 		if goal_depth >= 0 and cur_depth >= goal_depth:
 			break
 		for n in neighbors(cur):
-			if not is_free(n) and not (allow_occupied_goal and n == to):
+			if not _path_open(n, to, allow_occupied_goal, trample_for):
 				continue
 			var step: Vector3i = n - cur
 			# A stair link is neither a turn nor a heading: it changes floor, so

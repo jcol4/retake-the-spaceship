@@ -40,7 +40,9 @@ const PAN_SPEED := 12.0
 ## can scroll in, and where the camera starts.
 const MIN_ZOOM_SIZE := 10.5
 ## Fits maps/merc_duel_deck.txt (30x16 tiles, walls included) on screen at
-## once at a 16:9-or-wider aspect. Derived from the rig's fixed yaw/pitch: an
+## once at a 16:9-or-wider aspect. Derived from the rig's fixed pitch — the
+## diamond is the same at every one of the four snapped yaws, so SNAP_STEP does
+## not enter it: an
 ## isometric view's visible ground diamond has width:height = sqrt(3):1, so
 ## the binding constraint is height. For that room (45m x 24m), the diamond's
 ## screen height comes out to ~28.2 world units; a little headroom rounds it
@@ -67,6 +69,26 @@ func _ready() -> void:
 	add_to_group("camera_rig")
 	rotation = Vector3(-PITCH, START_YAW, 0.0)
 	_zoom_target = _camera.size
+	_make_audio_listener()
+
+
+## Positional audio listens from the RIG PIVOT, not from the Camera3D.
+##
+## Godot defaults the listener to the current Camera3D, which is wrong here in a
+## way that is specific to this rig being orthographic. The camera sits 18 m back
+## along local +Z (see camera_rig.tscn) purely to keep geometry off the near
+## plane, and zoom is driven by `Camera3D.size` rather than by moving it — so the
+## camera's distance to the action is a constant 18 m that NEVER CHANGES, however
+## far in the player scrolls. Every sound would sit at the same attenuated
+## distance forever, and scrolling in on a firefight would not bring it closer.
+##
+## The pivot is the point the rig is focused on, on the deck. Listening from
+## there gives distance falloff that tracks what the player is actually looking
+## at, and left/right panning that matches the framing.
+func _make_audio_listener() -> void:
+	var listener := AudioListener3D.new()
+	add_child(listener)
+	listener.make_current()
 
 
 func _unhandled_input(event: InputEvent) -> void:

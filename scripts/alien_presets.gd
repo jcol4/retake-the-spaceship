@@ -146,19 +146,31 @@ static func brawler(display_name: String) -> UnitStats:
 	return stats
 
 
-## The worm (WormUnit): 5 HP, a 5-damage bite, the slowest thing on the board.
+## The worm (WormUnit): 5 HP, a 2-damage bite, the slowest thing on the board —
+## and the SEED of the only thing on the board the squad cannot outfight.
+## Design: docs/design/factions/aliens/design-choices/worm-mass.md
+##
+## THIS BLOCK IS ONE WORM AND ONLY ONE. A pile is the same node with more HP, and
+## every number that scales with the pile is derived in `WormUnit` from
+## `current_hp` rather than authored here — there is no second preset to keep in
+## step with this one, deliberately.
+##
+## `base_hp` 5 is the unit the pile is counted in. `WormUnit.worm_count()` is
+## `ceil(hp / 5)`, so this number is also the size of the step a mass shrinks by
+## when it is shot, and moving it re-scales the whole ladder.
+##
+## `melee_damage` 2 is what ONE worm contributes (`WormUnit.DAMAGE_PER_WORM`
+## restates it, and `_apply_count` overwrites this field with `2 x count` the
+## moment the unit is ready). Alone that is ten bites to put down a soldier,
+## which is the point: a lone worm is an alarm, not a threat. Ten TOGETHER is
+## 20 against a 19-21 HP soldier, which is also the point.
 ##
 ## Both zeros are dials set to buy a price, like the swarm's Reflexes 40, and
-## neither is a characterisation:
-##
-##   fitness 0   The 6 AP floor of the pool (AP_POOL_BASE), and no HP from
-##               Fitness — so `base_hp` IS max HP. WormUnit prices a tile at the
-##               whole pool, so this buys exactly one tile per activation.
-##   reflexes 0  A bite at the undiscounted 6 AP — the whole pool again. Closes OR
-##               bites, never both: the swarm's turn of warning, kept.
-##
-## So one bite is a full activation, and a worm next to you at the start of its
-## draw is 5 damage you can see coming from the tile before.
+## neither is a characterisation. Both are now overridden in `WormUnit` rather
+## than read through the formulas — `ap_pool()` returns a flat 12 and the bite is
+## priced at the whole of it — so what these buy is only the HP and initiative
+## side of the block. They are kept at zero so that nothing reading the stats
+## directly is handed a pace or a price that disagrees with the unit's own.
 static func worm(display_name: String) -> UnitStats:
 	var stats := UnitStats.new()
 	stats.display_name = display_name
@@ -166,10 +178,53 @@ static func worm(display_name: String) -> UnitStats:
 	stats.reflexes = 0
 	stats.fitness = 0
 	stats.luck = 15
+	# Literals, NOT `WormUnit.HP_PER_WORM` / `DAMAGE_PER_WORM`, though those name
+	# exactly these two numbers. `WormUnit` sheds worms and builds their stats
+	# through this file, so a reference back to it here is a cyclic class
+	# dependency and Godot rejects the pair with an unrelated-looking
+	# "Identifier not found" on whichever it compiles second.
+	#
+	# This table is the AUTHORING side and those constants are the restatement,
+	# so if these move, move them there too — `WormUnit`'s own doc comment says
+	# the same thing from the other end.
 	stats.base_hp = 5
 	# Unarmed at range like the rest of the melee tier — stats.weapon stays null.
 	stats.melee_base_accuracy = 45
-	stats.melee_damage = 5
+	stats.melee_damage = 2
 	stats.base_initiative = 17  # -> 19, below the swarm: the last thing to act
 	stats.equipment_initiative = 2
+	return stats
+
+
+## The Nest (Sec 11.7). An OBJECTIVE wearing a stat block, not a combatant, so
+## most of this file's usual reasoning does not apply to it:
+##
+##   base_hp 50  The design's number, kept as-is on 2026-09-22 knowing it
+##               predates the lethality rescale and now reads as roughly twice
+##               the toughest unit on the board. That is the intent — an
+##               objective that folds to one burst is not an objective. See
+##               design-choices/spawn-nests.md.
+##   fitness 0   So `base_hp` IS max HP (UnitStats.max_hp, LEVEL_BONUS_HP is 0).
+##               Nothing about a nest should be rolled: two nests on a deck must
+##               take the same number of bursts, or the player cannot learn what
+##               destroying one costs.
+##   perception  Zero, and it is the honest value rather than a small one. A
+##   reflexes    nest has no senses and never acts — `NestUnit.take_turn`
+##   luck        passes without looking — so these terms are never read. Left at
+##               0 so anyone grepping for what a nest can do finds nothing.
+##
+## No initiative worth tuning either: it draws from the pool and passes.
+static func nest(display_name: String) -> UnitStats:
+	var stats := UnitStats.new()
+	stats.display_name = display_name
+	stats.perception = 0
+	stats.reflexes = 0
+	stats.fitness = 0
+	stats.luck = 0
+	stats.base_hp = 50
+	# Unarmed at every range: it has no attack of any kind, now or planned.
+	stats.melee_base_accuracy = 0
+	stats.melee_damage = 0
+	stats.base_initiative = 1  # dead last; it passes, so the slot costs nothing
+	stats.equipment_initiative = 0
 	return stats

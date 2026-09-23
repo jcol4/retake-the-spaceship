@@ -78,7 +78,12 @@ func _draw_next() -> void:
 		return
 	if _check_end_conditions():
 		return
-	pool = pool.filter(func(u: Unit) -> bool: return not u.is_downed)
+	# `is_instance_valid` FIRST, and it is load-bearing rather than defensive.
+	# The pool is a snapshot taken at turn start, and a worm absorbed into a mass
+	# leaves the board by being freed rather than by dying (WormUnit.dissolve) —
+	# so between two draws an entry here can become a freed object, and reading
+	# `.is_downed` off one is a hard crash.
+	pool = pool.filter(func(u: Unit) -> bool: return is_instance_valid(u) and not u.is_downed)
 	if pool.is_empty():
 		_start_turn()
 		return

@@ -1,6 +1,6 @@
 """Renders a rigged Blender character into the flat sprite sheet the game loads.
 
-Two modes:
+Four modes:
 
     # Build a .blend with the camera and lights already correct, to animate into.
     blender.exe -b -P tools/render_sprites.py -- --setup art_src/merc.blend
@@ -12,7 +12,11 @@ Two modes:
     blender.exe -b art_src/merc_anim.blend -P tools/render_sprites.py -- \
         --variant merc --markers --poses idle
 
-That last mode is seconds rather than minutes and never touches a PNG, because
+    # Render the muzzle flash on its own, oversized, overlay layer.
+    blender.exe -b art_src/merc_anim.blend -P tools/render_sprites.py -- \
+        --variant merc --flash
+
+The MARKER export is seconds rather than minutes and never touches a PNG, because
 the marker's position is a projection of a known point through a known camera
 rather than something to be searched for in an image. Re-run it whenever the rig
 moves; re-render only when the ART moves. See MARKER_MATERIAL.
@@ -26,6 +30,10 @@ Everything is rendered into a SINGLE `body` layer. Gear swaps therefore mean
 re-rendering a character rather than reassigning a layer, which is the trade the
 flattened path takes in exchange for correct self-occlusion between the rifle,
 the arms and the torso -- and it is what Fallout did too.
+
+The one exception is the muzzle flash, which is its own `flash` layer for a
+reason that is about FRAMING rather than gear: it does not fit in the body's
+canvas. See FLASH_LAYER.
 """
 
 import argparse
@@ -38,14 +46,24 @@ import bpy
 from bpy_extras.object_utils import world_to_camera_view
 from mathutils import Matrix, Vector
 
-## Pixels of slack added below the lowest geometry when reporting `foot_anchor`.
+## Pixels of slack added below the lowest geometry when reporting the NO-CLIP
+## anchor (the one nothing ever falls below).
 ##
-## The reported anchor is measured from GEOMETRY, but the thing that must not
-## fall below the floor is the lowest opaque PIXEL, and antialiasing puts those
-## roughly a pixel outside the silhouette. Two covers it, and erring low is free:
-## an anchor a hair below the feet lifts the sprite by a hair, which is invisible,
-## while an anchor a hair above sinks it into the floor, which is not.
+## That anchor is measured from GEOMETRY, but the thing that must not fall below
+## the floor is the lowest opaque PIXEL, and antialiasing puts those roughly a
+## pixel outside the silhouette. Two covers it, and erring low is free there: an
+## anchor a hair below the feet lifts the sprite by a hair.
+##
+## It is NOT applied to the grounded anchor `report_anchor` actually recommends,
+## which is a mean and is meant to cut into the silhouette a little.
 ANCHOR_SAFETY_PX = 2
+
+## The pose whose feet define where the ground is, when the variant has one.
+##
+## Idle is what is on screen almost all of the time, so it is idle that must look
+## planted; a mid-stride walk frame reaching lower is a frame nobody reads as
+## floating. See `report_anchor`.
+GROUNDING_POSE = "idle"
 
 # --- The camera contract -----------------------------------------------------
 #
@@ -58,9 +76,12 @@ ANCHOR_SAFETY_PX = 2
 ## Mirrors `camera_rig.gd` PITCH.
 PITCH = math.atan(1.0 / math.sqrt(2.0))
 
-## Mirrors `camera_rig.gd` START_YAW. The camera no longer rotates in game, so
-## this is the ONLY yaw anything is ever seen from -- which is exactly what lets
-## the key light be fixed in world space below.
+## Mirrors `camera_rig.gd` START_YAW. The camera DOES rotate in game, but only
+## in quarter turns (`camera_rig.gd` SNAP_STEP), so it is only ever at this yaw
+## plus a multiple of 90 degrees -- and a quarter turn moves the eight direction
+## buckets by exactly two whole steps. Every facing the player can see is
+## therefore one of the eight rendered here, seen at this yaw, which is what
+## lets the key light be fixed in world space below.
 YAW = math.radians(45.0)
 
 ## World height of the full rendered image, in metres. NOT the character's
@@ -121,14 +142,18 @@ GAME_CAMERA_SIZE = 10.5
 ## The sprite is a vertical billboard writing depth, so those 36 px land beneath
 ## the floor mesh and get occluded -- feet visibly sunk into the ground.
 ##
-## The anchor must instead sit at or below the LOWEST PIXEL across every pose.
-## Measure it from the rendered PNGs rather than deriving it, and re-measure
-## when a pose with a longer reach lands:
+## Nor can the anchor sit at the LOWEST PIXEL across every pose, which is what
+## this file used to say and what left every character floating. Which row the
+## feet reach is a function of the FACING -- the tilted camera projects a foot
+## planted toward the viewer lower than the same foot planted across -- so the
+## global minimum is one frame of one facing of one pose, and anchoring there
+## hangs all the others that many pixels in the air. Measured on the merc: idle
+## bottoms out at row 8 facing south and row 32 facing west, and the minimum over
+## every pose is row 6, so seven facings out of eight floated.
 ##
-##     lowest alpha row L over all body_<variant>_*.png
-##     foot_anchor.y = 1 - L / RESOLUTION
-##
-## FLOOR_MARGIN only has to be large enough that L stays above zero.
+## `report_anchor` measures the mean over the idle facings instead. FLOOR_MARGIN
+## only has to be large enough that no pose clips the bottom edge; it is not an
+## input to the anchor at all.
 FLOOR_MARGIN = 0.45
 
 ## Square, so that the horizontal half-extent is also 1.28 m -- comfortably wider
@@ -266,6 +291,31 @@ VARIANT_BUCKET_ZERO = {
     # moving unit, and a wrong bucket is cheap to fix (rename files, do not
     # re-render).
     "worm": 20.2,
+    # The three worm PILES (art_src/worm_pile_*.blend, built by
+    # tools/build_worm_piles.py) inherit the single worm's base, and that is a
+    # fact about how they are made rather than a convenience: every instance in
+    # a pile IS a copy of that armature, carrying the same laid-flat rest
+    # orientation the 20.2 was measured against. What turns is the `WormPile`
+    # Empty they are parented to, which has no orientation of its own.
+    #
+    # Unlike the nest, a pile MOVES, so its buckets have to be right rather than
+    # merely self-consistent -- judge these on a mass crossing a room, not on a
+    # still, exactly as the note above says for the worm.
+    "worm_clutch": 20.2,
+    "worm_knot": 20.2,
+    "worm_tide": 20.2,
+    # The nest (art_src/worm_spawn_scaled.blend) takes the shared default, and
+    # that is a DECISION rather than an omission. A nest never moves and never
+    # turns, so it has no facing to get wrong: all eight buckets are the same
+    # object seen from eight sides, and any base produces a self-consistent set.
+    # What the base picks is merely which way the body happens to lie on the
+    # deck. Rename files a bucket at a time if you want it lying differently --
+    # there is nothing here a re-render could fix.
+    #
+    # It still needs all eight: the camera snaps in quarter turns
+    # (`camera_rig.gd` SNAP_STEP), so even a motionless prop is seen from four
+    # yaws, and a unit's sprite direction is its yaw MINUS the camera's.
+    "nest": BUCKET_ZERO_DEGREES,
 }
 
 ## Per-pose overrides, keyed by variant then pose, for an action posed at a
@@ -330,6 +380,19 @@ POSE_ACTION = {
     # by decision, the way the brawler's swing plays its stance. Its third
     # action, `just emerged`, is not wired to any pose yet.
     "worm": {"idle": "worm idle", "walk": "walking", "melee": "worm idle"},
+    # The piles render TWO poses and no more, and both absences are decisions.
+    #
+    # No `melee`: a mass has no attack action. It attacks by walking through the
+    # tile you are standing on (WormUnit._trample_along), so the trample IS the
+    # walk cycle and a separate swing would be art for a thing that never
+    # happens.
+    #
+    # No `downed`: a mass shrinks rather than dies. Damage removes whole worms,
+    # so it only ever reaches zero HP from a count of one -- which is a worm, and
+    # the worm has no death art by decision either.
+    "worm_clutch": {"idle": "worm idle", "walk": "walking"},
+    "worm_knot": {"idle": "worm idle", "walk": "walking"},
+    "worm_tide": {"idle": "worm idle", "walk": "walking"},
 }
 
 ## Frames to sample for a pose, overriding the duration-derived count. Keyed by
@@ -353,6 +416,18 @@ VARIANT_FRAMES = {
     # `walking` is drawn as 24 frames at 12 fps; sampled at the soldier's 1.4 s
     # walk it would come out 17 and drop every third drawing.
     "worm": {"walk": 24},
+    # `walk` matches the single worm's 24 for the same reason it does there --
+    # the action is drawn as 24 frames at 12 fps and resampling drops drawings.
+    #
+    # `idle` is CUT to 12 where the worm renders the full 24, and the cut is
+    # affordable here for a reason the worm's own idle does not have: a pile's
+    # instances are phase-shifted against each other (build_worm_piles.py), so
+    # the motion a viewer reads is sixteen worms out of step rather than the
+    # detail of any one cycle. Halving it halves the file count on the three
+    # heaviest variants in the project.
+    "worm_clutch": {"walk": 24, "idle": 12},
+    "worm_knot": {"walk": 24, "idle": 12},
+    "worm_tide": {"walk": 24, "idle": 12},
 }
 
 
@@ -505,6 +580,59 @@ FALLBACK_BORE_AXIS = (1.0, 0.0, 0.0)
 MARKER_FILENAME = "muzzle_%s.json"
 
 
+# --- The muzzle flash overlay ------------------------------------------------
+#
+# The flash is a LAYER OF ITS OWN, rendered by `--flash`, and the reason is
+# framing rather than tidiness. `muzzle_%s.json` puts the barrel tip 29 px from
+# the top edge of the 256 px canvas facing NW and 36 px from the side facing NE,
+# so a flash reaching more than about 0.3 m past the muzzle is CUT OFF -- on a
+# different edge for every facing.
+#
+# Rendering that one frame of the BODY layer on a bigger canvas does not work:
+# `unit_visual.gd` `_apply_frame_scale` sizes a layer once, from the first frame
+# it finds, so a single oversized PNG in body_<variant>.tres would be drawn at
+# the body's pixel_size -- too big and off its pivot. Enlarging the canvas for
+# every frame instead means re-rendering every pose of every variant, and then
+# moving CANVAS_HEIGHT and the scenes' `canvas_height` together.
+#
+# A separate layer costs neither. It renders through the SAME camera at the SAME
+# centre with the ortho extent and the resolution both multiplied by
+# FLASH_CANVAS_SCALE, so metres-per-pixel is unchanged and the registration is
+# the fraction identity in `build_camera`. Eight images, and the body art is
+# never touched.
+FLASH_LAYER = "flash"
+
+## The pose the flash belongs to, and the one frame of it the flash is drawn on.
+##
+## ONE frame because that is what a muzzle flash IS: at 0.11 s over two drawings
+## the flash is gone before the second one. Every other frame of the pose still
+## gets a file -- see write_blank for why a shorter animation is not the same
+## thing as a blank frame.
+FLASH_POSE = "fire_shoot"
+FLASH_FRAME = 0
+
+## How many times bigger the flash canvas is than the body's. 2 gives 5.12 m
+## across 512 px: 2.56 m of clearance from the centre in every direction against
+## the ~0.3 m the body canvas leaves, and it costs nothing, because this pass
+## renders 8 images where a variant renders several hundred.
+##
+## Raise it if a flash still clips; the game needs no edit when you do, because
+## `layer_canvas_scale` on the character scene is the only place the number is
+## written down and `unit_visual.gd` derives the anchor from it.
+FLASH_CANVAS_SCALE = 2
+
+## Identified by MATERIAL first, for the same reason the muzzle marker is: the
+## material name is the part that says what the object is FOR, so renaming the
+## mesh does not break the render.
+##
+## The merc's flash is found by NAME today -- its materials are the two the
+## shading needed (`Muzzle Side`, `Muzzle Face`), neither of which names the
+## object's job. Giving it a `muzzle_flash` material as well is what would make
+## the name free to change; until then `--flash-object` is the escape hatch.
+FLASH_MATERIAL = "muzzle_flash"
+FLASH_OBJECT = "muzzle_flash"
+
+
 def _by_material_or_name(material, name):
     for obj in bpy.data.objects:
         if obj.type != "MESH":
@@ -650,18 +778,26 @@ def _clear_scene():
                 block.remove(item)
 
 
-def build_camera(scene):
+def build_camera(scene, canvas_scale=1.0):
     """Creates (or re-aims) the one orthographic camera every frame is shot from.
 
     Placed so the WORLD ORIGIN lands FLOOR_MARGIN metres above the bottom edge
     of the frame, which is where `UnitVisual.foot_anchor` says it is. Get the two
     out of step and every character floats or sinks by the difference.
+
+    `canvas_scale` multiplies the ortho extent WITHOUT moving the camera, so an
+    enlarged canvas grows about the same centre and a world point that sat at
+    fraction f of the standard canvas sits at 0.5 + (f - 0.5) / canvas_scale of
+    this one. That identity is what lets the muzzle-flash layer be rendered on a
+    bigger frame and still register with the body art -- see FLASH_LAYER, and
+    `unit_visual.gd` `_layer_anchor`, which is the same arithmetic read back.
     """
     cam_data = bpy.data.cameras.get("SpriteCam") or bpy.data.cameras.new("SpriteCam")
     cam_data.type = "ORTHO"
     # ortho_scale is the extent across the LARGER image dimension. The render is
-    # square, so this is the canvas height directly.
-    cam_data.ortho_scale = CANVAS_HEIGHT
+    # square, so this is the canvas height directly -- times `canvas_scale`,
+    # which is the ONE thing an enlarged canvas changes about this camera.
+    cam_data.ortho_scale = CANVAS_HEIGHT * canvas_scale
 
     cam = bpy.data.objects.get("SpriteCam")
     if cam is None:
@@ -685,6 +821,11 @@ def build_camera(scene):
     # content down, so this drops the world origin to FLOOR_MARGIN metres above
     # the bottom edge rather than onto it -- see FLOOR_MARGIN for why the
     # difference matters.
+    #
+    # NOT multiplied by `canvas_scale`, deliberately: this offset is what fixes
+    # where the origin sits in the STANDARD canvas, and scaling it too would
+    # slide the enlarged canvas rather than grow it, breaking the fraction
+    # identity the docstring rests on.
     distance = 10.0
     cam.location = ((-view_dir * distance)
                     + (screen_up * (CANVAS_HEIGHT / 2.0 - FLOOR_MARGIN)))
@@ -741,11 +882,11 @@ def build_lights(scene):
         bg.inputs[1].default_value = 0.9
 
 
-def configure_render(scene):
+def configure_render(scene, canvas_scale=1.0):
     scene.render.engine = "CYCLES"
     scene.cycles.samples = 128
-    scene.render.resolution_x = RESOLUTION
-    scene.render.resolution_y = RESOLUTION
+    scene.render.resolution_x = int(RESOLUTION * canvas_scale)
+    scene.render.resolution_y = int(RESOLUTION * canvas_scale)
     scene.render.resolution_percentage = 100
     scene.render.film_transparent = True
     scene.render.image_settings.file_format = "PNG"
@@ -919,8 +1060,11 @@ def lowest_point_on_screen(scene, camera, meshes):
     return lowest
 
 
-def report_anchor(lowest_ndc):
+def report_anchor(lowest_by_facing):
     """Prints the `UnitVisual.foot_anchor` these renders actually need.
+
+    `lowest_by_facing` maps (pose, direction) to the lowest normalised screen
+    height any vertex reached across that facing's frames.
 
     Printed rather than left to be derived because deriving it is what went
     wrong twice: the obvious formula, 1 - FLOOR_MARGIN / CANVAS_HEIGHT, anchors
@@ -928,28 +1072,67 @@ def report_anchor(lowest_ndc):
     sprite is a depth-writing billboard, so anything below the anchor is under
     the floor mesh and gets occluded -- feet sunk into the ground.
 
-    This is a property of the poses, not of the pipeline, so it changes whenever
-    art with a longer reach lands and there is no constant that can stand in
-    for it.
+    Anchoring on the other extreme, the lowest pixel over every frame, is what
+    this printed before and it is the reason every character floated. The row
+    the feet reach is a function of the FACING: the camera is tilted, so a foot
+    planted toward the viewer projects lower than the same foot planted across
+    it, and on the merc that is a 24 px spread across idle's eight buckets. The
+    minimum is one facing's answer; using it hangs the other seven that far off
+    the floor.
+
+    So: the MEAN over the grounding pose's facings, which puts the average foot
+    on the floor and lets the facings that reach lowest push a toe under it.
+    Under the floor reads as planted; above it reads as flying. The no-clip
+    minimum is still printed, because it is the number to check a nest or a worm
+    against -- a low, sprawling body like the worm is nearly all depth, and a
+    vertical billboard turns depth into height, so the mean would bury it.
+
+    This is a property of the poses, not of the pipeline, so it moves whenever
+    the art does and there is no constant that can stand in for it.
     """
-    row = lowest_ndc * RESOLUTION
-    safe_row = max(0.0, row - ANCHOR_SAFETY_PX)
-    anchor = 1.0 - safe_row / RESOLUTION
     origin_row = FLOOR_MARGIN / CANVAS_HEIGHT * RESOLUTION
+    rows = {key: ndc * RESOLUTION for key, ndc in lowest_by_facing.items()}
+    if not rows:
+        print("[render_sprites] no frames rendered -- no anchor to report")
+        return
+
+    low_row = min(rows.values())
+    safe_row = max(0.0, low_row - ANCHOR_SAFETY_PX)
+    no_clip = 1.0 - safe_row / RESOLUTION
+
+    # The grounding pose if it was rendered, every pose if it was not -- a
+    # --only-poses run still gets an answer, just a narrower one.
+    grounding = [row for (pose, _), row in rows.items() if pose == GROUNDING_POSE]
+    label = GROUNDING_POSE
+    if not grounding:
+        grounding = list(rows.values())
+        label = "all rendered poses"
+    mean_row = sum(grounding) / len(grounding)
+    anchor = 1.0 - mean_row / RESOLUTION
 
     print("[render_sprites] lowest pixel: row %.1f of %d (world origin is row "
           "%.0f, so the art reaches %.1f px BELOW it)"
-          % (row, RESOLUTION, origin_row, origin_row - row))
-    if row <= 0.0:
+          % (low_row, RESOLUTION, origin_row, origin_row - low_row))
+    print("[render_sprites] %s feet span rows %.1f to %.1f across %d facings, "
+          "mean %.1f" % (label, min(grounding), max(grounding), len(grounding),
+                         mean_row))
+    if low_row <= 0.0:
         print("[render_sprites] *** CLIPPED: the pose runs off the bottom of the "
               "canvas. Raise FLOOR_MARGIN (now %.2f m) and re-render. ***"
               % FLOOR_MARGIN)
-    elif row < ANCHOR_SAFETY_PX + 2:
+    elif low_row < ANCHOR_SAFETY_PX + 2:
         print("[render_sprites] WARNING: only %.1f px of floor margin left. A "
-              "longer pose will clip -- consider raising FLOOR_MARGIN." % row)
+              "longer pose will clip -- consider raising FLOOR_MARGIN." % low_row)
     print("[render_sprites] SET UnitVisual.foot_anchor = (0.5, %.8f)" % anchor)
+    print("[render_sprites]   (grounded: the mean over %s, so the facings that "
+          "reach lowest sink %.0f px into the floor -- that is intended)"
+          % (label, mean_row - min(grounding)))
+    print("[render_sprites]   no-clip alternative (0.5, %.8f) never sinks and "
+          "floats up to %.0f px; use it only for a LOW, SPRAWLING body whose "
+          "silhouette is mostly depth, like the worm"
+          % (no_clip, max(grounding) - safe_row))
     print("[render_sprites]   (measured over the frames rendered THIS run; "
-          "render every pose to get the number the character actually needs)")
+          "render every facing to get the number the character actually needs)")
 
 
 def poses_to_do(variant, only_poses=None):
@@ -1045,6 +1228,9 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
     # A locator, not art. Forced off the film before the first frame -- see
     # MARKER_MATERIAL for why stripping it out afterwards is not an option.
     hide_marker(find_marker())
+    # Same reason, one object further: the flash is art, but it is art for a
+    # DIFFERENT layer, and the body canvas is too small to hold it.
+    hide_flash(find_flash())
     unlink_missing_images()
 
     # NOT read from the character -- see BUCKET_ZERO_DEGREES for the bug that
@@ -1061,7 +1247,9 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
               % (pose, action_name))
     written = 0
     meshes = renderable_meshes()
-    lowest_ndc = 1.0
+    # Kept per (pose, facing) rather than as one running minimum: the anchor is a
+    # mean ACROSS facings, and a single number cannot be un-collapsed later.
+    lowest_by_facing = {}
 
     for pose, direction, frame_index in iter_pose_frames(
             variant, character, todo, directions or GAME_DIRECTIONS):
@@ -1070,8 +1258,10 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
         # Measured before the render, on the same evaluated pose the render is
         # about to shoot. Costs a vertex loop against a Cycles frame, which is
         # nothing, and saves reading 500 PNGs back.
-        lowest_ndc = min(lowest_ndc,
-                         lowest_point_on_screen(scene, scene.camera, meshes))
+        key = (pose, direction)
+        lowest_by_facing[key] = min(
+            lowest_by_facing.get(key, 1.0),
+            lowest_point_on_screen(scene, scene.camera, meshes))
 
         bpy.ops.render.render(write_still=True)
         written += 1
@@ -1082,7 +1272,7 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
     character.rotation_euler.z = math.radians(
         VARIANT_BUCKET_ZERO.get(variant, BUCKET_ZERO_DEGREES))
     print("[render_sprites] wrote %d images to %s" % (written, out_dir))
-    report_anchor(lowest_ndc)
+    report_anchor(lowest_by_facing)
     print("[render_sprites] now run build_sprite_frames.gd with SF_VARIANT=%s "
           "SF_LAYERS=body" % variant)
 
@@ -1193,6 +1383,228 @@ def export_markers(variant, out_dir, character, marker, rear=None,
           % (len(tracks), path))
 
 
+def find_flash(explicit=None):
+    """The muzzle-flash object, or None if this .blend has not got one yet."""
+    if explicit:
+        obj = bpy.data.objects.get(explicit)
+        if obj is None:
+            sys.exit("--flash-object %r not found in the .blend" % explicit)
+        return obj
+    return _by_material_or_name(FLASH_MATERIAL, FLASH_OBJECT)
+
+
+def _flash_subtree(flash):
+    """`flash` and everything parented under it.
+
+    Walked rather than assumed, because a flash is as likely to be a cone plus a
+    glow card plus a few sparks as it is to be one mesh, and hiding half of it
+    would be a silent half-render.
+    """
+    keep = {flash}
+    changed = True
+    while changed:
+        changed = False
+        for obj in bpy.context.scene.objects:
+            if obj not in keep and obj.parent in keep:
+                keep.add(obj)
+                changed = True
+    return keep
+
+
+def hide_flash(flash):
+    """Keeps the muzzle flash out of the BODY render.
+
+    It lives in the same .blend and hangs off the weapon bone, so it is in shot
+    for `fire_shoot` unless something says otherwise. Baked into the body layer
+    it would be stuck inside the 2.56 m canvas and clipped on every facing --
+    the entire thing the separate layer exists to avoid -- and it would then be
+    drawn a second time the moment the overlay layer was switched on.
+
+    Same doctrine as `hide_marker`: what does and does not reach the film is
+    decided HERE, not left to whatever the .blend was last saved with.
+    """
+    if flash is None:
+        print("[render_sprites] no muzzle flash object found (%r material, else "
+              "%r) -- fine if this character has none"
+              % (FLASH_MATERIAL, FLASH_OBJECT))
+        return
+    for obj in _flash_subtree(flash):
+        obj.hide_render = True
+    print("[render_sprites] %r is the muzzle flash -- hidden from the body "
+          "render; --flash draws it on its own layer" % flash.name)
+
+
+def hide_all_but_flash(flash):
+    """Takes every mesh except the flash off the film.
+
+    The character is HIDDEN, not removed, and that distinction is the whole
+    trick: the flash hangs off the weapon bone, so the armature still has to be
+    posed by the action and turned through the eight facings for the flash to
+    land where the barrel actually is. Hiding the meshes leaves the rig doing
+    exactly that and renders none of it.
+
+    Lights and the world are left alone. An emissive flash does not need them,
+    but a flash that is textured rather than emissive does, and which one the art
+    is is not this pass's business.
+    """
+    kept = _flash_subtree(flash)
+    hidden = 0
+    for obj in bpy.context.scene.objects:
+        if obj.type != "MESH" or obj in kept:
+            continue
+        if not obj.hide_render:
+            obj.hide_render = True
+            hidden += 1
+    print("[render_sprites] flash pass: %r kept (+%d parented to it), "
+          "%d other meshes hidden" % (flash.name, len(kept) - 1, hidden))
+
+
+def write_blank(path, size, scene):
+    """A fully transparent PNG, for the frames of the pose the flash is NOT on.
+
+    Written rather than skipped, and the reason is timing. `build_sprite_frames`
+    derives playback speed as frames / duration, so a one-frame flash and a
+    two-frame body would be handed the same 0.11 s and run at different rates;
+    `unit_visual.gd` starts every layer in the same engine frame on the
+    assumption that they then stay in step. Equal frame counts is what that
+    assumption actually rests on, so the flash keeps the body's count and spends
+    the frames it does not need on nothing.
+    """
+    image = bpy.data.images.new("flash_blank", size, size, alpha=True)
+    # Regenerates the buffer: `images.new` makes an OPAQUE black image, which
+    # would composite as a black square over the character rather than as
+    # nothing at all.
+    image.generated_color = (0.0, 0.0, 0.0, 0.0)
+    image.alpha_mode = "STRAIGHT"
+    # save_render rather than save, so the file is written through the scene's
+    # own image settings -- the same RGBA PNG the renders come out as.
+    image.save_render(filepath=path, scene=scene)
+    bpy.data.images.remove(image)
+
+
+def check_flash_turns(character, flash, variant):
+    """Fails loudly if the flash does not turn with the character.
+
+    The eight facings are made by ROTATING the character between renders, so an
+    object that is not parented into the rig does not turn with it: every facing
+    renders the flash in the same place, and the output is eight plausible PNGs
+    of which seven have the flash nowhere near the barrel. This is the same
+    failure `mute_object_transform_curves` guards the body against, it is just
+    as invisible after the fact -- right file count, right names, right-looking
+    images -- and it is the first thing a flash added to a .blend gets wrong,
+    because a mesh added at the barrel in one pose LOOKS finished.
+    """
+    scene = bpy.context.scene
+    action = bpy.data.actions[source_action(FLASH_POSE, variant)]
+    character.animation_data.action = action
+    muted = mute_object_transform_curves(action, character)
+    frames = sample_frames(action, frame_count(FLASH_POSE, variant),
+                           FLASH_POSE in LOOP_TIME)
+    blender_frame = frames[FLASH_FRAME]
+    zero = math.radians(bucket_zero(FLASH_POSE, variant))
+
+    # A QUARTER turn, not a whole one: two buckets apart is far enough that no
+    # plausible flash lands in the same world spot twice, and close enough that
+    # the check costs two frame_sets.
+    seen = []
+    for bucket in (0, 2):
+        character.rotation_euler.z = zero + math.radians(45.0 * bucket)
+        scene.frame_set(int(round(blender_frame)),
+                        subframe=float(blender_frame % 1.0))
+        seen.append(marker_world(flash))
+    for fcurve in muted:
+        fcurve.mute = False
+
+    if (seen[0] - seen[1]).length > 1e-4:
+        return
+    sys.exit(
+        "[render_sprites] %r does not turn with %r: two facings apart it is "
+        "still at (%.3f, %.3f, %.3f). It is not parented into the rig, so all "
+        "eight facings would render it IDENTICALLY -- seven of them with the "
+        "flash hanging in the air away from the barrel. Parent it to the "
+        "weapon bone, or to the rifle, which already is, and re-place it "
+        "there: its keys are in world space now and become local to the "
+        "parent." % (flash.name, character.name, seen[0].x, seen[0].y, seen[0].z))
+
+
+def render_flash(variant, out_dir, character, flash, directions=None):
+    """Renders the muzzle flash alone, on the enlarged canvas, for ONE frame.
+
+    Writes `flash_<variant>_fire_shoot_<dir>_<n>.png` across the eight facings:
+    the flash on FLASH_FRAME, a transparent frame everywhere else in the pose.
+    A minute or so against the tens of minutes a variant takes, which is the
+    point of the split -- a flash can be re-authored and re-rendered as often as
+    it takes without a single frame of the body art being touched.
+    """
+    scene = bpy.context.scene
+    configure_render(scene, FLASH_CANVAS_SCALE)
+    build_camera(scene, FLASH_CANVAS_SCALE)
+    os.makedirs(out_dir, exist_ok=True)
+
+    if character.animation_data is None:
+        character.animation_data_create()
+
+    action = source_action(FLASH_POSE, variant)
+    if not any(a.name == action for a in bpy.data.actions):
+        sys.exit("[render_sprites] no %r action in this .blend -- the flash is "
+                 "rendered from the same action as the body's %r pose, so "
+                 "there is nothing to sample."  % (action, FLASH_POSE))
+
+    # Before a single Cycles frame is spent, and before the scene is touched --
+    # the failure this catches produces a complete, correct-looking set of files.
+    check_flash_turns(character, flash, variant)
+    hide_all_but_flash(flash)
+    unlink_missing_images()
+
+    size = int(RESOLUTION * FLASH_CANVAS_SCALE)
+    written = 0
+    blanks = 0
+    # `iter_pose_frames` rather than a loop of its own, for the reason given in
+    # its docstring: frame N of this layer has to be the same instant as frame N
+    # of the body, and one piece of code deciding what the frames ARE is the only
+    # thing that guarantees it.
+    for pose, direction, frame_index in iter_pose_frames(
+            variant, character, [FLASH_POSE], directions or GAME_DIRECTIONS):
+        path = os.path.join(out_dir, "%s_%s_%s_%s_%d.png"
+                            % (FLASH_LAYER, variant, pose, direction, frame_index))
+        if frame_index != FLASH_FRAME:
+            write_blank(path, size, scene)
+            blanks += 1
+            continue
+        scene.render.filepath = path
+        bpy.ops.render.render(write_still=True)
+        written += 1
+
+    print("[render_sprites] wrote %d flash frames and %d blank frames to %s"
+          % (written, blanks, out_dir))
+    report_flash_layer(variant)
+
+
+def report_flash_layer(variant):
+    """Prints what the character scene has to be told, and nothing it can get wrong.
+
+    ONE number goes in the scene -- the scale -- because the canvas height and
+    the anchor are both derived from it in `unit_visual.gd`. A second
+    hand-measured anchor is exactly the kind of thing that ends up disagreeing
+    with the first and putting the flash half a head off the barrel.
+    """
+    scale = float(FLASH_CANVAS_SCALE)
+    print("[render_sprites] flash canvas: %.2f m across %d px = %.1f mm per "
+          "pixel, the same as the body's"
+          % (CANVAS_HEIGHT * scale, int(RESOLUTION * FLASH_CANVAS_SCALE),
+             CANVAS_HEIGHT / RESOLUTION * 1000))
+    print("[render_sprites] on the character scene: add &\"%s\" to `layers` "
+          "LAST, so it draws in front of the body, and set "
+          "layer_canvas_scale = {&\"%s\": %g}"
+          % (FLASH_LAYER, FLASH_LAYER, scale))
+    print("[render_sprites] canvas_height and foot_anchor stay as they ARE -- "
+          "this layer's own are derived: canvas_height x %g, and foot_anchor y "
+          "-> 0.5 + (y - 0.5) / %g (the merc's 0.93359375 becomes %.9f)"
+          % (scale, scale, 0.5 + (0.93359375 - 0.5) / scale))
+    print("[render_sprites] now run build_sprite_frames.gd with SF_VARIANT=%s "
+          "SF_LAYERS=%s" % (variant, FLASH_LAYER))
+
+
 def setup(path):
     """Writes a .blend containing the camera, the lights and nothing else.
 
@@ -1250,11 +1662,13 @@ def report_framing():
           % (FLOOR_MARGIN, round(FLOOR_MARGIN / CANVAS_HEIGHT * RESOLUTION),
              headroom, round(headroom / CANVAS_HEIGHT * RESOLUTION)))
     print("[render_sprites] SET UnitVisual.canvas_height = %.2f on the character "
-          "scene. foot_anchor is NOT derived from FLOOR_MARGIN -- measure the "
-          "lowest alpha row L across the rendered PNGs and use 1 - L/%d; the "
-          "world origin (row %d) is above the lowest foot, and anchoring there "
-          "sinks it through the floor."
-          % (CANVAS_HEIGHT, RESOLUTION,
+          "scene. foot_anchor is NOT derived from FLOOR_MARGIN and not from any "
+          "single frame either -- a render prints it, as the mean foot row over "
+          "the %r facings. The world origin (row %d) sits ABOVE the feet, so "
+          "anchoring there sinks the character to the knee; the lowest row over "
+          "all frames sits below every foot but one, so anchoring there floats "
+          "it."
+          % (CANVAS_HEIGHT, GROUNDING_POSE,
              round(FLOOR_MARGIN / CANVAS_HEIGHT * RESOLUTION)))
 
 
@@ -1289,6 +1703,14 @@ def main():
                              "is what turns the muzzle POINT into a barrel "
                              "AXIS; defaults to %r or the %r material"
                              % (REAR_MARKER_OBJECT, REAR_MARKER_MATERIAL))
+    parser.add_argument("--flash", action="store_true",
+                        help="render the muzzle-flash OVERLAY layer only: one "
+                             "frame of %s across the eight facings, on a canvas "
+                             "%dx the body's so the flash cannot clip. Ignores "
+                             "--poses; the pose is fixed." % (FLASH_POSE, FLASH_CANVAS_SCALE))
+    parser.add_argument("--flash-object",
+                        help="the flash mesh; defaults to the object using the "
+                             "%r material, else %r" % (FLASH_MATERIAL, FLASH_OBJECT))
     args = parser.parse_args(argv)
 
     if args.setup:
@@ -1318,6 +1740,16 @@ def main():
         export_markers(args.variant, os.path.abspath(args.out),
                        find_character(args.character), marker, rear,
                        bpy.data.objects.get(FALLBACK_BORE_OBJECT), only, dirs)
+        return
+
+    if args.flash:
+        flash = find_flash(args.flash_object)
+        if flash is None:
+            sys.exit("No muzzle flash found. Give the flash object the %r "
+                     "material, name it %r, or pass --flash-object <name>."
+                     % (FLASH_MATERIAL, FLASH_OBJECT))
+        render_flash(args.variant, os.path.abspath(args.out),
+                     find_character(args.character), flash, dirs)
         return
 
     render_variant(args.variant, os.path.abspath(args.out),

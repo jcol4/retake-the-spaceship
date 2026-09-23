@@ -13,15 +13,20 @@ signal moved(unit: Unit)
 ## (Sec 4.0 — GridManager.get_reachable_tiles is a BFS for exactly this reason).
 ##
 ## The only things that raise it are injury (see `move_ap_per_tile`) and the
-## worm, which overrides it outright — see WormUnit.AP_PER_TILE for why.
+## worm and its mass, which override it outright — see `WormUnit.move_ap_per_tile`
+## and `WormUnit.AP_POOL` for why, and for the tier ladder the override buys.
 const MOVE_AP_PER_TILE := 1
 const TURN_TIME := 0.09  # seconds to swing toward the next tile
 
 # Rounds per burst. One trigger pull is still one Combat.resolve_shot — one hit
 # roll, one damage number, one round of ammo — so this is purely how many
-# tracers that shot draws, and changing it cannot unbalance anything.
-const BURST_MIN := 3
-const BURST_MAX := 5
+# kicks and impacts that shot draws, and changing it cannot unbalance anything.
+#
+# Raised from 3-5 to buy the drawn muzzle flash more time on screen. The flash is
+# ONE frame of `fire_shoot`, which at BURST_CADENCE 0.11 s is 55 ms a round, so
+# the only dial that makes a burst read as a burst is how many times it repeats.
+const BURST_MIN := 4
+const BURST_MAX := 6
 # On a hit, this many rounds are thrown wide anyway so the burst reads as a
 # burst; the rest converge. On a miss every round misses. Kept below BURST_MIN
 # so a hit always lands visibly more rounds on target than it throws away.
@@ -162,7 +167,7 @@ var _injured_parts: Dictionary = {}  # Combat.BodyPart -> bool
 var has_flashlight: bool = true
 var flashlight_on: bool = true
 
-# With no display there is nothing to animate, so walks and tracers resolve
+# With no display there is nothing to animate, so walks and bursts resolve
 # instantly. Keeps the `--auto` headless smoke test fast.
 var _headless: bool = false
 ## Whether this unit's sprite is currently drawn. Written by MapBuilder from the
@@ -171,11 +176,11 @@ var _headless: bool = false
 ## space the player can reason about, where a raycast result is not.
 var _rendered: bool = true
 
-# The shot the muzzle-flash frame is about to draw a tracer for.
+# The shot the muzzle frame is about to draw an impact for.
 var _pending_shot: Combat.ShotResult = null
 var _pending_target: Unit = null
 # Which round of the burst is next, and which of them miss regardless of the
-# result. Decided up front so the pattern is fixed before the first tracer.
+# result. Decided up front so the pattern is fixed before the first round.
 var _burst_round: int = 0
 var _burst_strays: Array[int] = []
 var _name_label: Label3D = null
@@ -810,8 +815,8 @@ func do_suppress(target: Unit) -> void:
 ## a loop that fired real shots on a wall-clock timer would let a unit kill
 ## things between activations.
 ##
-## It does SHOW everything, though: same tracers, same muzzle flash, same room
-## strobe as any other burst, via `_arm_covering_fire`. The distinction is
+## It does SHOW everything, though: same kick, same drawn muzzle flash, same
+## impacts as any other burst, via `_arm_covering_fire`. The distinction is
 ## between what the shot resolves and what the shot looks like, and only the
 ## first one is empty — rounds going downrange with no effect is the mechanic.
 ##
@@ -1043,7 +1048,8 @@ func _pick_strays(rounds: int, hit: bool) -> Array[int]:
 func melee_at(target: Unit) -> Combat.ShotResult:
 	# Coroutine — callers MUST `await`. Mirrors fire_at: damage lands when the
 	# animation finishes, so the target reacts in time with the swing rather than
-	# before it. No ammo is spent and no tracer is drawn — nothing left the unit.
+	# before it. No ammo is spent and nothing travels — the only mark a swing
+	# leaves is the impact flash where it connects.
 	var result := Combat.resolve_melee(self, target)
 	is_busy = true
 	await visual.play_action(UnitVisual.MELEE)
@@ -1086,9 +1092,14 @@ func _on_muzzle() -> void:
 	# One of these per round of the burst, fired by UnitVisual.play_burst.
 	#
 	# Gated on the TARGET, not on the shot: covering fire arms one without the
-	# other (see `_arm_covering_fire`), and it draws the same tracers and the same
-	# flash as a real burst. A rifle going off looks like a rifle going off — the
-	# only thing the roll decides is where the rounds end up.
+	# other (see `_arm_covering_fire`), and it makes the same noise and shows the
+	# same impacts as a real burst. A rifle going off looks like a rifle going
+	# off — the only thing the roll decides is where the rounds end up.
+	#
+	# The FLASH is not fired from here and never was: it is a frame of the
+	# `fire_shoot` art (`UnitVisual` layer `flash`), drawn on the barrel by the
+	# same `_play` call that emits this signal. Nothing here has to place it, and
+	# that is the whole reason the old room-filling muzzle light is gone.
 	if is_instant() or _pending_target == null:
 		return
 	var round_index := _burst_round
@@ -1097,17 +1108,22 @@ func _on_muzzle() -> void:
 	if vfx == null:
 		return
 	# Origin is the barrel tip as the animation currently has it, not the middle
-	# of the unit — the rifle is held off to the right, so a centreline tracer
-	# visibly left the chest.
+	# of the unit — the rifle is held off to the right, so a centreline shot
+	# visibly left the chest. Still read per round now that no beam is drawn from
+	# it: the scatter cone is built off the line of fire, and the sound is
+	# positioned at the barrel.
 	var from := visual.muzzle_origin()
 	# No ShotResult means nothing was rolled, so nothing can land: every round of
 	# a covering burst is thrown wide, which is exactly what suppressing fire is.
-	# `tracer` already handles that case — a miss gets the wide cone, the cold
-	# colour and no impact flash.
+	# `shot_impact` already handles that case — a round that did not land leaves
+	# no mark at the target.
 	var lands := _pending_shot != null and _pending_shot.hit and round_index not in _burst_strays
 	var crit := _pending_shot != null and _pending_shot.crit
-	vfx.tracer(from, _pending_target.global_position, lands, crit)
-	vfx.muzzle_flash(from)
+	vfx.shot_impact(from, _pending_target.global_position, lands, crit)
+	# Same frame as the drawn flash, same origin. Sound is gated on the TARGET
+	# exactly as the impact above is — a covering burst that rolls no shot still
+	# makes the noise a rifle makes.
+	Sfx.play("rifle_fire", from)
 
 
 ## Arms the muzzle hook for a burst that resolves NO shot — suppressing fire.
@@ -1127,7 +1143,7 @@ func _arm_covering_fire(target: Unit) -> void:
 ##
 ## That is reachable, not defensive: the pinned unit breaking cover fires this
 ## suppressor's held shot (`TurnManager.check_suppression_break`), and the
-## cosmetic burst it interrupted must not blank the break shot's tracers when it
+## cosmetic burst it interrupted must not blank the break shot's impacts when it
 ## finishes a moment later.
 func _disarm_covering_fire() -> void:
 	if _pending_shot == null:
