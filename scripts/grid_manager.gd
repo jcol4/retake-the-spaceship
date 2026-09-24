@@ -440,6 +440,12 @@ func damage_cover_edge(pos: Vector3i, side: int, amount: int) -> int:
 	var edge := cover_edge(pos, side)
 	if edge == null or not edge.is_intact():
 		return MapData.Cover.NONE
+	# Every peer builds its own copy of the deck from the same layout, so the
+	# same hit replayed against the same starting HP lands the same tier on each
+	# one. Without this a client kept every crate the host had shot apart —
+	# drawn, blocking its paths, and propping up its accuracy previews.
+	if multiplayer.is_server() and not multiplayer.get_peers().is_empty():
+		_rpc_damage_cover_edge.rpc(pos, side, amount)
 	edge.hp -= amount
 	if edge.hp > 0:
 		return edge.type
@@ -460,6 +466,11 @@ func damage_cover_edge(pos: Vector3i, side: int, amount: int) -> int:
 			edge.node.set_tier(edge.type)
 	cover_destroyed.emit(pos, side, edge.type)
 	return edge.type
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_damage_cover_edge(pos: Vector3i, side: int, amount: int) -> void:
+	damage_cover_edge(pos, side, amount)
 
 
 ## A block's HP hit zero: clear the accuracy bonus everywhere it was

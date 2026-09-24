@@ -1,6 +1,6 @@
 """Renders a rigged Blender character into the flat sprite sheet the game loads.
 
-Four modes:
+Five modes:
 
     # Build a .blend with the camera and lights already correct, to animate into.
     blender.exe -b -P tools/render_sprites.py -- --setup art_src/merc.blend
@@ -15,6 +15,16 @@ Four modes:
     # Render the muzzle flash on its own, oversized, overlay layer.
     blender.exe -b art_src/merc_anim.blend -P tools/render_sprites.py -- \
         --variant merc --flash
+
+    # Add depth sheets to art that is ALREADY rendered, without touching it.
+    blender.exe -b art_src/merc_anim.blend -P tools/render_sprites.py -- \
+        --variant merc --depth-only
+
+Every body and flash frame is written with a DEPTH SIDECAR,
+`<layer>_depth_<variant>_<pose>_<dir>_<n>.png`, holding how far each pixel's
+surface sits in front of or behind the world origin along the camera axis. The
+game draws the sprite with a shader that writes that depth, so the flat card
+depth-tests as the 3D model it was rendered from. See DEPTH_LAYER_SUFFIX.
 
 The MARKER export is seconds rather than minutes and never touches a PNG, because
 the marker's position is a projection of a known point through a known camera
@@ -46,24 +56,10 @@ import bpy
 from bpy_extras.object_utils import world_to_camera_view
 from mathutils import Matrix, Vector
 
-## Pixels of slack added below the lowest geometry when reporting the NO-CLIP
-## anchor (the one nothing ever falls below).
-##
-## That anchor is measured from GEOMETRY, but the thing that must not fall below
-## the floor is the lowest opaque PIXEL, and antialiasing puts those roughly a
-## pixel outside the silhouette. Two covers it, and erring low is free there: an
-## anchor a hair below the feet lifts the sprite by a hair.
-##
-## It is NOT applied to the grounded anchor `report_anchor` actually recommends,
-## which is a mean and is meant to cut into the silhouette a little.
-ANCHOR_SAFETY_PX = 2
-
-## The pose whose feet define where the ground is, when the variant has one.
-##
-## Idle is what is on screen almost all of the time, so it is idle that must look
-## planted; a mid-stride walk frame reaching lower is a frame nobody reads as
-## floating. See `report_anchor`.
-GROUNDING_POSE = "idle"
+## Pixels of floor margin below which `report_anchor` warns that a longer pose
+## will run off the bottom of the canvas. Antialiasing puts the lowest opaque
+## pixel about a pixel outside the silhouette, so this is geometry plus slack.
+CLIP_WARN_PX = 4
 
 # --- The camera contract -----------------------------------------------------
 #
@@ -133,28 +129,36 @@ GAME_CAMERA_SIZE = 10.5
 ## Still cheap: the canvas had 0.90 m of dead space above the head, and this
 ## spends half of it, leaving ~50 px of headroom for a raised rifle.
 ##
-## THIS IS NOT `UnitVisual.foot_anchor`, and tying the two together was a
-## mistake worth naming. This margin exists so the canvas does not CLIP a
-## forward foot; the anchor says where the art's feet are, so the game can stand
-## it on a floor. Setting the anchor to 1 - FLOOR_MARGIN / CANVAS_HEIGHT puts it
-## on the world origin, and the origin is NOT the lowest point of the art: a
-## planted forward foot projects below it, measured at 36 px for this character.
-## The sprite is a vertical billboard writing depth, so those 36 px land beneath
-## the floor mesh and get occluded -- feet visibly sunk into the ground.
+## IT ALSO FIXES `UnitVisual.foot_anchor`, exactly: 1 - FLOOR_MARGIN /
+## CANVAS_HEIGHT is the row the world origin projects to, and under this ortho
+## camera the origin is where the model's true ground point lands for EVERY
+## facing, pose and frame. Anchor the card there and every pixel sits on screen
+## where the 3D model would have put it.
 ##
-## Nor can the anchor sit at the LOWEST PIXEL across every pose, which is what
-## this file used to say and what left every character floating. Which row the
-## feet reach is a function of the FACING -- the tilted camera projects a foot
-## planted toward the viewer lower than the same foot planted across -- so the
-## global minimum is one frame of one facing of one pose, and anchoring there
-## hangs all the others that many pixels in the air. Measured on the merc: idle
-## bottoms out at row 8 facing south and row 32 facing west, and the minimum over
-## every pose is row 6, so seven facings out of eight floated.
+## Two earlier anchors were wrong, and the reasons are worth keeping. The LOWEST
+## PIXEL over every pose floated seven facings of eight: which row a foot
+## reaches depends on the facing (the merc's idle bottoms out at row 8 facing
+## south and row 32 facing west). The MEAN over the idle facings floated the
+## merc ~28 px on average, because the lowest foot is planted IN FRONT of the
+## origin, and a floor point nearer the camera projects lower on screen.
 ##
-## `report_anchor` measures the mean over the idle facings instead. FLOOR_MARGIN
-## only has to be large enough that no pose clips the bottom edge; it is not an
-## input to the anchor at all.
+## The origin anchor was rejected at the time because a planted forward foot
+## projects BELOW the origin row (36 px on the merc), and a vertical card drew
+## that foot under the floor mesh. The depth sidecar (DEPTH_LAYER_SUFFIX) is what
+## answers that: the foot now depth-tests at its real distance from the camera,
+## which is in front of the floor it stands on.
 FLOOR_MARGIN = 0.45
+
+## Per-variant FLOOR_MARGIN, for a body that reaches further toward the camera
+## than a standing figure does. Applied in `main` for the variant being
+## rendered, so no other character's framing moves.
+##
+## The nest was lowered 0.243 m in worm_spawn_scaled.blend so its right thigh
+## lies on the deck; at 0.45 its near edge then ran 13.6 px off the bottom of
+## the canvas facing the camera. 0.65 is that plus ~6 px of slack.
+VARIANT_FLOOR_MARGIN = {
+    "nest": 0.65,
+}
 
 ## Square, so that the horizontal half-extent is also 1.28 m -- comfortably wider
 ## than any arm span or rifle. Square also means a canvas rotation could never
@@ -701,6 +705,356 @@ FLASH_SCALE = 0.5
 SPILL_EMISSION_SCALE = 3.0
 
 
+# --- The depth sidecar -------------------------------------------------------
+#
+# A sprite is a flat card, but the art on it is a 3D model seen through a known
+# ortho camera, so every opaque pixel is a known distance from that camera. The
+# sidecar records that distance, and `shaders/sprite_depth.gdshader` writes it
+# as the fragment's depth. The card then depth-tests as the model it came from:
+# a boot planted toward the camera is in front of the floor it stands on, a
+# rifle held across the body is in front of the chest, and a crate edge that
+# really is nearer hides exactly the pixels behind it.
+#
+# That is what makes the ORIGIN the right anchor again (see FLOOR_MARGIN), and
+# it is what `UnitVisual._ground_depth_offset` used to approximate with one
+# push toward the camera for the whole card.
+#
+# THE ENCODING. Each pixel stores how far its surface sits IN FRONT of the world
+# origin along the view axis (negative = behind), in CANVAS HEIGHTS rather than
+# metres, so a scene with a different `canvas_height` or a scaled unit needs no
+# re-render: the game multiplies back by the world size it actually draws. The
+# value is mapped from +-DEPTH_RANGE onto 0..65535 and split across R (high
+# byte) and G (low byte) of an 8-bit RGB PNG, because Godot's importer reduces a
+# 16-bit PNG to 8 bits and 8 bits alone is a 2 cm step. B is unused. The PNG is
+# RGB, with no alpha, so the importer's alpha-border fix cannot rewrite it.
+
+## Appended to the layer name: `body` art gets `body_depth_<variant>_...png`,
+## which `build_sprite_frames.gd` collects into `body_depth_<variant>.tres` with
+## the same animations and frame order as `body_<variant>.tres`, because the
+## same names are being scanned. `unit_visual.gd` loads it by the same rule.
+DEPTH_LAYER_SUFFIX = "_depth"
+
+## Half-range of the encoding, in canvas heights: +-2 is +-5.12 m at the shipped
+## canvas, far past anything that fits in the frame, at 0.16 mm per step.
+## MIRRORED by `unit_visual.gd` DEPTH_RANGE; change both or neither.
+DEPTH_RANGE = 2.0
+
+## Samples for `--depth-only`. Depth is geometry, not light, so one sample gives
+## the same surface as 128 -- the only difference is which sub-pixel position
+## the silhouette's edge pixels were sampled at, and `_fill_depth_holes`
+## covers that.
+DEPTH_ONLY_SAMPLES = 1
+
+## How far a rendered depth may sit behind the nearest vertex before the
+## cross-check in `write_depth_sidecar` calls it wrong, in metres. A pixel
+## centre lands up to half a pixel off the nearest vertex, and a steep surface
+## turns that into a few centimetres of depth.
+DEPTH_CHECK_TOLERANCE = 0.05
+
+## Fraction of opaque pixels allowed to have no surface directly beneath them
+## before `report_depth` calls the art and the .blend out of step. The rim
+## alone is ~1-3% on a 256 px character.
+DEPTH_DRIFT_LIMIT = 0.05
+
+_depth_state = {"dir": None, "worst": 0.0, "clamped": 0, "unfilled": 0,
+                "mismatch": [], "solid": 0, "bare": 0}
+
+
+def enable_depth_pass(scene):
+    """Routes Cycles' Z pass to a float EXR, for `write_depth_sidecar` to read.
+
+    Through a compositor File Output node, and it has to be. Blender 5.2 writes
+    only the Combined pass through `render.render(write_still=True)`, even as
+    a multilayer EXR, and `save_render` does the same, so neither sees the depth.
+    A File Output node is the one path that receives the pass itself. It is
+    ADDED to the scene's compositor rather than replacing it, so a .blend that
+    composites its beauty pass still gets exactly the PNG it got before.
+
+    Cycles' Z is PLANAR depth (distance along the camera axis, not along the
+    ray), which is what an orthographic depth buffer holds too.
+    `write_depth_sidecar` checks it against the geometry on every frame.
+    """
+    import tempfile
+    out_dir = tempfile.mkdtemp(prefix="sprite_depth_")
+    _depth_state["dir"] = out_dir
+
+    view_layer = bpy.context.view_layer
+    view_layer.use_pass_z = True
+    scene.render.use_compositing = True
+    tree = scene.compositing_node_group
+    if tree is None:
+        tree = bpy.data.node_groups.new("SpriteDepth", "CompositorNodeTree")
+        scene.compositing_node_group = tree
+    layers = tree.nodes.new("CompositorNodeRLayers")
+    layers.scene = scene
+    layers.layer = view_layer.name
+    out = tree.nodes.new("CompositorNodeOutputFile")
+    out.directory = out_dir
+    out.file_name = "depth_"
+    out.file_output_items.new("FLOAT", "Depth")
+    out.format.media_type = "IMAGE"
+    out.format.file_format = "OPEN_EXR"
+    out.format.color_depth = "32"
+    tree.links.new(layers.outputs["Depth"], out.inputs["Depth"])
+    return out_dir
+
+
+def _clear_depth_dir():
+    for name in os.listdir(_depth_state["dir"]):
+        os.remove(os.path.join(_depth_state["dir"], name))
+
+
+def _read_image(path):
+    """(height, width, channels) float array, top row first."""
+    import OpenImageIO as oiio
+    handle = oiio.ImageInput.open(path)
+    if handle is None:
+        sys.exit("[render_sprites] cannot read %s: %s" % (path, oiio.geterror()))
+    try:
+        pixels = handle.read_image(format="float")
+    finally:
+        handle.close()
+    return pixels if pixels.ndim == 3 else pixels[..., None]
+
+
+def origin_view_depth(camera):
+    """Planar distance from `camera` to the world origin, in metres."""
+    basis = camera.matrix_world.to_3x3()
+    view_dir = (basis @ Vector((0.0, 0.0, -1.0))).normalized()
+    return (Vector((0.0, 0.0, 0.0)) - camera.matrix_world.translation).dot(view_dir)
+
+
+def nearest_vertex_depth(camera, meshes):
+    """Planar depth of the rendered vertex nearest the camera this frame.
+
+    The cross-check for the depth pass. No pixel can be nearer than this, and
+    the nearest pixel cannot be much further, so a pass that disagrees has been
+    misread (wrong channel, a clip-start offset, a flipped sign) rather than
+    rendered wrong -- and a misread depth would put every foot a fixed distance
+    off the floor, which is the exact failure this pipeline exists to end.
+
+    Only vertices some FACE uses. Loose vertices and edges never reach the film,
+    and the merc's body mesh carries four at head height that sit 0.2 m nearer
+    the camera than anything drawn -- counting them flagged every west-facing
+    frame as misread.
+    """
+    import numpy as np
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    basis = camera.matrix_world.to_3x3()
+    view_dir = np.array(basis @ Vector((0.0, 0.0, -1.0))).reshape(3)
+    view_dir /= np.linalg.norm(view_dir)
+    eye = np.array(camera.matrix_world.translation)
+    nearest = float("inf")
+    for obj in meshes:
+        evaluated = obj.evaluated_get(depsgraph)
+        mesh = evaluated.to_mesh()
+        if len(mesh.loops):
+            co = np.empty(len(mesh.vertices) * 3)
+            mesh.vertices.foreach_get("co", co)
+            used = np.empty(len(mesh.loops), dtype=np.int32)
+            mesh.loops.foreach_get("vertex_index", used)
+            local = co.reshape(-1, 3)[np.unique(used)]
+            matrix = np.array(evaluated.matrix_world)
+            world = local @ matrix[:3, :3].T + matrix[:3, 3]
+            nearest = min(nearest, float(((world - eye) @ view_dir).min()))
+        evaluated.to_mesh_clear()
+    return nearest
+
+
+def _fill_depth_holes(depth, valid, visible):
+    """Gives every VISIBLE pixel a depth, from its nearest neighbours.
+
+    The colour image and the depth pass disagree along the silhouette: the
+    colour is antialiased, so an edge pixel can be partly covered and opaque
+    enough to survive the game's alpha scissor while the depth pass saw
+    background there (1e10). Such a pixel is filled from the NEAREST of its
+    eight neighbours, repeatedly until nothing changes, so the edge takes the
+    depth of the surface it is the edge of. Nearest rather than mean because a
+    mean across a silhouette averages a foot with the leg behind it and lands
+    in the air between them.
+    """
+    import numpy as np
+    depth = depth.copy()
+    valid = valid.copy()
+    height, width = depth.shape
+    while True:
+        need = visible & ~valid
+        if not need.any():
+            break
+        padded = np.pad(np.where(valid, depth, np.inf), 1, constant_values=np.inf)
+        best = np.full(depth.shape, np.inf)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dy or dx:
+                    best = np.minimum(best, padded[1 + dy:1 + dy + height,
+                                                   1 + dx:1 + dx + width])
+        grow = need & np.isfinite(best)
+        if not grow.any():
+            break
+        depth[grow] = best[grow]
+        valid |= grow
+    return depth, valid
+
+
+def write_depth_sidecar(color_path, depth_path, camera, meshes=None):
+    """Encodes the depth EXR the last render left, next to `color_path`.
+
+    `color_path` is the colour frame the game will actually draw. It is read
+    rather than re-derived, because ITS alpha is what the game scissors on, so
+    it is the definition of which pixels need a depth. That also makes
+    `--depth-only` honest about drift: a .blend whose geometry no longer
+    matches the shipped art leaves opaque pixels with no surface under them,
+    and `report_depth` says so.
+
+    `meshes`, when given, is cross-checked against the pass -- see
+    `nearest_vertex_depth`. The flash pass skips it; its pixels are glow.
+    """
+    import numpy as np
+    import OpenImageIO as oiio
+    exrs = [n for n in os.listdir(_depth_state["dir"]) if n.endswith(".exr")]
+    if len(exrs) != 1:
+        sys.exit("[render_sprites] expected one depth EXR in %s, found %r -- the "
+                 "compositor File Output did not run" % (_depth_state["dir"], exrs))
+    z = _read_image(os.path.join(_depth_state["dir"], exrs[0]))[..., 0]
+    color = _read_image(color_path)
+    alpha = color[..., 3] if color.shape[2] >= 4 else np.ones(z.shape)
+    if alpha.shape != z.shape:
+        sys.exit("[render_sprites] %s is %dx%d but its depth pass is %dx%d -- "
+                 "rendered at a different canvas scale"
+                 % (color_path, alpha.shape[1], alpha.shape[0], z.shape[1], z.shape[0]))
+
+    origin = origin_view_depth(camera)
+    reach = DEPTH_RANGE * CANVAS_HEIGHT
+    valid = np.isfinite(z) & (np.abs(z - origin) < reach * 4.0)
+    # Any coverage at all, not just what clears the game's 0.5 scissor: linear
+    # filtering (the flash) and a later change of threshold both reach below it.
+    visible = alpha > 1.0 / 255.0
+
+    if meshes:
+        hits = valid & (alpha >= 0.5)
+        if hits.any():
+            nearest_pixel = float(z[hits].min())
+            nearest_geometry = nearest_vertex_depth(camera, meshes)
+            error = nearest_pixel - nearest_geometry
+            if error < -0.01 or error > DEPTH_CHECK_TOLERANCE:
+                _depth_state["mismatch"].append(
+                    (os.path.basename(color_path), error))
+            _depth_state["worst"] = max(_depth_state["worst"], abs(error))
+
+    # Drift, measured BEFORE the fill hides it: opaque pixels with no surface
+    # directly under them. A silhouette's antialiased rim is a few percent; a
+    # .blend that no longer poses the character the way the art shows is far
+    # more, and the fill would otherwise spread depth across the gap silently.
+    solid = alpha >= 0.5
+    _depth_state["solid"] += int(solid.sum())
+    _depth_state["bare"] += int((solid & ~valid).sum())
+
+    filled, valid = _fill_depth_holes(z, valid, visible)
+    _depth_state["unfilled"] += int((visible & ~valid).sum())
+
+    # Toward the camera is POSITIVE: the origin minus the pixel's distance.
+    toward = np.where(valid, origin - filled, 0.0) / CANVAS_HEIGHT
+    code = 0.5 + toward / (2.0 * DEPTH_RANGE)
+    _depth_state["clamped"] += int(((code < 0.0) | (code > 1.0)).sum())
+    code = np.round(np.clip(code, 0.0, 1.0) * 65535.0).astype(np.uint32)
+    encoded = np.zeros(z.shape + (3,), dtype=np.uint8)
+    encoded[..., 0] = code >> 8
+    encoded[..., 1] = code & 0xFF
+
+    height, width = z.shape
+    output = oiio.ImageOutput.create(depth_path)
+    if output is None or not output.open(depth_path,
+                                         oiio.ImageSpec(width, height, 3, "uint8")):
+        sys.exit("[render_sprites] cannot write %s: %s" % (depth_path, oiio.geterror()))
+    output.write_image(encoded)
+    output.close()
+    write_depth_import(depth_path)
+
+
+## The import settings a depth sidecar MUST have, written beside it before
+## Godot first sees it. Anything lossy destroys the encoding. The low byte is
+## noise to a block compressor, and a VRAM-compressed sidecar would put every
+## foot centimetres off at random. `detect_3d` is the setting that would do it
+## silently: it switches a texture to VRAM compression the first time the
+## editor sees it used in 3D, which is the only place a sidecar is ever used.
+DEPTH_IMPORT = """[remap]
+
+importer="texture"
+type="CompressedTexture2D"
+
+[params]
+
+compress/mode=0
+mipmaps/generate=false
+process/fix_alpha_border=false
+process/size_limit=0
+detect_3d/compress_to=0
+"""
+
+
+def write_depth_import(depth_path):
+    """Pins the sidecar's import settings. See DEPTH_IMPORT.
+
+    Only when absent: once Godot has imported the file it owns the sidecar
+    (uid, dest paths), and rewriting it would force a reimport every render.
+    """
+    sidecar = depth_path + ".import"
+    if not os.path.exists(sidecar):
+        with open(sidecar, "w", newline="\n") as handle:
+            handle.write(DEPTH_IMPORT)
+
+
+def depth_path_for(out_dir, layer, variant, pose, direction, frame_index):
+    return os.path.join(out_dir, "%s%s_%s_%s_%s_%d.png" % (
+        layer, DEPTH_LAYER_SUFFIX, variant, pose, direction, frame_index))
+
+
+def write_neutral_depth(path, size):
+    """A depth sidecar that is all origin, for a frame with nothing drawn on it.
+
+    Written so the depth set has exactly the frames the colour set has -- the
+    game looks the sidecar up by the frame the colour sprite is showing.
+    """
+    import numpy as np
+    import OpenImageIO as oiio
+    encoded = np.zeros((size, size, 3), dtype=np.uint8)
+    encoded[..., 0] = 0x80
+    output = oiio.ImageOutput.create(path)
+    output.open(path, oiio.ImageSpec(size, size, 3, "uint8"))
+    output.write_image(encoded)
+    output.close()
+    write_depth_import(path)
+
+
+def report_depth(written):
+    """Prints what the depth pass is worth trusting, after a run."""
+    print("[render_sprites] wrote %d depth sidecars; nearest-pixel vs "
+          "nearest-vertex depth agreed within %.1f mm"
+          % (written, _depth_state["worst"] * 1000.0))
+    if _depth_state["mismatch"]:
+        worst = sorted(_depth_state["mismatch"], key=lambda m: -abs(m[1]))[:5]
+        print("[render_sprites] *** DEPTH DISAGREES WITH GEOMETRY on %d frames "
+              "(worst: %s). The pass is being misread, or the art on disk is "
+              "not the geometry in this .blend. Do not ship these. ***"
+              % (len(_depth_state["mismatch"]),
+                 ", ".join("%s %+.3f m" % m for m in worst)))
+    if _depth_state["solid"]:
+        bare = _depth_state["bare"] / float(_depth_state["solid"])
+        print("[render_sprites] %.1f%% of opaque pixels had no surface directly "
+              "under them (filled from neighbours)" % (bare * 100.0))
+        if bare > DEPTH_DRIFT_LIMIT:
+            print("[render_sprites] *** that is more than a silhouette's rim: "
+                  "the .blend has drifted from the rendered art. Re-render the "
+                  "colour frames too. ***")
+    if _depth_state["unfilled"]:
+        print("[render_sprites] %d faint pixels were unreachable from any "
+              "surface and were given origin depth" % _depth_state["unfilled"])
+    if _depth_state["clamped"]:
+        print("[render_sprites] WARNING: %d pixels were deeper than DEPTH_RANGE "
+              "(%.1f canvases) and were clamped" % (_depth_state["clamped"],
+                                                    DEPTH_RANGE))
+
+
 def _by_material_or_name(material, name):
     for obj in bpy.data.objects:
         if obj.type != "MESH":
@@ -901,6 +1255,14 @@ def build_camera(scene, canvas_scale=1.0):
     cam_data.clip_end = distance * 3.0
 
     scene.camera = cam
+    # Without this, `cam.matrix_world` keeps whatever transform the .blend was
+    # SAVED with -- and `frame_set` does not refresh it either. Cycles renders
+    # from the fresh transform, so the art was always right, but everything
+    # that projects through the camera in Python (`world_to_camera_view` for
+    # the markers and the lowest-pixel check, the depth sidecar's origin) read
+    # the stale one. Measured on merc_anim.blend: 0.29 m off in depth and
+    # ~3.7 px off vertically, from a camera saved under an older FLOOR_MARGIN.
+    bpy.context.view_layer.update()
     return cam
 
 
@@ -1187,35 +1549,24 @@ def lowest_point_on_screen(scene, camera, meshes):
     return lowest
 
 
+def origin_anchor():
+    """The `UnitVisual.foot_anchor` y for this variant: the world origin's row.
+
+    Exact for every facing, pose and frame, because the camera is orthographic
+    and the character turns under it rather than the camera turning -- see
+    FLOOR_MARGIN. Reads the module FLOOR_MARGIN, which `main` has already
+    replaced with this variant's VARIANT_FLOOR_MARGIN entry if it has one.
+    """
+    return 1.0 - FLOOR_MARGIN / CANVAS_HEIGHT
+
+
 def report_anchor(lowest_by_facing):
-    """Prints the `UnitVisual.foot_anchor` these renders actually need.
+    """Prints the anchor, and whether any frame ran off the bottom of the canvas.
 
     `lowest_by_facing` maps (pose, direction) to the lowest normalised screen
-    height any vertex reached across that facing's frames.
-
-    Printed rather than left to be derived because deriving it is what went
-    wrong twice: the obvious formula, 1 - FLOOR_MARGIN / CANVAS_HEIGHT, anchors
-    on the WORLD ORIGIN, and a planted forward foot projects below that. The
-    sprite is a depth-writing billboard, so anything below the anchor is under
-    the floor mesh and gets occluded -- feet sunk into the ground.
-
-    Anchoring on the other extreme, the lowest pixel over every frame, is what
-    this printed before and it is the reason every character floated. The row
-    the feet reach is a function of the FACING: the camera is tilted, so a foot
-    planted toward the viewer projects lower than the same foot planted across
-    it, and on the merc that is a 24 px spread across idle's eight buckets. The
-    minimum is one facing's answer; using it hangs the other seven that far off
-    the floor.
-
-    So: the MEAN over the grounding pose's facings, which puts the average foot
-    on the floor and lets the facings that reach lowest push a toe under it.
-    Under the floor reads as planted; above it reads as flying. The no-clip
-    minimum is still printed, because it is the number to check a nest or a worm
-    against -- a low, sprawling body like the worm is nearly all depth, and a
-    vertical billboard turns depth into height, so the mean would bury it.
-
-    This is a property of the poses, not of the pipeline, so it moves whenever
-    the art does and there is no constant that can stand in for it.
+    height any vertex reached across that facing's frames. It no longer feeds
+    the anchor at all -- the anchor is the origin row, derived -- but it is
+    still the only thing that notices a pose outgrowing FLOOR_MARGIN.
     """
     origin_row = FLOOR_MARGIN / CANVAS_HEIGHT * RESOLUTION
     rows = {key: ndc * RESOLUTION for key, ndc in lowest_by_facing.items()}
@@ -1224,42 +1575,20 @@ def report_anchor(lowest_by_facing):
         return
 
     low_row = min(rows.values())
-    safe_row = max(0.0, low_row - ANCHOR_SAFETY_PX)
-    no_clip = 1.0 - safe_row / RESOLUTION
-
-    # The grounding pose if it was rendered, every pose if it was not -- a
-    # --only-poses run still gets an answer, just a narrower one.
-    grounding = [row for (pose, _), row in rows.items() if pose == GROUNDING_POSE]
-    label = GROUNDING_POSE
-    if not grounding:
-        grounding = list(rows.values())
-        label = "all rendered poses"
-    mean_row = sum(grounding) / len(grounding)
-    anchor = 1.0 - mean_row / RESOLUTION
-
     print("[render_sprites] lowest pixel: row %.1f of %d (world origin is row "
-          "%.0f, so the art reaches %.1f px BELOW it)"
+          "%.1f, so the art reaches %.1f px below it -- drawn IN FRONT of the "
+          "floor by the depth sidecar)"
           % (low_row, RESOLUTION, origin_row, origin_row - low_row))
-    print("[render_sprites] %s feet span rows %.1f to %.1f across %d facings, "
-          "mean %.1f" % (label, min(grounding), max(grounding), len(grounding),
-                         mean_row))
     if low_row <= 0.0:
         print("[render_sprites] *** CLIPPED: the pose runs off the bottom of the "
               "canvas. Raise FLOOR_MARGIN (now %.2f m) and re-render. ***"
               % FLOOR_MARGIN)
-    elif low_row < ANCHOR_SAFETY_PX + 2:
+    elif low_row < CLIP_WARN_PX:
         print("[render_sprites] WARNING: only %.1f px of floor margin left. A "
               "longer pose will clip -- consider raising FLOOR_MARGIN." % low_row)
-    print("[render_sprites] SET UnitVisual.foot_anchor = (0.5, %.8f)" % anchor)
-    print("[render_sprites]   (grounded: the mean over %s, so the facings that "
-          "reach lowest sink %.0f px into the floor -- that is intended)"
-          % (label, mean_row - min(grounding)))
-    print("[render_sprites]   no-clip alternative (0.5, %.8f) never sinks and "
-          "floats up to %.0f px; use it only for a LOW, SPRAWLING body whose "
-          "silhouette is mostly depth, like the worm"
-          % (no_clip, max(grounding) - safe_row))
-    print("[render_sprites]   (measured over the frames rendered THIS run; "
-          "render every facing to get the number the character actually needs)")
+    print("[render_sprites] SET UnitVisual.foot_anchor = (0.5, %.8f) -- the "
+          "world origin, FLOOR_MARGIN %.2f m above the bottom edge"
+          % (origin_anchor(), FLOOR_MARGIN))
 
 
 def poses_to_do(variant, only_poses=None):
@@ -1348,10 +1677,23 @@ def iter_pose_frames(variant, character, todo, directions):
               % (pose, len(frames), len(directions)))
 
 
-def render_variant(variant, out_dir, character, only_poses=None, directions=None):
+def render_variant(variant, out_dir, character, only_poses=None, directions=None,
+                   depth_only=False):
+    """Renders every colour frame and its depth sidecar.
+
+    `depth_only` renders the sidecars ALONE, against colour frames already on
+    disk: one sample instead of 128, and the shipped art is read, never
+    written. The way to give existing art depth without a full re-render --
+    valid as long as the .blend still poses the character the way it did when
+    that art was made, which `report_depth` checks.
+    """
     scene = bpy.context.scene
     configure_render(scene)
     build_camera(scene)
+    enable_depth_pass(scene)
+    if depth_only:
+        scene.cycles.samples = DEPTH_ONLY_SAMPLES
+        scene.cycles.use_denoising = False
 
     os.makedirs(out_dir, exist_ok=True)
 
@@ -1388,7 +1730,12 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
     for pose, direction, frame_index in iter_pose_frames(
             variant, character, todo, directions or GAME_DIRECTIONS):
         name = "body_%s_%s_%s_%d.png" % (variant, pose, direction, frame_index)
-        scene.render.filepath = os.path.join(out_dir, name)
+        color_path = os.path.join(out_dir, name)
+        scene.render.filepath = color_path
+        if depth_only and not os.path.exists(color_path):
+            print("[render_sprites] no %s on disk -- skipped; --depth-only adds "
+                  "depth to existing art and does not make new art" % name)
+            continue
         # Measured before the render, on the same evaluated pose the render is
         # about to shoot. Costs a vertex loop against a Cycles frame, which is
         # nothing, and saves reading 500 PNGs back.
@@ -1402,7 +1749,12 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
         # The emitter is invisible to the camera, so it cannot be the lowest
         # point on screen even on the frame it is lit for.
         set_spill(spill, pose == FLASH_POSE and frame_index == FLASH_FRAME)
-        bpy.ops.render.render(write_still=True)
+        _clear_depth_dir()
+        bpy.ops.render.render(write_still=not depth_only)
+        write_depth_sidecar(
+            color_path,
+            depth_path_for(out_dir, "body", variant, pose, direction, frame_index),
+            scene.camera, meshes)
         written += 1
 
     # Left facing bucket 0 of the SHARED base, not of whichever pose happened to
@@ -1410,10 +1762,13 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
     # state to hand back, and it no longer depends on the loop variable.
     character.rotation_euler.z = math.radians(
         VARIANT_BUCKET_ZERO.get(variant, BUCKET_ZERO_DEGREES))
-    print("[render_sprites] wrote %d images to %s" % (written, out_dir))
+    print("[render_sprites] wrote %d %s to %s"
+          % (written, "depth sidecars" if depth_only else "images", out_dir))
     report_anchor(lowest_by_facing)
-    print("[render_sprites] now run build_sprite_frames.gd with SF_VARIANT=%s "
-          "SF_LAYERS=body" % variant)
+    report_depth(written)
+    print("[render_sprites] now import (godot --headless --path . --import), "
+          "then run build_sprite_frames.gd with SF_VARIANT=%s "
+          "SF_LAYERS=body,body%s" % (variant, DEPTH_LAYER_SUFFIX))
 
 
 def _mean_direction(vectors):
@@ -1725,7 +2080,8 @@ def check_flash_turns(character, flash, variant):
         "parent." % (flash.name, character.name, seen[0].x, seen[0].y, seen[0].z))
 
 
-def render_flash(variant, out_dir, character, flash, directions=None):
+def render_flash(variant, out_dir, character, flash, directions=None,
+                 depth_only=False):
     """Renders the muzzle flash alone, on the enlarged canvas, for ONE frame.
 
     Writes `flash_<variant>_fire_shoot_<dir>_<n>.png` across the eight facings:
@@ -1733,6 +2089,9 @@ def render_flash(variant, out_dir, character, flash, directions=None):
     A minute or so against the tens of minutes a variant takes, which is the
     point of the split -- a flash can be re-authored and re-rendered as often as
     it takes without a single frame of the body art being touched.
+
+    `depth_only` writes the depth sidecars alone, against flash frames already
+    on disk, as `render_variant` does for the body.
     """
     scene = bpy.context.scene
     configure_render(scene, FLASH_CANVAS_SCALE)
@@ -1740,6 +2099,10 @@ def render_flash(variant, out_dir, character, flash, directions=None):
     # wants. This pass is the exception -- see FLASH_VIEW_TRANSFORM.
     apply_flash_tonemap(scene)
     build_camera(scene, FLASH_CANVAS_SCALE)
+    enable_depth_pass(scene)
+    if depth_only:
+        scene.cycles.samples = DEPTH_ONLY_SAMPLES
+        scene.cycles.use_denoising = False
     os.makedirs(out_dir, exist_ok=True)
 
     if character.animation_data is None:
@@ -1770,17 +2133,30 @@ def render_flash(variant, out_dir, character, flash, directions=None):
             variant, character, [FLASH_POSE], directions or GAME_DIRECTIONS):
         path = os.path.join(out_dir, "%s_%s_%s_%s_%d.png"
                             % (FLASH_LAYER, variant, pose, direction, frame_index))
+        depth_path = depth_path_for(out_dir, FLASH_LAYER, variant, pose,
+                                    direction, frame_index)
+        if depth_only and not os.path.exists(path):
+            print("[render_sprites] no %s on disk -- skipped; --depth-only adds "
+                  "depth to an existing flash" % os.path.basename(path))
+            continue
         if frame_index != FLASH_FRAME:
-            write_blank(path, size, scene)
+            if not depth_only:
+                write_blank(path, size, scene)
+            write_neutral_depth(depth_path, size)
             blanks += 1
             continue
         scene.render.filepath = path
-        bpy.ops.render.render(write_still=True)
+        _clear_depth_dir()
+        bpy.ops.render.render(write_still=not depth_only)
+        # No geometry cross-check: the flash is emissive glow, and its nearest
+        # vertex is often a sliver no pixel centre lands on.
+        write_depth_sidecar(path, depth_path, scene.camera)
         written += 1
         last_written = path
 
     print("[render_sprites] wrote %d flash frames and %d blank frames to %s"
           % (written, blanks, out_dir))
+    report_depth(written + blanks)
     if written:
         report_flash_clipping(last_written)
     report_flash_layer(variant)
@@ -1879,10 +2255,12 @@ def report_flash_layer(variant):
           % (FLASH_LAYER, FLASH_LAYER, scale))
     print("[render_sprites] canvas_height and foot_anchor stay as they ARE -- "
           "this layer's own are derived: canvas_height x %g, and foot_anchor y "
-          "-> 0.5 + (y - 0.5) / %g (the merc's 0.93359375 becomes %.9f)"
-          % (scale, scale, 0.5 + (0.93359375 - 0.5) / scale))
+          "-> 0.5 + (y - 0.5) / %g (the body's %.8f becomes %.9f)"
+          % (scale, scale, origin_anchor(),
+             0.5 + (origin_anchor() - 0.5) / scale))
     print("[render_sprites] now run build_sprite_frames.gd with SF_VARIANT=%s "
-          "SF_LAYERS=%s" % (variant, FLASH_LAYER))
+          "SF_LAYERS=%s,%s%s" % (variant, FLASH_LAYER, FLASH_LAYER,
+                                 DEPTH_LAYER_SUFFIX))
 
 
 def setup(path):
@@ -1941,21 +2319,16 @@ def report_framing():
           "headroom above the head: %.2f m (%d px)"
           % (FLOOR_MARGIN, round(FLOOR_MARGIN / CANVAS_HEIGHT * RESOLUTION),
              headroom, round(headroom / CANVAS_HEIGHT * RESOLUTION)))
-    print("[render_sprites] SET UnitVisual.canvas_height = %.2f on the character "
-          "scene. foot_anchor is NOT derived from FLOOR_MARGIN and not from any "
-          "single frame either -- a render prints it, as the mean foot row over "
-          "the %r facings. The world origin (row %d) sits ABOVE the feet, so "
-          "anchoring there sinks the character to the knee; the lowest row over "
-          "all frames sits below every foot but one, so anchoring there floats "
-          "it."
-          % (CANVAS_HEIGHT, GROUNDING_POSE,
-             round(FLOOR_MARGIN / CANVAS_HEIGHT * RESOLUTION)))
+    print("[render_sprites] SET UnitVisual.canvas_height = %.2f and foot_anchor "
+          "= (0.5, %.8f) on the character scene -- the world origin's row, "
+          "which is exact for every facing once the depth sidecars are built"
+          % (CANVAS_HEIGHT, origin_anchor()))
 
 
 def main():
     # Declared up front because the --fps help text reads it below, and Python
     # rejects a `global` that follows any use of the name in the same scope.
-    global SAMPLE_FPS, FLASH_EXPOSURE, FLASH_SCALE
+    global SAMPLE_FPS, FLASH_EXPOSURE, FLASH_SCALE, FLOOR_MARGIN
 
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     parser = argparse.ArgumentParser(prog="render_sprites")
@@ -1983,6 +2356,10 @@ def main():
                              "is what turns the muzzle POINT into a barrel "
                              "AXIS; defaults to %r or the %r material"
                              % (REAR_MARKER_OBJECT, REAR_MARKER_MATERIAL))
+    parser.add_argument("--depth-only", action="store_true",
+                        help="write only the depth sidecars, for colour frames "
+                             "already in --out, at %d sample(s). Never writes "
+                             "a colour frame." % DEPTH_ONLY_SAMPLES)
     parser.add_argument("--flash", action="store_true",
                         help="render the muzzle-flash OVERLAY layer only: one "
                              "frame of %s across the eight facings, on a canvas "
@@ -2007,6 +2384,7 @@ def main():
 
     if args.flash_exposure is not None:
         FLASH_EXPOSURE = args.flash_exposure
+    FLOOR_MARGIN = VARIANT_FLOOR_MARGIN.get(args.variant, FLOOR_MARGIN)
     if args.flash_scale is not None:
         FLASH_SCALE = args.flash_scale
 
@@ -2046,11 +2424,11 @@ def main():
                      "material, name it %r, or pass --flash-object <name>."
                      % (FLASH_MATERIAL, FLASH_OBJECT))
         render_flash(args.variant, os.path.abspath(args.out),
-                     find_character(args.character), flash, dirs)
+                     find_character(args.character), flash, dirs, args.depth_only)
         return
 
     render_variant(args.variant, os.path.abspath(args.out),
-                   find_character(args.character), only, dirs)
+                   find_character(args.character), only, dirs, args.depth_only)
 
 
 if __name__ == "__main__":

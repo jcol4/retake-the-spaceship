@@ -32,13 +32,8 @@ func _ready() -> void:
 	# Runs before Steam is ever touched, so a dev machine without the Steam
 	# client running still boots straight to normal single-player instead of
 	# erroring out — see is_networked().
-	var init_result: Dictionary = Steam.steamInitEx()
-	steam_available = init_result.get("status", -1) == 0
-	if not steam_available:
-		push_warning("SteamLobby: Steam init failed (%s) — running single-player." % init_result.get("verbal", "unknown"))
-		return
-	Steam.lobby_created.connect(_on_lobby_created)
-	Steam.lobby_joined.connect(_on_lobby_joined)
+	# Peer bookkeeping first, and unconditionally: a direct ENet session (see
+	# `host_direct`) has no Steam behind it but still needs `ready_peers` pruned.
 	multiplayer.peer_connected.connect(func(id: int) -> void:
 		print("[NET] peer_connected: %d (local_id=%d, is_server=%s)" % [id, multiplayer.get_unique_id(), multiplayer.is_server()])
 		player_joined.emit(id))
@@ -52,6 +47,13 @@ func _ready() -> void:
 		print("[NET] connection_failed"))
 	multiplayer.server_disconnected.connect(func() -> void:
 		print("[NET] server_disconnected"))
+	var init_result: Dictionary = Steam.steamInitEx()
+	steam_available = init_result.get("status", -1) == 0
+	if not steam_available:
+		push_warning("SteamLobby: Steam init failed (%s) — running single-player." % init_result.get("verbal", "unknown"))
+		return
+	Steam.lobby_created.connect(_on_lobby_created)
+	Steam.lobby_joined.connect(_on_lobby_joined)
 
 
 func _process(_delta: float) -> void:
@@ -87,6 +89,34 @@ func join_game(lobby_id: int) -> void:
 		join_failed.emit("Steam is not available")
 		return
 	Steam.joinLobby(lobby_id)
+
+
+## Plain ENet on localhost, no Steam at all — for two copies of the game on one
+## machine (`-- --net=host` / `-- --net=join`, see main.gd), which is how the
+## headless two-peer smoke test (tools/two_peer_smoke.sh) runs. Everything
+## past the peer itself is the same code path a Steam session takes.
+func host_direct(port: int) -> Error:
+	var peer := ENetMultiplayerPeer.new()
+	var err := peer.create_server(port, MAX_MEMBERS - 1)
+	if err == OK:
+		multiplayer.multiplayer_peer = peer
+	return err
+
+
+func join_direct(address: String, port: int) -> Error:
+	var peer := ENetMultiplayerPeer.new()
+	var err := peer.create_client(address, port)
+	if err == OK:
+		multiplayer.multiplayer_peer = peer
+	return err
+
+
+## Host-side: stops Steam letting anyone else into the lobby. Called once the
+## mission's layout has gone out (main.gd) — the game has no late-join catch-up,
+## so a slot freed by a squadmate dropping must not be one somebody can take.
+func close_lobby() -> void:
+	if steam_available and current_lobby_id != 0 and is_host():
+		Steam.setLobbyJoinable(current_lobby_id, false)
 
 
 ## Drops back to plain single-player: closes the peer, leaves the Steam lobby,

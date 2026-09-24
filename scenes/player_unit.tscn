@@ -30,21 +30,20 @@ albedo_color = Color(0.4, 1, 0.65, 1)
 [node name="PlayerUnit" type="Node3D" unique_id=1752049843 groups=["player_units", "units"]]
 script = ExtResource("1_script")
 
-; canvas_height mirrors render_sprites.py CANVAS_HEIGHT. foot_anchor is row 17
-; of 256, MEASURED from the rendered PNGs as the MEAN lowest opaque row over the
-; eight idle facings.
+; canvas_height mirrors render_sprites.py CANVAS_HEIGHT. foot_anchor is the
+; WORLD ORIGIN's row, 1 - FLOOR_MARGIN / CANVAS_HEIGHT = 1 - 0.45 / 2.56, which
+; render_sprites.py prints. Under the ortho sprite camera that row is where the
+; model's true ground point lands in every facing, pose and frame, so it is
+; exact rather than measured.
 ;
-; The mean, not the minimum, and that is the whole point. The sprite is a
-; vertical billboard, so the row the anchor names is the row that sits ON the
-; floor; every row below it is drawn under the floor mesh and occluded. Which
-; row the boots reach depends on the FACING, because the tilted camera projects
-; a foot planted toward the viewer lower than one planted across: idle bottoms
-; out at row 8 facing south and row 32 facing west. Anchoring on the global
-; minimum (row 4, which is what this was) guarantees nothing is ever clipped and
-; costs the character up to 28 px of AIR under its boots -- the float. Anchoring
-; on the world origin (row 41) is geometrically exact and eats the legs to the
-; knee. The mean splits it: a toe or two under the floor on the facings that
-; reach lowest, which reads as planted, and no visible gap on the rest.
+; It used to be row 17, the mean lowest opaque row over the idle facings, and
+; that was the float: the lowest boot is planted IN FRONT of the origin, which
+; projects lower on screen, so pinning it to the tile centre lifted the whole
+; merc ~28 px. The origin was rejected then because boots planted toward the
+; camera reach up to 36 px below it and a flat card drew them under the floor.
+; body_depth_merc.tres fixes that: each pixel depth-tests at its real distance
+; from the camera (UnitVisual DEPTH_LAYER_SUFFIX), so those boots draw in front
+; of the floor they stand on.
 ;
 ; `flash` is the muzzle-flash OVERLAY, and it is LAST in `layers` because layers
 ; draw back to front. It is the one layer that is not the character: it carries a
@@ -63,7 +62,7 @@ script = ExtResource("3_visual")
 layers = Array[StringName]([&"body", &"flash"])
 variant = &"merc"
 canvas_height = 2.56
-foot_anchor = Vector2(0.5, 0.93359375)
+foot_anchor = Vector2(0.5, 0.82421875)
 layer_canvas_scale = {
 &"flash": 2.0
 }

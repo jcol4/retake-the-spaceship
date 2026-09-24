@@ -335,6 +335,7 @@ func _try_throw_grenade(target: Vector3i, type: GrenadeType) -> void:
 	# flash still lands exactly on `target`; only which way the merc is drawn
 	# facing while it happens is adjusted.
 	await face_toward(_grenade_face_position(target))
+	broadcast_visual(&"grenade", [target])
 	await visual.play_action(UnitVisual.GRENADE)
 	var vfx := get_tree().get_first_node_in_group("vfx")
 	if vfx and not is_instant():

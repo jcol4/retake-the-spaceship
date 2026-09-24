@@ -62,6 +62,18 @@ func abandon() -> void:
 	_awaiting_player = false
 
 
+## Back to a fresh boot's state, on EVERY peer — see main.gd's `_ready`. Not
+## folded into `start_mission`, which only the host ever runs: a client that
+## came back through `abandon` would otherwise start its next mission still
+## reading `mission_over`.
+func reset() -> void:
+	turn_number = 0
+	mission_over = false
+	active_unit = null
+	pool.clear()
+	_awaiting_player = false
+
+
 func _all_units() -> Array[Unit]:
 	var out: Array[Unit] = []
 	for node in get_tree().get_nodes_in_group("units"):

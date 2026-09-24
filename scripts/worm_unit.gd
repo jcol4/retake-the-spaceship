@@ -79,35 +79,24 @@ const TIER_VARIANT: Array[StringName] = [&"worm", &"worm_clutch", &"worm_knot", 
 ## CANVAS_HEIGHT, mirrored here exactly as `worm_unit.tscn` mirrors it).
 const CANVAS_HEIGHT := 2.56
 
-## Where the art's lowest opaque row sits in each tier's sheet, by tier.
+## Where the world origin sits in each tier's sheet, by tier: the same row,
+## 1 - FLOOR_MARGIN / CANVAS_HEIGHT = 1 - 0.45 / 2.56, for every tier, because
+## every sheet is rendered through the same camera with the pile standing on
+## the origin. `render_sprites.py` prints it.
 ##
-## MEASURED off the rendered PNGs, never derived — `render_sprites.py` prints
-## each of these at the end of its run and they are copied in by hand.
+## Derived, no longer measured. These used to be each sheet's lowest opaque
+## row, because a pile lies along the deck -- nearly all of its silhouette is
+## depth -- and a flat card turned that depth into height: anchoring any higher
+## buried the pile, and anchoring on the lowest row left it floating a tile
+## quarter behind its own shadow. The body_depth_worm* sidecars end that: each
+## pixel depth-tests at its real distance from the camera, so the pile lies on
+## the deck where it was modelled (UnitVisual DEPTH_LAYER_SUFFIX).
 ##
-## These are the renderer's "no-clip alternative", i.e. the MINIMUM opaque row,
-## where every humanoid in the project uses the mean across idle facings. A pile
-## lies along the deck, so almost all of its silhouette is depth rather than
-## height, and a vertical billboard turns depth into height: anchoring on the
-## mean would bury the pile under the floor. The renderer names the worm as
-## exactly this case, and a pile is the same case, larger. `worm_unit.tscn`
-## carries the single worm's 0.90781518 for the same reason.
-##
-## Index 0 duplicates the scene's value rather than reading it, because
+## Still per tier, and index 0 still duplicates the scene's value, because
 ## `set_variant` back to `&"worm"` has to restore it and the scene is not
-## consulted again after `_ready`.
-##
-## Every pile tier rose when the sheets were rebuilt with their worms laid
-## parallel rather than at random yaws (0.93543150 -> 0.91547340, 0.98307192 ->
-## 0.93716316, 1.0 -> 0.96973822). A disc of worms crossing at every angle is
-## nearly all depth, and a vertical billboard turns depth into height; bodies
-## lying parallel and overlapping occupy a shallower footprint, so the art stops
-## further short of the canvas floor. The Tide had been pinned at 1.0 -- its old
-## sheet reached row 0 and was a frame away from clipping -- and now clears the
-## bottom by 10 px.
-##
-## Re-measure all of these whenever build_worm_piles.py changes a pile's shape,
-## or the tier sits in the deck.
-const TIER_FOOT_ANCHOR := [0.90781518, 0.91547340, 0.93716316, 0.96973822, 0.96973822]
+## consulted again after `_ready`. A tier given its own FLOOR_MARGIN in
+## render_sprites.py VARIANT_FLOOR_MARGIN needs its entry here changed to match.
+const TIER_FOOT_ANCHOR := [0.82421875, 0.82421875, 0.82421875, 0.82421875, 0.82421875]
 
 ## Smallest fraction of a tier's sculpt shown at that tier's floor. A Knot at 6
 ## worms draws at 82% of the 9-worm sculpt and grows to full across the tier, so
@@ -516,6 +505,7 @@ func _hostile_on(pos: Vector3i) -> Unit:
 func _trample(target: Unit) -> void:
 	var result := Combat.resolve_melee(self, target)
 	if result.hit:
+		broadcast_visual(&"impact", [target.get_path(), result.crit])
 		if not is_instant():
 			var vfx := get_tree().get_first_node_in_group("vfx")
 			if vfx:

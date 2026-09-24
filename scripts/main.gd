@@ -42,24 +42,48 @@ signal layout_chosen(path: String, map_seed: Variant, spawn_seed: int)
 ## in — see `_try_start_mission`.
 var _host_deployed := false
 var _mission_started := false
+var _rejected_peers: Array[int] = []  # host-side; see _on_late_peer
+var _leaving := false  # client-side; see _show_exit_dialog
+var _chosen_layout: Array = []  # client-side; see _rpc_use_layout
+var _direct := ""  # "host"/"join" for a direct ENet session; see _connect_direct
 
 
 func _ready() -> void:
+	# Returning to the menu reloads this scene, but the autoloads live outside it
+	# and keep everything the last mission left in them — salvage and evidence
+	# most visibly, since nothing else ever reset those. Done here rather than on
+	# the way out so every path back to a mission, present or future, gets it.
+	TurnManager.reset()
+	SecurityNetwork.reset()
+	AlienHivemind.reset()
+	Doctrines.reset()
 	TurnManager.log_message.connect(func(text: String) -> void: print(text))
 	_auto = "--auto" in OS.get_cmdline_user_args()
+	_direct = _cmdline_value("--net=")
+	# Before any waiting, menu included: see _preload_unit_art.
+	_preload_unit_art()
 	if _auto:
 		TurnManager.unit_activated.connect(_auto_play)
-		TurnManager.mission_ended.connect(func(_won: bool) -> void: get_tree().quit.call_deferred())
-		_spawn_and_start()
-		return
+		TurnManager.mission_ended.connect(_on_auto_mission_ended)
+		if _direct == "":
+			_spawn_and_start()
+			return
 
-	# Host/join is a separate screen shown before anything spawns: co-op needs
-	# both peers' MultiplayerPeer connected before squad ownership can be
-	# assigned below, and single-player just clicks through it as "Solo".
-	var net_menu := HostJoinMenu.new()
-	add_child(net_menu)
-	net_menu.setup()
-	await net_menu.resolved
+	if _direct != "":
+		# Direct ENet on localhost in place of the menu — two copies of the game
+		# on one machine, no Steam. See SteamLobby.host_direct.
+		if not await _connect_direct():
+			get_tree().quit(3)
+			return
+	else:
+		# Host/join is a separate screen shown before anything spawns: co-op needs
+		# both peers' MultiplayerPeer connected before squad ownership can be
+		# assigned below, and single-player just clicks through it as "Solo".
+		var net_menu := HostJoinMenu.new()
+		add_child(net_menu)
+		net_menu.setup()
+		await net_menu.resolved
+		print("[BOOT] menu resolved, networked=%s" % SteamLobby.is_networked())
 
 	if SteamLobby.is_networked():
 		print("[NET] proceeding to spawn: is_host=%s local_id=%d peers=%s" % [
@@ -78,11 +102,17 @@ func _ready() -> void:
 			spawn_seed = randi()
 			print("[NET] host sending layout '%s' map_seed=%s spawn_seed=%d" % [path, map_seed, spawn_seed])
 			_rpc_use_layout.rpc(path, map_seed, spawn_seed)
+			# That RPC went to the peers connected right now and nobody else,
+			# and there is no snapshot to catch a later one up — so from here
+			# the lobby stops taking members (a squadmate who drops frees a slot).
+			SteamLobby.close_lobby()
+			multiplayer.peer_connected.connect(_on_late_peer)
 		else:
-			var chosen: Array = await layout_chosen
-			var path: String = chosen[0]
-			var map_seed: Variant = chosen[1]
-			spawn_seed = chosen[2]
+			if _chosen_layout.is_empty():
+				await layout_chosen
+			var path: String = _chosen_layout[0]
+			var map_seed: Variant = _chosen_layout[1]
+			spawn_seed = _chosen_layout[2]
 			print("[NET] client received layout '%s' map_seed=%s, rebuilding" % [path, map_seed])
 			if map_seed != null:
 				map.build_generated(map_seed)
@@ -95,7 +125,78 @@ func _ready() -> void:
 @rpc("authority", "call_remote", "reliable")
 func _rpc_use_layout(path: String, map_seed: Variant, spawn_seed: int) -> void:
 	print("[NET] client's _rpc_use_layout fired with '%s'" % path)
+	# Kept as well as signalled: the host sends this the moment the connection
+	# is up, which can be before `_ready` has reached its `await`.
+	_chosen_layout = [path, map_seed, spawn_seed]
 	layout_chosen.emit(path, map_seed, spawn_seed)
+
+
+## `--net=host` listens on `--port=` (default 24565); `--net=join` connects to
+## it on 127.0.0.1. Resolves once there is somebody on the other end.
+func _connect_direct() -> bool:
+	var port := int(_cmdline_value("--port=", "24565"))
+	if _direct == "host":
+		if SteamLobby.host_direct(port) != OK:
+			push_error("Could not listen on port %d" % port)
+			return false
+		print("[NET] direct host on port %d, waiting for a peer" % port)
+		await multiplayer.peer_connected
+		return true
+	if SteamLobby.join_direct("127.0.0.1", port) != OK:
+		push_error("Could not start a connection to port %d" % port)
+		return false
+	var peer := multiplayer.multiplayer_peer
+	var give_up := Time.get_ticks_msec() + 10000
+	while peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTING:
+		if Time.get_ticks_msec() > give_up:
+			break
+		await get_tree().process_frame
+	return peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
+
+
+func _cmdline_value(prefix: String, fallback: String = "") -> String:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with(prefix):
+			return arg.trim_prefix(prefix)
+	return fallback
+
+
+## `--auto` ends the process when the mission does, printing a digest of the
+## board first. In a two-peer run both peers print one and the smoke test
+## compares them line for line — any difference is state the host changed and
+## the client never heard about.
+func _on_auto_mission_ended(_won: bool) -> void:
+	if _direct != "":
+		# A client's last synced values trail the reliable end-of-mission RPC by
+		# a few frames, and the host has to outlive the client's read of them.
+		await get_tree().create_timer(1.0).timeout
+	_print_digest()
+	if _direct == "host":
+		await get_tree().create_timer(1.5).timeout
+	get_tree().quit.call_deferred()
+
+
+func _print_digest() -> void:
+	var units := {}
+	for node in get_tree().get_nodes_in_group("units"):
+		var unit := node as Unit
+		if unit:
+			units[str(unit.name)] = unit
+	var names := units.keys()
+	names.sort()
+	for unit_name in names:
+		var unit: Unit = units[unit_name]
+		print("[DIGEST] unit %s hp=%d downed=%s at=%s ammo=%d" % [
+			unit_name, unit.current_hp, unit.is_downed, unit.grid_pos, unit.ammo])
+	var cover: Array[String] = []
+	for pos: Vector3i in GridManager.tiles:
+		var tile: GridTileData = GridManager.tiles[pos]
+		for side: int in tile.cover_edges:
+			var edge: CoverEdge = tile.cover_edges[side]
+			cover.append("%s/%d/%d/%d" % [pos, side, edge.type, edge.hp])
+	cover.sort()
+	print("[DIGEST] cover edges=%d hash=%d" % [cover.size(), str(cover).hash()])
+	print("[DIGEST] units=%d" % names.size())
 
 
 ## Everything that used to be unconditional in `_ready` — spawning is
@@ -123,6 +224,7 @@ func _spawn_and_start() -> void:
 	var mercs_per_peer := ceili(float(SQUAD.size()) / owning_peers.size())
 	print("[NET] owning_peers=%s mercs_per_peer=%d" % [owning_peers, mercs_per_peer])
 
+	_boot_mark("")
 	var player_units: Array[PlayerUnit] = []
 	var spawn_index := 0
 	for entry in SQUAD:
@@ -140,6 +242,7 @@ func _spawn_and_start() -> void:
 		player_units.append(unit)
 		spawn_index += 1
 
+	_boot_mark("player squad")
 	var enemy_index := 1
 	for spawn in map.enemy_spawns:
 		var enemy: EnemyUnit = ENEMY_SCENE.instantiate()
@@ -150,6 +253,7 @@ func _spawn_and_start() -> void:
 		enemy.action_logged.connect(_on_unit_log)
 		enemy_index += 1
 
+	_boot_mark("aliens")
 	var swarm_index := 1
 	for spawn in map.swarm_spawns:
 		var swarm: SwarmUnit = SWARM_SCENE.instantiate()
@@ -160,6 +264,7 @@ func _spawn_and_start() -> void:
 		swarm.action_logged.connect(_on_unit_log)
 		swarm_index += 1
 
+	_boot_mark("swarm")
 	var brawler_index := 1
 	for spawn in map.brawler_spawns:
 		var brawler: BrawlerUnit = BRAWLER_SCENE.instantiate()
@@ -170,6 +275,7 @@ func _spawn_and_start() -> void:
 		brawler.action_logged.connect(_on_unit_log)
 		brawler_index += 1
 
+	_boot_mark("brawlers")
 	var hunter_index := 1
 	for spawn in map.hunter_spawns:
 		var hunter: AgileHunterUnit = HUNTER_SCENE.instantiate()
@@ -188,6 +294,7 @@ func _spawn_and_start() -> void:
 	# AFTER `add_child`, and that ordering is the whole of it: `Unit._ready`
 	# sets `current_hp` from the stat block, so a count written before the node
 	# enters the tree is overwritten by the single worm's 5 HP.
+	_boot_mark("hunters")
 	var worm_index := 1
 	for spawn in map.worm_spawns:
 		var worm: WormUnit = WORM_SCENE.instantiate()
@@ -205,6 +312,7 @@ func _spawn_and_start() -> void:
 	# Nests (Sec 11.7). Placed exactly like a unit and drawn from the same pool,
 	# but they are the mission objective rather than a threat — see NestUnit for
 	# why an objective is a Unit here, and for what is still missing from it.
+	_boot_mark("worms")
 	var nest_index := 1
 	for spawn in map.nest_spawns:
 		var nest: NestUnit = NEST_SCENE.instantiate()
@@ -215,6 +323,7 @@ func _spawn_and_start() -> void:
 		nest.action_logged.connect(_on_unit_log)
 		nest_index += 1
 
+	_boot_mark("nests")
 	var merc_index := 1
 	# One LMG per squad, handed to whichever member is placed first in a room.
 	# The coordinator has to pick a suppressor every engagement, and a squad where
@@ -244,11 +353,13 @@ func _spawn_and_start() -> void:
 		add_child(merc)
 		merc.action_logged.connect(_on_unit_log)
 		merc_index += 1
+	_boot_mark("rival mercs")
 
 	# Iterates whatever the deck placed, so a map with no robot glyphs — the test
 	# deck, currently, so the alien tier can be judged on its own — spawns none
 	# without this needing to know that.
 	_spawn_security_robots()
+	_boot_mark("robots")
 
 	if not map.player_spawns.is_empty():
 		camera_rig.focus_on(GridManager.grid_to_world(map.player_spawns[0]))
@@ -256,17 +367,88 @@ func _spawn_and_start() -> void:
 	# Static fixtures are already baked in (TestMap._ready ran first); layer in
 	# the squad's flashlights now that the units themselves exist.
 	LightingManager.recompute_dynamic()
+	_boot_mark("lighting")
 
 	if _auto:
 		# Headless smoke test skips the loadout screen entirely — every unit
-		# just deploys with its class's suggested-default weapon.
-		TurnManager.start_mission.call_deferred()
+		# just deploys with its class's suggested-default weapon. In a two-peer
+		# run it still goes through the ready handshake, which is half of what
+		# that run is there to exercise.
+		if _direct != "":
+			_on_local_deployed()
+		else:
+			TurnManager.start_mission.call_deferred()
 		return
 
+	print("[BOOT] spawned %d player units on %d spawn points, showing loadout" % [
+		player_units.size(), map.player_spawns.size()])
 	var loadout: CanvasLayer = LoadoutMenu.new()
 	add_child(loadout)
 	loadout.setup(player_units)
 	loadout.deployed.connect(_on_local_deployed)
+
+
+## Starts the sprite sets this deck will show loading in the background, so the
+## menu's time on screen is spent on them rather than wasted. Only what the deck
+## actually places: a scene with no spawn points here costs nothing, and a worm
+## mass tier is only warmed if some pile on this deck starts at that size.
+##
+## Reads each scene's Visual off an instance that never enters the tree, so no
+## `_ready` runs and nothing registers with the grid.
+func _preload_unit_art() -> void:
+	if DisplayServer.get_name() == "headless":
+		return  # UnitVisual draws nothing headless, so there is nothing to load
+	var scenes: Array[PackedScene] = [PLAYER_SCENE]
+	var placed := {
+		ENEMY_SCENE: map.enemy_spawns, SWARM_SCENE: map.swarm_spawns,
+		BRAWLER_SCENE: map.brawler_spawns, HUNTER_SCENE: map.hunter_spawns,
+		WORM_SCENE: map.worm_spawns, NEST_SCENE: map.nest_spawns,
+		MERC_SCENE: map.merc_spawns,
+	}
+	for scene: PackedScene in placed:
+		if not (placed[scene] as Array).is_empty():
+			scenes.append(scene)
+	for kind: int in MapData.CERBERUS_SPAWNS:
+		if not (map.cerberus_spawns.get(kind, []) as Array).is_empty():
+			scenes.append(CerberusPresets.scene_for(kind))
+
+	var variants := {}  # variant -> layers
+	for scene in scenes:
+		var unit := scene.instantiate()
+		var visual := unit.get_node_or_null("Visual")
+		if visual and visual.get("layers") != null:
+			variants[visual.get("variant")] = visual.get("layers")
+		unit.free()
+	var worm_layers: Variant = variants.get(&"worm")
+	if worm_layers != null:
+		for spawn in map.worm_spawns:
+			var hp: int = mini(maxi(1, map.worm_counts.get(spawn, 1)), WormUnit.MAX_WORMS) * WormUnit.HP_PER_WORM
+			for t in range(WormUnit.TIER_FLOOR.size() - 1, -1, -1):
+				if ceili(hp / float(WormUnit.HP_PER_WORM)) >= WormUnit.TIER_FLOOR[t]:
+					variants[WormUnit.TIER_VARIANT[t]] = worm_layers
+					break
+
+	for variant: StringName in variants:
+		for layer: StringName in variants[variant]:
+			for suffix in ["", UnitVisual.DEPTH_LAYER_SUFFIX]:
+				var path := "res://assets/sprites/%s%s_%s.tres" % [layer, suffix, variant]
+				if ResourceLoader.exists(path):
+					LazySpriteFrames.preload_set(path)
+	print("[BOOT] preloading art for %s" % [variants.keys()])
+
+
+var _boot_mark_usec := 0
+
+
+## Diagnostic: how long the spawn phase that just finished took. Spawning is
+## where a cold start stalls — the first unit of each kind loads its whole
+## SpriteFrames set synchronously — so this names which kind is paying for it.
+## An empty `phase` only starts the clock.
+func _boot_mark(phase: String) -> void:
+	var now := Time.get_ticks_usec()
+	if phase != "":
+		print("[BOOT] %s: %d ms" % [phase, (now - _boot_mark_usec) / 1000])
+	_boot_mark_usec = now
 
 
 ## The ready handshake, the equivalent of a join handshake for a game that
@@ -275,6 +457,7 @@ func _spawn_and_start() -> void:
 ## A client's Deploy is that signal: it only reaches its loadout screen after
 ## spawning, and deploying last means its weapon picks are already in.
 func _on_local_deployed() -> void:
+	print("[BOOT] deployed")
 	if not SteamLobby.is_networked():
 		TurnManager.start_mission.call_deferred()
 	elif SteamLobby.is_host():
@@ -305,20 +488,53 @@ func _try_start_mission() -> void:
 	if _mission_started or not _host_deployed:
 		return
 	for peer_id in multiplayer.get_peers():
-		if peer_id not in SteamLobby.ready_peers:
+		if peer_id not in SteamLobby.ready_peers and peer_id not in _rejected_peers:
 			hud.append_log("Waiting for your squadmate to deploy...")
 			return
 	_mission_started = true
+	print("[BOOT] starting mission")
 	TurnManager.start_mission.call_deferred()
+
+
+## Host-side backstop for `SteamLobby.close_lobby`: a peer that connects anyway
+## is told why and then dropped, rather than left waiting forever on a layout
+## that was sent before it arrived. Told first and dropped a moment later so the
+## reliable message isn't lost to its own disconnect.
+func _on_late_peer(peer_id: int) -> void:
+	print("[NET] turning away late peer %d" % peer_id)
+	_rejected_peers.append(peer_id)
+	_rpc_session_closed.rpc_id(peer_id)
+	get_tree().create_timer(2.0).timeout.connect(func() -> void:
+		if multiplayer.multiplayer_peer and peer_id in multiplayer.get_peers():
+			multiplayer.multiplayer_peer.disconnect_peer(peer_id))
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_session_closed() -> void:
+	_show_exit_dialog("That mission is already under way and can't be joined partway through.")
 
 
 ## The host is peer 1 and runs the whole simulation, so there is nothing to
 ## migrate to — same as any listen-server game, the mission ends with it.
 func _on_host_left() -> void:
+	_show_exit_dialog("The host left the game, so this mission is over.")
+
+
+func _show_exit_dialog(text: String) -> void:
+	# Once only: a turned-away client gets `_rpc_session_closed` and then, a
+	# moment later, the disconnect that follows it.
+	if _leaving:
+		return
+	_leaving = true
 	TurnManager.abandon()
+	if _auto:
+		# Nobody to click the dialog, and the smoke test reads the exit code.
+		print("[NET] session ended early: %s" % text)
+		get_tree().quit(2)
+		return
 	var dialog := AcceptDialog.new()
 	dialog.title = "Disconnected"
-	dialog.dialog_text = "The host left the game, so this mission is over."
+	dialog.dialog_text = text
 	dialog.ok_button_text = "Back to menu"
 	add_child(dialog)
 	dialog.confirmed.connect(_return_to_menu)
@@ -335,7 +551,7 @@ func _return_to_menu() -> void:
 ## handed to the host, who can keep playing them. Also unblocks a host still
 ## waiting on that squadmate's Deploy.
 func _on_squadmate_left(peer_id: int) -> void:
-	if not multiplayer.is_server():
+	if not multiplayer.is_server() or peer_id in _rejected_peers:
 		return
 	for node in get_tree().get_nodes_in_group("player_units"):
 		var unit := node as Unit
@@ -392,7 +608,9 @@ var _auto_brains: Dictionary = {}
 ## Real play is untouched: nothing below runs unless `--auto` is passed.
 func _auto_play(unit: Unit) -> void:
 	var player := unit as PlayerUnit
-	if player == null:
+	# The host plays every merc, a client's included: the brain calls unit
+	# methods directly, which on a client would act out a turn the host never saw.
+	if player == null or not multiplayer.is_server():
 		return
 	await get_tree().process_frame
 	var target := _nearest_hostile(player)

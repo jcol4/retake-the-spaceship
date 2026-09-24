@@ -270,12 +270,16 @@ const BUCKET_OFFSET := PI / 4.0
 ## Exported rather than a constant because it is a property of the CANVAS, like
 ## `canvas_height` beside it, and the placeholder and the authored art no longer
 ## agree on it. The placeholder is drawn with the feet flush to the bottom edge,
-## so 1.0 is right for it and is the default. Rendered art cannot be: the sprite
-## camera is tilted, so the floor projects to a DIAGONAL through the world origin
-## rather than to a horizontal line under the boots, and a foot planted toward
-## the camera falls below the frame. `render_sprites.py` answers that with
-## FLOOR_MARGIN metres of floor below the origin, which moves the anchor up off
-## the bottom edge by exactly that fraction -- see that file for the arithmetic.
+## so 1.0 is right for it and is the default.
+##
+## Rendered art is anchored on the WORLD ORIGIN's row, 1 - FLOOR_MARGIN /
+## CANVAS_HEIGHT (`render_sprites.py` prints it). Under the ortho sprite camera
+## that row is where the model's true ground point lands for every facing,
+## pose and frame, so every pixel lands on screen where the 3D model would have
+## put it. Feet planted toward the camera project BELOW that row, and they are
+## drawn in front of the floor rather than under it because the layer writes
+## its real per-pixel depth -- see DEPTH_LAYER_SUFFIX. A layer with no depth
+## sidecar yet falls back to `_ground_depth_offset`.
 @export var foot_anchor: Vector2 = Vector2(0.5, 1.0)
 
 ## Layers drawn on a BIGGER canvas than `canvas_height`, as layer -> how many
@@ -311,6 +315,14 @@ const BUCKET_OFFSET := PI / 4.0
 ## `merc` (`variant = &"merc"`). A real second sprite set replaces this; until
 ## then a flat multiply beats shipping two identical-looking factions.
 @export var faction_tint: Color = Color.WHITE
+
+## Radius of the soft shadow under the unit's feet, in metres; 0 turns it off.
+## See CONTACT_SHADOW_SHADER. Sized to the footprint, not the figure: a
+## shadow wider than the stance reads as a puddle.
+@export var contact_shadow_radius: float = 0.42
+
+## How dark the centre of that shadow is, 0..1.
+@export_range(0.0, 1.0) var contact_shadow_strength: float = 0.45
 
 ## TEST HOOK for shaders/gritty_fallout.gdshader — assign the material here (or
 ## shaders/gritty_fallout_test.tres directly) to see it on every layer of this
@@ -387,8 +399,37 @@ const ADDITIVE_LAYERS: Array[StringName] = [&"flash"]
 ## carried as a vertex colour and clamps at 1.0; a uniform does not.
 const ADDITIVE_GAIN := 1.8
 
-## Metres an additive layer is pulled toward the camera, past where
-## `_ground_depth_offset` already put the body.
+## Suffix of a layer's DEPTH SIDECAR set: `body` art at `body_merc.tres` has
+## its depth at `body_depth_merc.tres`, same animations, same frames.
+##
+## `render_sprites.py` writes one per frame, holding how far each pixel's
+## surface sat in front of the world origin along the sprite camera's axis, and
+## `shaders/sprite_depth.gdshader` writes that as the fragment's depth. The flat
+## card then depth-tests as the model it was rendered from: a boot planted
+## toward the camera beats the floor in front of the tile centre, the heel
+## behind it does not, and a crate edge that really is nearer hides exactly
+## what is behind it. MIRRORS `render_sprites.py` DEPTH_LAYER_SUFFIX.
+const DEPTH_LAYER_SUFFIX := "_depth"
+
+## Half-range of the sidecar encoding, in canvas heights. MIRRORS
+## `render_sprites.py` DEPTH_RANGE; change both or neither.
+const DEPTH_RANGE := 2.0
+
+const DEPTH_SHADER := preload("res://shaders/sprite_depth.gdshader")
+const DEPTH_ADD_SHADER := preload("res://shaders/sprite_depth_add.gdshader")
+
+## The soft dark patch under the feet. A sprite placed exactly on the floor
+## still reads as hovering with nothing tying it to the ground, and in this
+## lighting model (unshaded sprites tinted by tile) nothing else does.
+const CONTACT_SHADOW_SHADER := preload("res://shaders/contact_shadow.gdshader")
+
+## Metres the contact shadow floats above the unit's floor. Enough to never
+## z-fight the deck under an orthographic depth buffer, far too little to see.
+const CONTACT_SHADOW_LIFT := 0.01
+
+## Metres an additive layer WITHOUT a depth sidecar is pulled toward the camera,
+## past where `_ground_depth_offset` put the body. A layer with a sidecar needs
+## none of this: it tests at its real depth.
 ##
 ## Every layer sits at the SAME position, so the flash card and the body card are
 ## coplanar. The body is scissored, which makes it opaque and depth-writing; a
@@ -461,6 +502,14 @@ var _authored := false
 ## unit is already a mistake (`_build_layers` paints a grey disc over the face),
 ## but it should not additionally be stretched 22% too tall.
 var _authored_layers := {}
+## Layers drawn with a depth sidecar, layer -> its SpriteFrames. Those stand at
+## the unit's origin and need no `_ground_depth_offset`; see DEPTH_LAYER_SUFFIX.
+var _depth_frames := {}
+## layer -> its depth ShaderMaterial, kept across variant swaps so the frame
+## hooks are connected once. See `_refresh_depth`.
+var _depth_materials := {}
+## Layers already warned about a stale depth build, so it is said once.
+var _depth_warned := {}
 var _stepping: bool = false
 var _fidgeting: bool = false
 ## COVER_LOW, COVER_HIGH, or "" for a unit not using cover. Written by the unit
@@ -533,6 +582,14 @@ func _build_layers() -> void:
 		var sprite := AnimatedSprite3D.new()
 		sprite.name = String(layer).capitalize()
 		sprite.sprite_frames = frames
+		# Authored sets arrive with their frames not yet loaded (see
+		# LazySpriteFrames). Hooked to the sprite's own signals rather than to
+		# `_play`, so whatever path changes what it shows fills that animation in
+		# first — and connected before the depth and additive hooks below, which
+		# read the frame's texture on the same signals.
+		var fill := func() -> void: LazySpriteFrames.ensure(sprite.sprite_frames, sprite.animation)
+		sprite.animation_changed.connect(fill)
+		sprite.sprite_frames_changed.connect(fill)
 		# Scale and pivot both derive from this layer's own texture size, which IS
 		# the pivot contract: every layer resolves to the same world height with
 		# its origin on `foot_anchor`, so reassigning one layer's frames can never
@@ -550,12 +607,13 @@ func _build_layers() -> void:
 		sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 		if test_shader:
 			_apply_test_shader(sprite)
-		elif layer in ADDITIVE_LAYERS:
+		elif not _refresh_depth(sprite, layer) and layer in ADDITIVE_LAYERS:
 			# `elif`: the test shader is a debug hook that wants to be seen on
 			# every layer as-is, so it keeps the last word where both apply.
 			_apply_additive(sprite)
 		add_child(sprite)
 		_sprites[layer] = sprite
+	_build_contact_shadow()
 
 
 ## Wires the test shader onto one sprite. material_override replaces the
@@ -630,14 +688,130 @@ func _apply_additive(sprite: AnimatedSprite3D) -> void:
 	push_texture.call()
 
 
+## Draws one layer with its depth sidecar. See DEPTH_LAYER_SUFFIX.
+##
+## An override, for the reason `_apply_additive` gives: AnimatedSprite3D has no
+## way to write depth, and Godot does not feed its current frame into an
+## overriding material, so both textures are pushed in by hand on every change.
+## The sidecar is looked up by the SAME animation name and frame index the
+## sprite is showing -- `build_sprite_frames.gd` builds both sets from the same
+## file names, so the two stay in step by construction.
+##
+## The additive flash gets the additive variant of the shader rather than
+## losing its blend: it still adds light, it just tests at its real depth.
+##
+## Returns whether the layer is now drawn with depth. Called again by
+## `set_variant`, because a variant swap brings its own sidecar set, or none:
+## `WormUnit` swaps sheets as a pile grows and rescales `canvas_height` with it.
+func _refresh_depth(sprite: AnimatedSprite3D, layer: StringName) -> bool:
+	var depth := _load_depth_frames(layer) if _authored_layers.get(layer, false) else null
+	var mat: ShaderMaterial = _depth_materials.get(layer)
+	if depth == null:
+		_depth_frames.erase(layer)
+		if mat and sprite.material_override == mat:
+			# Back to the stock material. The push callback stays connected but
+			# does nothing while the layer has no entry in `_depth_frames`.
+			sprite.material_override = null
+			sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
+			if layer in ADDITIVE_LAYERS:
+				_apply_additive(sprite)
+		return false
+	_depth_frames[layer] = depth
+	if mat == null:
+		mat = _build_depth_material(sprite, layer)
+		_depth_materials[layer] = mat
+	sprite.material_override = mat
+	if layer in ADDITIVE_LAYERS:
+		sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISABLED
+	# UNSCALED canvas height, even on an enlarged-canvas layer: the sidecar is
+	# encoded in the body canvas's heights whatever its own resolution. Set on
+	# every refresh because a worm pile rescales it with the tier.
+	mat.set_shader_parameter("canvas_metres", canvas_height)
+	_push_depth_textures(sprite, layer)
+	return true
+
+
+## The depth ShaderMaterial for one layer, and the hooks that keep its textures
+## on the frame the sprite is showing. Built once per layer.
+func _build_depth_material(sprite: AnimatedSprite3D, layer: StringName) -> ShaderMaterial:
+	var additive := layer in ADDITIVE_LAYERS
+	var mat := ShaderMaterial.new()
+	mat.shader = DEPTH_ADD_SHADER if additive else DEPTH_SHADER
+	mat.set_shader_parameter("depth_range", DEPTH_RANGE)
+	if additive:
+		mat.set_shader_parameter("gain", ADDITIVE_GAIN)
+		# After the body in the transparent pass, as `_apply_additive` has it.
+		mat.render_priority = 1
+	var push := _push_depth_textures.bind(sprite, layer)
+	sprite.frame_changed.connect(push)
+	sprite.animation_changed.connect(push)
+	return mat
+
+
+## Pushes the current frame and its sidecar into the layer's depth material.
+## Looks both up by the SAME animation name and frame index, which
+## `build_sprite_frames.gd` keeps in step by building both from the same names.
+func _push_depth_textures(sprite: AnimatedSprite3D, layer: StringName) -> void:
+	var depth: SpriteFrames = _depth_frames.get(layer)
+	var mat: ShaderMaterial = _depth_materials.get(layer)
+	if depth == null or mat == null:
+		return
+	var frames := sprite.sprite_frames
+	var anim := sprite.animation
+	if frames == null or anim == &"" or not frames.has_animation(anim):
+		return
+	LazySpriteFrames.ensure(frames, anim)
+	LazySpriteFrames.ensure(depth, anim)
+	mat.set_shader_parameter("texture_albedo", frames.get_frame_texture(anim, sprite.frame))
+	var has := depth.has_animation(anim) and sprite.frame < depth.get_frame_count(anim)
+	mat.set_shader_parameter("use_depth", has)
+	if has:
+		mat.set_shader_parameter("texture_depth", depth.get_frame_texture(anim, sprite.frame))
+	elif not _depth_warned.has(layer):
+		# A stale depth build. The shader falls back to the origin's depth for
+		# the whole card (see `use_depth`); said once, because the fix is a
+		# rebuild, not anything here.
+		_depth_warned[layer] = true
+		push_warning("%s: %s%s_%s has no depth frame for %s:%d -- rebuild it with build_sprite_frames.gd" % [
+			name, layer, DEPTH_LAYER_SUFFIX, variant, anim, sprite.frame])
+
+
+## The depth sidecar set for one layer, or null if it has not been rendered.
+func _load_depth_frames(layer: StringName) -> SpriteFrames:
+	return LazySpriteFrames.open(
+		"res://assets/sprites/%s%s_%s.tres" % [layer, DEPTH_LAYER_SUFFIX, variant])
+
+
+## Lays the contact shadow on the floor under the unit. See CONTACT_SHADOW_SHADER.
+##
+## A child of this node, so it moves with the unit and hides with it
+## (`Unit.set_rendered` hides the whole visual). A circle, so the unit's facing
+## -- which this node turns with -- does not matter.
+func _build_contact_shadow() -> void:
+	if contact_shadow_radius <= 0.0:
+		return
+	var mesh := PlaneMesh.new()
+	mesh.size = Vector2.ONE * contact_shadow_radius * 2.0
+	var mat := ShaderMaterial.new()
+	mat.shader = CONTACT_SHADOW_SHADER
+	mat.set_shader_parameter("strength", contact_shadow_strength)
+	var node := MeshInstance3D.new()
+	node.name = "ContactShadow"
+	node.mesh = mesh
+	node.material_override = mat
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	node.position.y = CONTACT_SHADOW_LIFT
+	add_child(node)
+
+
 ## Authored art for one layer, or null while none exists. The naming convention is
 ## `[part]_[variant]_[animation]_[direction]_[frame].png` under assets/sprites,
 ## collected into one SpriteFrames per part+variant.
+##
+## Opened through LazySpriteFrames rather than `load()`: a set's textures load
+## per animation as it is first shown, not all at once here.
 func _load_frames(layer: StringName) -> SpriteFrames:
-	var path := "res://assets/sprites/%s_%s.tres" % [layer, variant]
-	if not ResourceLoader.exists(path):
-		return null
-	return load(path) as SpriteFrames
+	return LazySpriteFrames.open("res://assets/sprites/%s_%s.tres" % [layer, variant])
 
 
 ## Sizes one layer from its own art, so resolution is a property of the PNG
@@ -740,6 +914,10 @@ func set_variant(new_variant: StringName) -> void:
 		# Re-derived, not carried over: the incoming art may be a different
 		# resolution from what this layer was showing.
 		_apply_frame_scale(sprite, frames, layer)
+		# And its own depth sidecars, or none -- in which case the layer drops
+		# back to the stock material and `_ground_depth_offset`.
+		if not test_shader:
+			_refresh_depth(sprite, layer)
 	# New art brings its own barrel with it.
 	_read_markers()
 	_play(_stance)
@@ -1052,6 +1230,13 @@ func _camera_yaw() -> float:
 # along the view axis changes depth and nothing else -- there is no perspective
 # divide to scale the result -- so the sprite can be pushed toward the camera
 # until it beats the floor without moving on screen by so much as a pixel.
+#
+# THE WHOLE-CARD PUSH BELOW IS NOW THE FALLBACK. A layer with a depth sidecar
+# (DEPTH_LAYER_SUFFIX) answers the same problem per PIXEL instead: each one is
+# moved along the view axis to where its surface really was, which fixes the
+# foot without dragging the head forward into whatever stands in front of the
+# unit. `_update_ground_depth` leaves those layers at the origin and applies
+# this only to layers that have no sidecar rendered yet.
 
 
 ## How far the sprite must travel along the view axis to clear the floor it
@@ -1162,7 +1347,13 @@ func _update_ground_depth() -> void:
 	var stretch := _view_stretch()
 	for layer in _sprites:
 		var sprite := _sprites[layer] as AnimatedSprite3D
-		sprite.position = overlay if layer in ADDITIVE_LAYERS else local
+		if _depth_frames.has(layer):
+			# Real per-pixel depth: the card stands exactly on the origin its
+			# sidecar is measured from. Any push here would move every pixel
+			# off the depth the render gave it.
+			sprite.position = Vector3.ZERO
+		else:
+			sprite.position = overlay if layer in ADDITIVE_LAYERS else local
 		sprite.scale.y = stretch if _authored_layers.get(layer, false) else 1.0
 
 

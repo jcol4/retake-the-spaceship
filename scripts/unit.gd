@@ -185,6 +185,7 @@ var _burst_round: int = 0
 var _burst_strays: Array[int] = []
 var _name_label: Label3D = null
 var _sync: MultiplayerSynchronizer = null  # co-op only; see _setup_replication
+var _last_synced: Dictionary = {}  # client-only; see _on_sync_received
 
 
 ## Whether this unit's actions should resolve with no time on the clock.
@@ -262,6 +263,12 @@ func _ready() -> void:
 ## pile) opens straight up for whoever is already in `SteamLobby.ready_peers`.
 func _setup_replication() -> void:
 	var sync := MultiplayerSynchronizer.new()
+	# Named for the same reason the unit is (main.gd `_spawn_and_start`): the
+	# synchronizer is addressed by path, and left unnamed it becomes
+	# `@MultiplayerSynchronizer@<n>` off a process-wide counter that is never the
+	# same number on two peers — so no client ever resolved one, and no unit
+	# state (HP, AP, ammo, downed) reached a client at all.
+	sync.name = "Sync"
 	var config := SceneReplicationConfig.new()
 	for prop in ["global_position", "rotation:y", "current_hp", "ap", "is_downed",
 			"ammo", "reserve", "hunkered", "on_overwatch", "flashlight_on"]:
@@ -274,8 +281,155 @@ func _setup_replication() -> void:
 		for peer_id in SteamLobby.ready_peers:
 			sync.set_visibility_for(peer_id, true)
 	_sync = sync
-	sync.synchronized.connect(_on_replicated)
+	sync.synchronized.connect(_on_sync_received)
 	add_child(sync)
+
+
+## Client-side. The synchronizer lands VALUES; nothing on a client ever ran the
+## code that changed them, so everything the host did alongside a change — the
+## collapse, the flinch, the pose, the HUD refresh — is replayed here off the
+## difference from the last batch. Only for effects a value fully determines;
+## one-off actions that leave no value behind (a burst, a swing) come through
+## `_rpc_visual` instead.
+func _on_sync_received() -> void:
+	if multiplayer.is_server():
+		return
+	var prev := _last_synced
+	_last_synced = {"hp": current_hp, "ap": ap, "downed": is_downed, "hunkered": hunkered,
+		"overwatch": on_overwatch, "flashlight": flashlight_on}
+	if not prev.is_empty():
+		if is_downed and not prev.downed:
+			_mirror_downed()
+		elif current_hp < prev.hp and not is_downed and not is_busy:
+			settle_idle()
+			visual.play_hit_react()
+		if current_hp != prev.hp:
+			hp_changed.emit(self)
+		if ap != prev.ap:
+			ap_changed.emit(self)
+		if (hunkered != prev.hunkered or on_overwatch != prev.overwatch) and not is_downed and not is_busy:
+			if on_overwatch:
+				refresh_cover_pose()
+				visual.set_stance(UnitVisual.OVERWATCH)
+			else:
+				settle_idle()
+		if flashlight_on != prev.flashlight:
+			visual.set_flashlight_enabled(has_flashlight and flashlight_on)
+			LightingManager.recompute_dynamic()
+	_on_replicated()
+
+
+## The client's half of `take_damage`'s downing branch — the visible half only.
+## `downed` is deliberately NOT emitted: its listeners are host logic (salvage,
+## squad blackboards), and a client firing them would double-count.
+func _mirror_downed() -> void:
+	is_busy = false
+	release_suppression()
+	if GridManager.get_tile(grid_pos) and GridManager.get_tile(grid_pos).occupant == self:
+		GridManager.set_occupant(grid_pos, null)
+	if _name_label:
+		_name_label.visible = false
+	visual.play_action(UnitVisual.DOWNED)
+
+
+## Host-side: replays the cosmetic half of an action on every client — see
+## `_rpc_visual`. A no-op in solo (no peers) and on a client (the host is the
+## only peer whose actions are real).
+func broadcast_visual(kind: StringName, args: Array = []) -> void:
+	if multiplayer.is_server() and not multiplayer.get_peers().is_empty():
+		_rpc_visual.rpc(kind, args)
+
+
+## Client-side: plays what the host's copy of this unit just did. Resolves
+## nothing — damage, ammo and AP all arrive through the synchronizer — so every
+## branch here is the animation and effects half of an action and no more.
+## Units are named by path (nodes can't cross the wire), and a path that doesn't
+## resolve just drops the target, which at worst loses the impact marks.
+@rpc("authority", "call_remote", "reliable")
+func _rpc_visual(kind: StringName, args: Array) -> void:
+	if is_downed and kind != &"release":
+		return
+	match kind:
+		&"move":
+			var walking: bool = args[0]
+			is_busy = true
+			visual.set_cover_pose(&"")
+			visual.set_stance(UnitVisual.WALK if walking else UnitVisual.RUN)
+		&"arrive":
+			_apply_grid_pos(args[0])
+			is_busy = false
+			if args[1]:
+				settle_idle()
+			else:
+				refresh_cover_pose()
+				await visual.play_stance_exit(UnitVisual.RUN_STOP, UnitVisual.IDLE)
+		&"burst":
+			var shot: Combat.ShotResult = null
+			var target := _unit_at(args[0])
+			if target:
+				shot = Combat.ShotResult.new()
+				shot.hit = args[2]
+				shot.crit = args[3]
+			is_busy = true
+			_pending_shot = shot
+			_pending_target = target
+			_burst_round = 0
+			_burst_strays.assign(args[4])
+			await visual.play_burst(args[1])
+			_pending_shot = null
+			_pending_target = null
+			is_busy = false
+		&"suppress":
+			var target := _unit_at(args[0])
+			if target == null:
+				return
+			release_suppression()
+			suppressing = target
+			target.suppressed_by = self
+			is_busy = true
+			_arm_covering_fire(target)
+			await visual.play_burst(SUPPRESSION_BURST_ROUNDS)
+			_disarm_covering_fire()
+			is_busy = false
+			_suppression_fire_loop()
+		&"release":
+			release_suppression()
+		&"melee":
+			is_busy = true
+			await visual.play_action(UnitVisual.MELEE)
+			is_busy = false
+			var target := _unit_at(args[0])
+			if args[1] and target:
+				_play_impact(target.global_position, args[2])
+		&"impact":
+			var target := _unit_at(args[0])
+			if target:
+				_play_impact(target.global_position, args[1])
+		&"grenade":
+			is_busy = true
+			await visual.play_action(UnitVisual.GRENADE)
+			is_busy = false
+			_play_impact(GridManager.grid_to_world(args[0]) + Vector3(0, 0.9, 0), true)
+		&"reload":
+			is_busy = true
+			await visual.play_action(UnitVisual.RELOAD)
+			is_busy = false
+		&"action":
+			visual.play_action(args[0])
+
+
+func _unit_at(path: NodePath) -> Unit:
+	if path.is_empty():
+		return null
+	return get_tree().root.get_node_or_null(path) as Unit
+
+
+func _play_impact(at: Vector3, crit: bool) -> void:
+	if is_instant():
+		return
+	var vfx := get_tree().get_first_node_in_group("vfx")
+	if vfx:
+		vfx.impact(at, crit)
 
 
 ## Client-side: runs after each batch of synchronized properties lands. For
@@ -305,6 +459,10 @@ func _on_moved_broadcast_grid_pos(_unit: Unit) -> void:
 @rpc("authority", "call_remote", "reliable")
 func _rpc_sync_grid_pos(new_grid_pos: Vector3i) -> void:
 	print("[NET] client received grid_pos for %s -> %s (was %s)" % [stats.display_name, new_grid_pos, grid_pos])
+	_apply_grid_pos(new_grid_pos)
+
+
+func _apply_grid_pos(new_grid_pos: Vector3i) -> void:
 	if new_grid_pos == grid_pos:
 		return
 	GridManager.set_occupant(grid_pos, null)
@@ -364,6 +522,7 @@ func move_along(path: Array[Vector3i]) -> void:
 	# the whole way in a crouch the moment `run_low` art exists.
 	visual.set_cover_pose(&"")
 	visual.set_stance(UnitVisual.WALK if walking else UnitVisual.RUN)
+	broadcast_visual(&"move", [walking])
 	var was_hidden := is_instant()
 	for step in path:
 		# Visibility is re-read per tile, which is what makes a unit that walks
@@ -408,6 +567,7 @@ func move_along(path: Array[Vector3i]) -> void:
 	# so a unit that settled first would pose plain and then visibly snap into the
 	# crouch a moment later.
 	await snap_to_cover()
+	broadcast_visual(&"arrive", [grid_pos, walking])
 	if walking:
 		# A walk is already at rest by the time it ends, so it settles straight
 		# into idle rather than through a stop.
@@ -823,6 +983,7 @@ func do_suppress(target: Unit) -> void:
 	_end_activation_ap()
 	is_busy = true
 	await face_toward(target.global_position)
+	broadcast_visual(&"suppress", [target.get_path()])
 	_arm_covering_fire(target)
 	await visual.play_burst(SUPPRESSION_BURST_ROUNDS)
 	_disarm_covering_fire()
@@ -867,6 +1028,7 @@ func _suppression_fire_loop() -> void:
 func release_suppression() -> void:
 	if suppressing == null:
 		return
+	broadcast_visual(&"release")
 	if suppressing.suppressed_by == self:
 		suppressing.suppressed_by = null
 	suppressing = null
@@ -1030,6 +1192,7 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	_pending_target = target
 	_burst_round = 0
 	_burst_strays = _pick_strays(rounds, result.hit)
+	broadcast_visual(&"burst", [target.get_path(), rounds, result.hit, result.crit, _burst_strays])
 	await visual.play_burst(rounds)  # emits `muzzle` once per round
 	_pending_shot = null
 	_pending_target = null
@@ -1078,6 +1241,7 @@ func melee_at(target: Unit) -> Combat.ShotResult:
 	# leaves is the impact flash where it connects.
 	var result := Combat.resolve_melee(self, target)
 	is_busy = true
+	broadcast_visual(&"melee", [target.get_path(), result.hit, result.crit])
 	await visual.play_action(UnitVisual.MELEE)
 	if result.hit:
 		if not is_instant():
@@ -1256,6 +1420,7 @@ func do_reload() -> void:
 		reserve -= drawn
 	ammo += drawn
 	is_busy = true
+	broadcast_visual(&"reload")
 	await visual.play_action(UnitVisual.RELOAD)
 	is_busy = false
 

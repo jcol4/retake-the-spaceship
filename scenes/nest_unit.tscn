@@ -18,28 +18,20 @@ script = ExtResource("1_script")
 ; ONE layer, like the worm and the swarm: the whole nest is rendered flat in a
 ; single pass, so there is nothing to composite.
 ;
-; canvas_height mirrors render_sprites.py CANVAS_HEIGHT. foot_anchor is row 28
-; of 256. The mean over the eight idle facings — where this prop's base averages
-; out — is row 34, and this is six pixels above it, which is the one place a
-; character's anchor is set by something other than the art.
-;
-; The nest is wide and prone, so the facing whose near edge points at the camera
-; projects ~30 px lower than the facing whose does not. At row 34 the near edge
-; needed 0.62 m of ground-depth offset to clear the floor, and
-; UnitVisual.GROUND_DEPTH_SAFETY caps that at 0.49 m so the nest cannot punch
-; through cover half a tile away — leaving ~6 px of its near edge sliced off.
-; Row 28 brings the requirement under the cap, at a cost of six pixels of lift
-; that a prone blob with a 47 px facing spread cannot show.
-;
-; Not the minimum over all 192 frames either: anchoring there left the nest
-; hovering over its tile in seven facings out of eight. Re-render and the mean
-; moves; take it from the render log, then re-check it against the cap.
+; canvas_height mirrors render_sprites.py CANVAS_HEIGHT. foot_anchor is the
+; world origin's row, like every rendered character (see player_unit.tscn) --
+; but 1 - 0.65 / 2.56 rather than 1 - 0.45 / 2.56, because the nest renders
+; with its own VARIANT_FLOOR_MARGIN of 0.65 m. The rig was lowered 0.243 m in
+; worm_spawn_scaled.blend so its right thigh lies on the deck, and at the shared
+; 0.45 its near edge ran off the bottom of the canvas facing the camera.
+; body_depth_nest.tres gives every pixel its real depth, so the parts that sit
+; in front of the origin draw over the floor instead of being cut by it.
 [node name="Visual" type="Node3D" parent="."]
 script = ExtResource("2_visual")
 layers = Array[StringName]([&"body"])
 variant = &"nest"
 canvas_height = 2.56
-foot_anchor = Vector2(0.5, 0.890625)
+foot_anchor = Vector2(0.5, 0.74609375)
 has_light = false
 
 [node name="Body" type="StaticBody3D" parent="."]

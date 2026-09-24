@@ -88,6 +88,19 @@ func setup() -> void:
 
 	SteamLobby.lobby_ready.connect(_on_lobby_ready)
 	SteamLobby.join_failed.connect(func(reason: String) -> void: _status.text = reason)
+	print("[BOOT] host/join menu shown (steam_available=%s)" % SteamLobby.steam_available)
+
+
+## Diagnostic: names the control under every click that reaches this menu. A
+## Solo press that does nothing but logs a hovered control other than the Solo
+## button means something is drawn over the menu and eating the click; no line
+## at all means the click never reached the viewport.
+func _input(event: InputEvent) -> void:
+	var click := event as InputEventMouseButton
+	if click and click.pressed:
+		var hovered := get_viewport().gui_get_hovered_control()
+		print("[BOOT] menu click at %s, hovered control: %s" % [
+			click.position, hovered.get_path() if hovered else "<none>"])
 
 
 ## Built up front and hidden rather than on demand: this screen is also where
@@ -143,6 +156,7 @@ func _on_credits() -> void:
 
 
 func _on_solo() -> void:
+	print("[BOOT] Solo pressed")
 	resolved.emit()
 	queue_free()
 

@@ -505,6 +505,7 @@ func _set_state(new_state: AlertState) -> void:
 	# scream. Nothing downstream depends on the clip finishing.
 	if was == AlertState.UNAWARE and new_state != AlertState.UNAWARE:
 		visual.play_action(UnitVisual.ALERT_SCREAM)
+		broadcast_visual(&"action", [UnitVisual.ALERT_SCREAM])
 	_refresh_label()
 	state_changed.emit(self)
 

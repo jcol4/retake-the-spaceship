@@ -29,8 +29,8 @@ script = ExtResource("1_script")
 ; robots' status lights are the only other tinted thing on the field, and those
 ; are green/amber/red on a self-lit layer.
 ;
-; foot_anchor is row 17 of 256, the MEAN lowest opaque row over the eight idle
-; facings -- see player_unit.tscn, which shares this art and carries the working.
+; foot_anchor is the world origin's row, 1 - 0.45 / 2.56 -- see player_unit.tscn,
+; which shares this art and carries the working.
 ;
 ; `flash` is the muzzle-flash OVERLAY, and it is LAST in `layers` because layers
 ; draw back to front. It is the one layer that is not the character: it carries a
@@ -49,7 +49,7 @@ script = ExtResource("2_visual")
 layers = Array[StringName]([&"body", &"flash"])
 variant = &"merc"
 canvas_height = 2.56
-foot_anchor = Vector2(0.5, 0.93359375)
+foot_anchor = Vector2(0.5, 0.82421875)
 layer_canvas_scale = {
 &"flash": 2.0
 }
