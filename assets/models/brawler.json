@@ -1,0 +1,9 @@
+{
+  "variant": "brawler",
+  "poses": [
+    "idle",
+    "melee",
+    "walk"
+  ],
+  "pose_yaw_degrees": {}
+}

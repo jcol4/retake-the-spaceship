@@ -68,20 +68,18 @@ func _closeup() -> void:
 		(node as CanvasLayer).visible = false
 		hidden += 1
 	print("[screenshot] hid ", hidden, " CanvasLayer(s)")
-	# Sprite diagnostics: which direction bucket each layer resolved to, and
-	# whether they agree. A layer showing a different direction from its
-	# neighbours is the failure mode the lockstep playback exists to prevent, and
-	# it is invisible in a still unless the names are printed alongside it.
+	# Model diagnostics: which pose is on screen, and whether a model loaded at
+	# all or the code placeholder is standing in for it.
 	var vis: Node = unit.get_node_or_null("Visual")
 	if vis == null:
 		print("[screenshot] Visual NOT FOUND")
 		return
-	print("[screenshot] variant=", vis.get("variant"), " layers=", vis.get("layers"))
-	for child in vis.get_children():
-		var sprite := child as AnimatedSprite3D
-		if sprite:
-			print("[screenshot]   %s: '%s' frame %d flip_h=%s visible=%s" % [
-				sprite.name, sprite.animation, sprite.frame, sprite.flip_h, sprite.visible])
+	print("[screenshot] variant=%s authored=%s pose=%s" % [
+		vis.get("variant"), vis.get("_authored"), vis.get("_current")])
+	for player in vis.find_children("*", "AnimationPlayer", true, false):
+		print("[screenshot]   %s: '%s' at %.2fs" % [player.get_path(),
+			(player as AnimationPlayer).current_animation,
+			(player as AnimationPlayer).current_animation_position])
 
 
 func _process(delta: float) -> bool:

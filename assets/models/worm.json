@@ -1,0 +1,9 @@
+{
+  "variant": "worm",
+  "poses": [
+    "idle",
+    "melee",
+    "walk"
+  ],
+  "pose_yaw_degrees": {}
+}

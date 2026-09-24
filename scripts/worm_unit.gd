@@ -71,47 +71,15 @@ const TIER_FLOOR := [1, 2, 6, 10, 14]
 const TIER_TILES := [1, 1, 2, 3, 4]
 const TIER_NAME := ["Worm", "Clutch", "Knot", "Swell", "Tide"]
 
-## Art variant per tier. Swell and Tide share a sculpt and separate by scale —
-## three sheets cover five tiers, and the count on the label carries the rest.
+## Model per tier: the single worm, then pile layouts of it
+## (assets/models/worm_*.json). Swell and Tide share a layout and separate by
+## scale — three layouts cover five tiers, and the count on the label carries
+## the rest.
 const TIER_VARIANT: Array[StringName] = [&"worm", &"worm_clutch", &"worm_knot", &"worm_tide", &"worm_tide"]
 
-## The render canvas every worm sheet is framed to (render_sprites.py
-## CANVAS_HEIGHT, mirrored here exactly as `worm_unit.tscn` mirrors it).
-const CANVAS_HEIGHT := 2.56
-
-## Where the art's lowest opaque row sits in each tier's sheet, by tier.
-##
-## MEASURED off the rendered PNGs, never derived — `render_sprites.py` prints
-## each of these at the end of its run and they are copied in by hand.
-##
-## These are the renderer's "no-clip alternative", i.e. the MINIMUM opaque row,
-## where every humanoid in the project uses the mean across idle facings. A pile
-## lies along the deck, so almost all of its silhouette is depth rather than
-## height, and a vertical billboard turns depth into height: anchoring on the
-## mean would bury the pile under the floor. The renderer names the worm as
-## exactly this case, and a pile is the same case, larger. `worm_unit.tscn`
-## carries the single worm's 0.90781518 for the same reason.
-##
-## Index 0 duplicates the scene's value rather than reading it, because
-## `set_variant` back to `&"worm"` has to restore it and the scene is not
-## consulted again after `_ready`.
-##
-## Every pile tier rose when the sheets were rebuilt with their worms laid
-## parallel rather than at random yaws (0.93543150 -> 0.91547340, 0.98307192 ->
-## 0.93716316, 1.0 -> 0.96973822). A disc of worms crossing at every angle is
-## nearly all depth, and a vertical billboard turns depth into height; bodies
-## lying parallel and overlapping occupy a shallower footprint, so the art stops
-## further short of the canvas floor. The Tide had been pinned at 1.0 -- its old
-## sheet reached row 0 and was a frame away from clipping -- and now clears the
-## bottom by 10 px.
-##
-## Re-measure all of these whenever build_worm_piles.py changes a pile's shape,
-## or the tier sits in the deck.
-const TIER_FOOT_ANCHOR := [0.90781518, 0.91547340, 0.93716316, 0.96973822, 0.96973822]
-
-## Smallest fraction of a tier's sculpt shown at that tier's floor. A Knot at 6
-## worms draws at 82% of the 9-worm sculpt and grows to full across the tier, so
-## three sheets read as sixteen sizes.
+## Smallest fraction of a tier's layout shown at that tier's floor. A Knot at 6
+## worms draws at 82% of the 9-worm layout and grows to full across the tier, so
+## three layouts read as sixteen sizes.
 const TIER_MIN_SCALE := 0.82
 
 ## Loaded rather than preloaded: this script IS the scene's script, and a
@@ -249,17 +217,11 @@ func _apply_count() -> void:
 	_shown_tier = t
 	if visual == null:
 		return
-	# Ordered: `set_variant` re-derives pixel size from `canvas_height`, so the
-	# height has to be in place before the swap, not after.
 	var floor_count: int = TIER_FLOOR[t]
 	var ceil_count: int = MAX_WORMS if t == TIER_FLOOR.size() - 1 else TIER_FLOOR[t + 1] - 1
 	var span := ceil_count - floor_count
 	var f := 0.0 if span <= 0 else float(worms - floor_count) / float(span)
-	visual.canvas_height = CANVAS_HEIGHT * lerpf(TIER_MIN_SCALE, 1.0, f)
-	# Both BEFORE the swap: `set_variant` re-derives pixel size and pivot from
-	# these two, so setting either afterwards leaves the sprite scaled to the
-	# tier it just left.
-	visual.foot_anchor = Vector2(0.5, TIER_FOOT_ANCHOR[t])
+	visual.model_scale = lerpf(TIER_MIN_SCALE, 1.0, f)
 	visual.set_variant(TIER_VARIANT[t])
 
 

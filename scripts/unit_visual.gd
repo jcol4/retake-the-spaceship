@@ -1,26 +1,28 @@
 class_name UnitVisual
 extends Node3D
-## Owns a unit's sprite layers and their animation state. Unit code drives this
-## by intent ("play the shoot action"), never by clip name, which is what let the
-## rigged 3D characters be swapped out for hand-drawn sprites without `Unit`
+## Owns a unit's 3D model and its animation state. Unit code drives this by
+## intent ("play the shoot action"), never by clip name, which is what let the
+## prerendered sprites be swapped back out for real 3D characters without `Unit`
 ## changing at all.
 ##
-## Four `AnimatedSprite3D` layers by default — body, head, helmet, weapon — but
-## the set is data-driven (`layers`), because whether vertical aiming comes back
-## as an independently-posed arm layer is still open. Adding a fifth layer must
-## cost art and nothing else.
+## THE MODEL IS THE CHARACTER. `tools/export_models.py` exports each rigged
+## .blend to `assets/models/<variant>.glb` with its actions renamed to the pose
+## names below, so `idle` here is `idle` there. The model is a child of this
+## node, which shares the unit's basis, so it turns with the unit at any yaw and
+## its feet are on the floor because the mesh is — there is no facing bucket, no
+## canvas and no foot anchor left to tune. That is the whole reason for the
+## switch: a vertical sprite card could not know how far in front of the root a
+## planted boot was, so feet floated or sank depending on facing.
 ##
-## Works with no authored art: `_build_placeholders` draws a readable stand-in
-## per layer and direction, and actions resolve on a timer of the length the
-## real animation will eventually take. That is the path every unit takes today,
-## and it keeps action pacing identical across the swap — the same guarantee the
-## no-AnimationPlayer fallback used to give.
+## Works with no authored model: `_build_placeholder` assembles a readable
+## stand-in from primitive meshes (one part per entry in `layers`), and actions
+## resolve on a timer of the length the real animation takes. That is the path
+## every character without a .glb takes, and it keeps action pacing identical
+## across the swap.
 
 ## Fired at the shot's muzzle frame. Drives the shot SFX and the impact at the
 ## far end, so a round arrives when the arm is up rather than the instant the
-## order was given. The drawn flash is NOT fired from here — it is a frame of
-## the `fire_shoot` art on the `flash` layer, played by the same call that emits
-## this.
+## order was given.
 signal muzzle
 
 ## Fired as each boot lands during the run stance. Hook for footstep SFX and a
@@ -37,34 +39,20 @@ const WALK := &"walk"
 const OVERWATCH := &"overwatch_hold"
 # There is no standalone crouch. Being down low is a COVER FAMILY, not a stance:
 # `Unit.cover_pose` answers `low` for a unit behind a crate or hunkered, and
-# every pose then resolves through the `_low` suffix (see COVER_LOW). A separate
-# `crouch_idle` existed only because the mocap set shipped one, and it competed
-# with `idle_low` for the same job — a hunker resolved through it fell back to
-# standing-in-the-open and read as having done nothing.
+# every pose then resolves through the `_low` suffix (see COVER_LOW).
 
-# Firing is two animations driven by play_burst rather than one per shot type:
-# the burst length is rolled per shot, and no fixed animation can match a count
-# it does not know. AIM_HOLD is the weapon up and steady either side of the
-# burst; the three-phase BEGIN/FIRE/END set below is what actually plays.
+# Firing is driven by play_burst rather than one animation per shot type: the
+# burst length is rolled per shot, and no fixed animation can match a count it
+# does not know. AIM_HOLD is the weapon up and steady; BEGIN/FIRE/END are the
+# rifle coming up, one round's kick (replayed per round) and lowering back out.
+# Each degrades independently to AIM_HOLD, and the timers run either way, so
+# burst pacing does not move as art lands.
 const AIM_HOLD := &"aim_hold"
-## The three phases of a burst, authored as three actions. BEGIN is the rifle
-## coming up to the shoulder, FIRE is one round's kick replayed from the start
-## once per round, END is lowering back out of the aim.
-##
-## Each degrades independently: a character with only FIRE art still fires, it
-## just cuts to the kick and back. The timers below run either way, so burst
-## pacing does not move as art lands — the same guarantee the rest of the
-## fallback system gives.
 const BEGIN_SHOOT := &"begin_shoot"
 const FIRE_SHOOT := &"fire_shoot"
 const END_SHOOT := &"end_shoot"
-# Transitions. Not stances and not actions: a one-shot bridging one stance into
-# another, played through play_stance_exit. Degrades to a hard cut, at zero time
-# cost, when the art is absent.
-#
-# One of them, where the mocap set had a bridge between every pair of stances.
-# The crouch pair went with the crouch stance; going down into cover and standing
-# back up are both cuts now.
+# Transition: a one-shot bridging one stance into another, played through
+# play_stance_exit. Degrades to a hard cut, at zero time cost, when absent.
 const RUN_STOP := &"run_stop"
 const MELEE := &"melee"
 const RELOAD := &"reload"
@@ -73,687 +61,475 @@ const INTERACT := &"interact"
 const HIT_REACT := &"hit_react"
 const DOWNED := &"downed"
 ## The corpse: a held stance the unit settles into once DOWNED has played out,
-## and never leaves. A STANCE rather than DOWNED's last frame left on screen,
-## because everything that re-resolves the sprite — a facing re-sync, a variant
-## swap — re-plays `_stance`, and a body that re-played idle would stand back up.
+## and never leaves. A STANCE rather than DOWNED's last frame, because anything
+## that re-plays `_stance` (a variant swap, coming back into view) would
+## otherwise stand the body back up.
 const DEAD := &"dead"
 ## Alien-side only: played once when an alien wakes, by EnemyUnit's state machine
 ## rather than by anything the player ordered.
 const ALERT_SCREAM := &"alert_scream"
-## Idle variation, played at random intervals while IDLE holds. Not an action and
-## not a stance: a one-shot the unit slips into on its own, with nothing in the
-## game waiting on it. See _fidget_loop for why that decides how it is played.
+## Idle variation, played at random intervals while IDLE holds. See _fidget_loop.
 const IDLE_FIDGET := &"idle_fidget"
 
-# When each boot lands during the run cycle, evenly spaced half a cycle apart.
-# The GAP is a property of a soldier moving at 4.5 m/s rather than of how the
-# character is drawn, so the run cycle is authored to match it and not the other
-# way round: two steps per cycle at 0.333 s makes the cycle 0.666 s, which at
-# build_sprite_frames.gd's 12 fps is the eight frames a cycle is drawn in.
-#
-# The OFFSET is the authoring contract that follows from that: zero, meaning
-# FRAME 0 IS A CONTACT and so is frame 4. It was 0.10 while the run was a Mixamo
-# clip, which recorded nothing about a soldier — only where that take's frame 0
-# happened to fall relative to the first footplant. A drawn cycle starts on a
-# contact, so the offset that made sense for the mocap is now just a 1.2-frame
-# error between the boot landing and the sound.
+# When each boot lands during the run cycle, half a cycle apart. The run is
+# played at exactly 2 x FOOTSTEP_GAP a cycle (LOOP_TIME) with a contact on its
+# first frame, so the sound lands with the boot.
 const FOOTSTEP_OFFSET := 0.0
 const FOOTSTEP_GAP := 0.333
 
-# Seconds of plain idle between attempts at an IDLE_FIDGET. Rolled fresh each
-# time rather than fixed, which matters most with several units on screen: a
-# constant gap would have a nest of swarm units convulsing in lockstep, and
-# nothing reads as scripted faster than that.
+# Seconds of plain idle between attempts at an IDLE_FIDGET, rolled fresh each
+# time so a room of aliens does not convulse in lockstep.
 const FIDGET_GAP_MIN := 12.0
 const FIDGET_GAP_MAX := 35.0
 
-## How long each action occupies, so pacing is identical with or without authored
-## art. Read as a stand-in when the art is missing, and as the AUTHORING CONTRACT
-## when it is drawn — build_sprite_frames.gd derives `speed` as frames/duration
-## from the same table, so a pose drawn in any number of frames still takes
-## exactly this long.
-##
-## The values arrived here as the old 3D soldier's measured clip lengths, which
-## is why some of them are oddly precise. They are kept not because a mocap take
-## has any authority over a drawn one, but because the game's turn rhythm was
-## tuned against them and none of it has been re-tuned. Same treatment as
-## Unit.move_speed and FOOTSTEP_OFFSET: the number is now OWNED rather than
-## inherited, and it is the dial to turn if an action feels wrong — changing one
-## is a pacing decision, not a correction.
+## How long each action occupies, so pacing is identical with or without an
+## authored model. These are the game's turn-rhythm numbers, not measurements of
+## any clip: an authored animation is time-scaled to fit them (see `_duration`),
+## so changing one is a pacing decision, not a correction.
 const FALLBACK_TIME := {
 	BEGIN_SHOOT: RAISE_TIME,
 	FIRE_SHOOT: BURST_CADENCE,
 	END_SHOOT: SETTLE_TIME,
 	MELEE: 1.20,
 	RELOAD: 3.75,
-	# Stated as a division, not a round guess: the authored `grenade` action is
-	# 37 Blender frames at the rig's 12 fps (art_src/merc_anim.blend), and this
-	# is what stops that getting silently resampled into some other length --
-	# see render_sprites.py frame_count/sample_frames, which derive the RENDERED
-	# frame count from this duration rather than the other way round. Get this
-	# wrong and the throw still renders fine, it just plays back sped up or
-	# slowed down from how it was animated. INTERACT likewise: 30 frames.
+	# The merc's `grenade` action is 37 frames at the rig's 12 fps, `interact`
+	# 30, `get_hit` 7 and `die` 12 — stated as divisions so the clips play at
+	# the speed they were animated.
 	GRENADE: 37 / 12.0,
 	INTERACT: 30 / 12.0,
-	# The merc's `get_hit`/`get_hit_low` actions: 7 Blender frames at 12 fps.
 	HIT_REACT: 7 / 12.0,
-	# The merc's `die` action: 12 Blender frames at 12 fps.
 	DOWNED: 12 / 12.0,
 	ALERT_SCREAM: 2.80,
 }
 const DEFAULT_FALLBACK_TIME := 0.4
 
-# Burst timing. RAISE_TIME is the beat where the weapon comes up and steadies
-# before the first round — without it the shot reads as going off the instant the
-# order was given. BURST_CADENCE is the gap between rounds, short enough that the
-# kick has not fully recovered when the next lands, which is what makes a burst
-# look continuous. SETTLE is the weapon held on target afterwards.
-#
-# 0.45 s, raised from 0.18. At 0.18 the beat was only ever dead air: it was long
-# enough to stop a shot reading as instantaneous, but far too short to SHOW a
-# rifle being shouldered — a 0.18 s raise is two frames at the rate everything
-# else is drawn at, which is a cut with an extra image in it, not a movement.
-# Deliberate shouldering is the read this wants, and it costs about a quarter of
-# a second per shot in turn pacing. That cost is the reason this is a constant
-# with a comment rather than a number: it is the dial to turn if combat starts
-# feeling slow.
+# Burst timing. RAISE_TIME is the rifle being shouldered before the first round;
+# BURST_CADENCE is the gap between rounds; SETTLE is the weapon held on target
+# afterwards. RAISE is the dial to turn if combat starts feeling slow.
 const RAISE_TIME := 0.45
 const BURST_CADENCE := 0.11
 const SETTLE_TIME := 0.20
 
 ## The same two beats when the shot is fired FROM COVER, where the phases are a
-## step out from behind the crate and a duck back behind it rather than a rifle
-## coming up on the spot. Longer because there is further to travel — a 0.45 s
-## step-out would read as a teleport with a lean in the middle.
-##
-## Applied only when the cover art actually resolved, so a character part-way
-## through being drawn keeps standing-shot pacing for the phases it has no cover
-## art for. Must equal build_sprite_frames.gd's ONE_SHOT_TIME entries for
-## `begin_shoot_low` and `end_shoot_low`, for the reason stated there.
+## step out from behind the crate and a duck back. Applied only when the cover
+## animation actually resolved.
 const COVER_RAISE_TIME := 0.75
 const COVER_SETTLE_TIME := 0.45
 
-## The WALK stance is still used, but only by `walks_only` units (the brawler),
-## which carry their own speed in Unit.move_speed rather than a shared
-## constant. The soldier/merc has no walk cycle — that was a Mixamo mocap
-## placeholder that was never drawn and is not being drawn — so he has one
-## gait, RUN, at any distance. See Unit.move_along.
+## One-shot lengths per resolved pose, cover variants included. An animation is
+## time-scaled to play in exactly this long; see `_duration`.
+const ONE_SHOT_TIME := {
+	BEGIN_SHOOT: RAISE_TIME, FIRE_SHOOT: BURST_CADENCE, END_SHOOT: SETTLE_TIME,
+	&"begin_shoot_low": COVER_RAISE_TIME, &"end_shoot_low": COVER_SETTLE_TIME,
+	&"begin_shoot_high": COVER_RAISE_TIME, &"end_shoot_high": COVER_SETTLE_TIME,
+	MELEE: 1.20, RELOAD: 3.75, &"reload_low": 3.75, &"reload_high": 3.75,
+	GRENADE: 37 / 12.0, INTERACT: 30 / 12.0,
+	HIT_REACT: 7 / 12.0, &"hit_react_low": 7 / 12.0,
+	DOWNED: 12 / 12.0, ALERT_SCREAM: 2.80,
+}
+
+## Poses that cycle rather than play once and hold.
+const LOOPING: Array[StringName] = [
+	IDLE, RUN, WALK, OVERWATCH, AIM_HOLD, &"idle_low", &"idle_high", DEAD,
+]
+
+## Seconds ONE CYCLE of each looping stance takes. `run` is the one that is
+## forced: two footsteps at FOOTSTEP_GAP. Stride length and move speed were
+## tuned against these, so a faster or slower cycle is foot-skate.
+const LOOP_TIME := {
+	RUN: 2 * FOOTSTEP_GAP,
+	WALK: 1.4,
+	IDLE: 2.0,
+	OVERWATCH: 32 / 12.0, AIM_HOLD: 1.6,
+	&"idle_low": 2.4, &"idle_high": 2.4,
+}
+const DEFAULT_LOOP_TIME := 1.6
+
+## Per-variant cycle times, for a gait tuned to its own unit's move speed.
+const VARIANT_LOOP_TIME := {
+	&"brawler": {WALK: 1.6},
+	# 0.75 m/s crosses its one tile a turn in two seconds — one cycle.
+	&"worm": {WALK: 2.0},
+}
+
+## Crossfade between poses, in seconds. Short: the game's actions are brisk and
+## a long blend reads as the unit being slow to respond.
+const BLEND_TIME := 0.12
+
+## Where the exported models live. `<variant>.glb` is the model; `<variant>.json`
+## beside it is the sidecar export_models.py writes (per-pose yaw corrections,
+## or for a worm pile the layout of its instances).
+const MODEL_DIR := "res://assets/models/"
 
 # --- Direction ---------------------------------------------------------------
 #
-# Sprite direction is the unit's yaw MINUS the camera's, quantised into eight
-# 45-degree buckets. Subtracting the camera is what makes this work under a rig
-# whose yaw snaps: a quarter turn moves every bucket by exactly two steps, so the
-# snap costs no additional art — but it DOES change every character's apparent
-# facing without any unit having turned, which is why _sync_direction is driven
-# off the rig's yaw_changed signal as well as off unit facing.
+# The model turns with the unit, so nothing here buckets facing any more. The
+# eight-way table survives because game rules still speak in it (Unit snaps to
+# 45 degrees; PlayerUnit.GRENADE_RELEASE_OFFSET counts buckets), and
+# tools/test_sprite_direction.gd pins the mapping.
 
-## Screen-space directions, indexed by bucket. EIGHT, matching the eight
-## directions a unit may step and face (GridManager.STEPS, Unit._yaw_toward), so
-## no reachable facing is without art.
-##
-## They are named for where they point ON SCREEN, not in the world, and the two
-## differ by the rig's 45-degree yaw (camera_rig.gd START_YAW): the four world
-## grid AXES project to the four screen DIAGONALS, and the four world diagonals
-## project to the screen cardinals. So a unit facing world -Z reads as `ne`,
-## up-and-right, rather than straight up.
-##
-## Bucket 0 is up-right; the index rises with yaw, which — given Godot's -Z
-## forward and +X screen-right — runs anticlockwise on screen. This is the same
-## order, and must stay the same order, as render_sprites.py's DIRECTIONS, which
-## is the index-to-Blender-angle table the PNGs are rendered from.
+## Screen-space directions, indexed by bucket, at the camera's start yaw.
 const DIRECTIONS: Array[StringName] = [
 	&"ne", &"n", &"nw", &"w", &"sw", &"s", &"se", &"e",
 ]
 
-## Three of the eight buckets are another bucket flipped. Only the five that face
-## screen-right or straight up/down need authoring; the three left-facing ones
-## are those mirrored. Entries are [source direction, flip_h].
-##
-## A pose that is NOT symmetric — anything armed, where flipping moves the rifle
-## to the wrong shoulder — can be authored for all eight instead: if the sprite
-## set contains art for the mirrored direction itself, _resolve uses it unflipped
-## and this table never applies. That is the path the merc takes; see
-## tools/build_sprite_frames.gd.
-const MIRROR := {
-	&"nw": [&"ne", true],
-	&"w": [&"e", true],
-	&"sw": [&"se", true],
-}
+## Rotates the bucket window so each bucket is centred on a direction rather
+## than straddling two.
+const BUCKET_OFFSET := PI / 4.0
 
 ## Cover pose families. A unit using cover resolves every pose through the
-## matching suffix FIRST — `idle` becomes `idle_low`, `begin_shoot` becomes
-## `begin_shoot_low` — and falls back to the plain pose wherever that art does
-## not exist. See `_bases`.
-##
-## This is why cover needed no new stances and no new branches in `Unit`: the
-## unit still asks for "idle" and "a burst", and which art that means is decided
-## in one place. It also means the art can land one pose at a time — today only
-## `idle_low` is drawn, and the step-out and step-back degrade to the standing
-## versions until they are.
+## matching suffix FIRST — `idle` becomes `idle_low` — and falls back to the
+## plain pose wherever that animation does not exist. See `_bases`.
 const COVER_LOW := &"low"
 const COVER_HIGH := &"high"
 
-## Rotates the bucket window so each bucket is CENTRED on a drawn direction
-## rather than straddling two. Without it a unit facing a world axis would sit
-## exactly on the boundary between two buckets and flicker between them under
-## floating-point noise.
-##
-## Still PI/4 at eight buckets, and not by coincidence: the reachable relative
-## yaws are the rig's -45 degrees plus any multiple of the 45-degree bucket
-## width, so the same offset that centred four 90-degree buckets centres eight
-## 45-degree ones.
-const BUCKET_OFFSET := PI / 4.0
-
-## Layers, back to front. Data-driven rather than four hardcoded nodes so an arm
-## layer (or anything else) can be added in art alone.
+## Parts of the PLACEHOLDER, back to front. Ignored once a model exists for the
+## variant: an authored model is one piece.
 @export var layers: Array[StringName] = [&"body", &"head", &"helmet", &"weapon"]
 
-## Art variant, and the directory the `SpriteFrames` are looked up in. Gear swaps
-## are a reassignment of this — see `set_variant`.
+## Which model to show: `assets/models/<variant>.glb`, or a pile layout
+## `<variant>.json`. A gear swap is a reassignment of this — see `set_variant`.
 @export var variant: StringName = &"soldier"
 
-## World height of a layer's full canvas, in metres. Replaces a shared
-## `pixel_size`: each layer derives its own as `canvas_height / texture_height`,
-## so layers drawn at DIFFERENT resolutions still register with one another and
-## still land on the same pivot. That is what lets 256-px authored art composite
-## against the 64-px code placeholder without either being rescaled by hand.
-##
-## 1.92 is what the old `CANVAS` 64 x `pixel_size` 0.03 came to, so the
-## placeholder's on-screen size is unchanged.
-@export var canvas_height: float = 1.92
-
-## Where the art's origin sits in the canvas, as a fraction: the FEET, not the
-## centre. Every layer shares it, which is what keeps a helmet on a head across a
-## gear swap.
-##
-## Exported rather than a constant because it is a property of the CANVAS, like
-## `canvas_height` beside it, and the placeholder and the authored art no longer
-## agree on it. The placeholder is drawn with the feet flush to the bottom edge,
-## so 1.0 is right for it and is the default. Rendered art cannot be: the sprite
-## camera is tilted, so the floor projects to a DIAGONAL through the world origin
-## rather than to a horizontal line under the boots, and a foot planted toward
-## the camera falls below the frame. `render_sprites.py` answers that with
-## FLOOR_MARGIN metres of floor below the origin, which moves the anchor up off
-## the bottom edge by exactly that fraction -- see that file for the arithmetic.
-@export var foot_anchor: Vector2 = Vector2(0.5, 1.0)
-
-## Layers drawn on a BIGGER canvas than `canvas_height`, as layer -> how many
-## times bigger. Anything absent is 1.0, which is every layer that draws the
-## character itself.
-##
-## The muzzle flash is what this exists for, and the reason is FRAMING. The
-## barrel tip sits 29 px from the top edge of the merc's 256 px canvas facing
-## NW, so a flash of any real size runs off the frame -- and it cannot simply be
-## rendered bigger into the body layer, because `_apply_frame_scale` sizes a
-## layer ONCE for all of its frames. `render_sprites.py --flash` renders it
-## through the same camera at the same centre with the ortho extent and the
-## resolution both multiplied, which leaves metres-per-pixel untouched and puts
-## a world point at fraction 0.5 + (f - 0.5) / scale of the larger image. This
-## number is the ONLY thing the scene states; `_layer_anchor` undoes that
-## fraction and the height falls out of the multiply, so there is no second
-## hand-measured anchor to disagree with the first.
-@export var layer_canvas_scale: Dictionary = {}
+## Uniform scale on the model. 1.0 is true size, which every export is authored
+## at; the worm mass uses it to grow within a tier (WormUnit._apply_count).
+@export var model_scale: float = 1.0:
+	set(value):
+		model_scale = value
+		if _model:
+			_model.scale = Vector3.ONE * model_scale
 
 ## Whether this character carries the rig-mounted light (Sec 5.2). Aliens do not.
 @export var has_light: bool = true
 
-## Multiplied into the tile-light tint, so two factions can share one sprite set
+## Multiplied into every surface's albedo, so two factions can share one model
 ## and still be told apart at XCOM camera distance. White (identity) by default.
-##
-## MULTIPLIED rather than assigned, which is the whole reason it is safe: a
-## tinted unit standing in the dark still reads dark, so the tint cannot quietly
-## undo the rule that a unit which LOOKS lit is one the rules also treat as lit
-## (see `_apply_tile_light`).
-##
-## A stopgap that is honest about being one — the rival mercs wear the player's
-## own rendered art recoloured, because that art is literally already called
-## `merc` (`variant = &"merc"`). A real second sprite set replaces this; until
-## then a flat multiply beats shipping two identical-looking factions.
+## A stopgap — the rival mercs wear the player's own model recoloured.
 @export var faction_tint: Color = Color.WHITE
 
-## TEST HOOK for shaders/gritty_fallout.gdshader — assign the material here (or
-## shaders/gritty_fallout_test.tres directly) to see it on every layer of this
-## unit. Left null it changes nothing; this is scaffolding for eyeballing the
-## look, not the real place a shipped filter would be wired in.
-@export var test_shader: ShaderMaterial = null
-
-## Which family of shapes the placeholder generator draws for this character.
-## `organic` is the standing biped everything started as; `machine` is the
-## hard-edged, geometric read the security robots are specified with
-## (security-robots/design-choices/faction-identity.md) — the point being that a
-## player can tell the factions apart by silhouette alone in a dark corridor,
-## which is where most fights happen. Has no effect once authored art exists.
+## Which family of shapes the placeholder is built from. `organic` is the
+## standing biped; `machine` is the hard-edged read the security robots are
+## specified with, so factions separate by silhouette in a dark corridor. Has no
+## effect once a model exists.
 @export var placeholder_style: StringName = &"organic"
 
-# --- Placeholder art ---------------------------------------------------------
+## Height of the placeholder figure, in metres — the old placeholder canvas.
+const PLACEHOLDER_HEIGHT := 1.92
+## Metres per placeholder "pixel": the machine specs below were drawn on a
+## 64 px canvas PLACEHOLDER_HEIGHT tall, and keep their numbers.
+const PLACEHOLDER_UNIT := PLACEHOLDER_HEIGHT / 64.0
 
-## The PLACEHOLDER's source canvas, in pixels — not a constraint on authored art,
-## which may be any square size (see _apply_frame_scale). Square so a rotation of
-## the art never changes the pivot. `_placeholder_texture` draws in these
-## coordinates, so changing it means redrawing every stand-in.
-const CANVAS := 64
+## Fraction of its own colour a character surface emits on a fully DARK tile, so
+## a unit in an unlit corner is a dim figure rather than a black hole — the job
+## the sprites' MIN_TINT (0.35) did.
+##
+## Scaled down by the tile's light_value (see `_apply_floor`) and gone entirely
+## at 100%. Applied flat, it lifted the shadowed side of a lit model nearly to
+## its lit side: a pale texture (the nest's skin) lost its self-shadowing and
+## read as ghostly under a flashlight. Where real light reaches the unit, real
+## shading is all it gets. Driven by the same light_value the accuracy and
+## detection rules read, so a unit that looks dark is one the rules treat as dark.
+const MIN_BRIGHTNESS := 0.3
 
-## Darkest a sprite is allowed to get. Sprites are UNSHADED and tinted from the
-## tile's light_value instead of being lit, so this is the floor of that tint:
-## far enough down to read as "in the dark", not so far the unit is lost.
-const MIN_TINT := 0.35
-
-## Layers the tile-light tint is NOT applied to. A status light is a light — it
-## is the thing emitting, not the thing being lit — and dimming it in a dark room
-## would put out the one readability aid the security robots have in exactly the
-## conditions it exists for.
-##
-## The muzzle flash is the same argument at its strongest: the room-filling
-## `OmniLight3D` that used to fire alongside it is gone (see vfx_manager.gd), so
-## if this layer is dimmed nothing UNDIMMED says the gun went off. A shot in an
-## unlit corridor is not a dim flash — it is the brightest thing in frame.
-##
-## The flash's spill on the character does not weaken that, it sharpens it. The
-## spill is baked into the BODY layer (render_sprites.py `hide_flash` keeps the
-## flash as an invisible emitter for one frame), so it is tinted by the tile
-## like the rest of the body and fades toward MIN_TINT in the dark — the exact
-## treatment this layer exists to be spared.
-const SELF_LIT_LAYERS: Array[StringName] = [&"status", &"flash"]
-
-## Layers drawn as EMITTED LIGHT rather than as paint: added to what is behind
-## them instead of covering it, and exempt from the alpha scissor every other
-## layer wants.
-##
-## The scissor is the part that matters. `ALPHA_CUT_DISCARD` is right for a
-## character -- a hard silhouette, no sorting to get wrong -- and it is ruinous
-## for a glow, because a glow is MOSTLY soft edge. Measured on the rendered
-## flash: 1100 pixels carry the effect and only 254 of them clear the 0.5
-## threshold, so the scissor was deleting 77% of it and leaving a hard-edged
-## stub. That stub is what the muzzle flash has looked like in game.
-##
-## Additive is then what makes the rest read as light: a flash cannot darken
-## what is behind it, and where it is brightest it blows out to white on its own
-## instead of averaging with the wall.
-const ADDITIVE_LAYERS: Array[StringName] = [&"flash"]
-
-## How much brighter than the PNG an additive layer is drawn.
-##
-## Above 1 on purpose, and not for taste: `main.tscn` sets
-## `glow_hdr_threshold = 1.1`, so anything at or below 1.0 never blooms no
-## matter how bright it looks. The flash pass is tonemapped to fit in 8 bits
-## (render_sprites.py FLASH_VIEW_TRANSFORM), which is what rescued its colour
-## ramp and also what guaranteed nothing in it can exceed 1.0. This puts the hot
-## core back over the line so the glow pass picks it up, without touching the
-## threshold -- which is global, and would start blooming every pale wall in the
-## ship.
-##
-## Lives in `albedo_color` rather than in `modulate`, because `modulate` is
-## carried as a vertex colour and clamps at 1.0; a uniform does not.
-const ADDITIVE_GAIN := 1.8
-
-## Metres an additive layer is pulled toward the camera, past where
-## `_ground_depth_offset` already put the body.
-##
-## Every layer sits at the SAME position, so the flash card and the body card are
-## coplanar. The body is scissored, which makes it opaque and depth-writing; a
-## transparent card at exactly equal depth is then at the mercy of the depth
-## comparison and can drop out entirely. A couple of centimetres is far too
-## little to see and far more than enough to settle it, and it keeps the depth
-## test ON -- so a wall in front of the unit still hides the flash, which
-## disabling the test would have broken.
-const OVERLAY_DEPTH_BIAS := 0.02
+## How much brighter than white the muzzle flash is drawn. Above 1 so it clears
+## main.tscn's glow_hdr_threshold (1.1) and blooms; the flash is the brightest
+## thing in frame in a dark corridor, and it must stay so.
+const FLASH_GAIN := 1.8
+const FLASH_COLOR := Color(1.0, 0.78, 0.45)
+## Drawn size against authored size — render_sprites.py FLASH_SCALE, which is
+## what the flash was judged at when it was a sprite.
+const FLASH_SCALE := 0.5
+const FLASH_SHADER := preload("res://shaders/muzzle_flash.gdshader")
+## The node in the merc's model that IS the muzzle flash. Its origin sits on the
+## barrel tip, so it doubles as the muzzle marker for the rig light.
+const FLASH_NODE := "muzzle_flash"
 
 ## Where a shot leaves the weapon, relative to the unit: shoulder height, and
-## forward of the body so a shot does not visibly start inside the chest.
-## Derived from unit yaw in world space rather than from a per-direction table,
-## because the muzzle is a world point and the camera must not move it.
+## forward of the body. Derived from unit yaw rather than from the model, because
+## LOS and the shot VFX read it and it is a rules point, not art.
 const MUZZLE_HEIGHT := 1.4
 const MUZZLE_REACH := 0.3
-## Height the rig light is mounted at. A fixed offset now: it used to ride a
-## helmet bone, and a sprite has no bones — but the light was never character
-## art, it is a detection mechanic (aimed_light.gd).
+## Height the rig light is mounted at when the model has no muzzle to mount on.
 const LIGHT_HEIGHT := 1.6
 
-## Where the rifle's lamp is, and which way its barrel points, per animation
-## frame. Written by `tools/render_sprites.py --markers` from two locator
-## spheres on the bore line, and expressed in the UNIT'S OWN FRAME in Godot
-## axes — so one table of N frames serves all eight facings, and the light can
-## follow it at any continuous yaw rather than snapping to a bucket.
-##
-## THIS IS WHAT A SPRITE GETS INSTEAD OF A BONE. The old rig hung the light off
-## a helmet bone; drawn art has none, and a fixed offset could only ever be
-## right in one frame of one facing. Measured off the model instead — the
-## markers are never rendered, see MARKER_MATERIAL in render_sprites.py for why
-## reading the object beats colour-keying a magenta blob back out of the art.
-##
-## A pose with no entry gets no beam, which is the same graceful nothing a
-## character with no art for a pose already gets. Only `idle` is exported today.
+## Where the rifle's bore points, per pose, in the unit's own frame — written by
+## `tools/render_sprites.py --markers`. Only `mean_direction` is read: it aims
+## the light, and through it the rules, so it must not sway within a cycle.
 const MUZZLE_MARKER_PATH := "res://assets/sprites/muzzle_%s.json"
 
-var _sprites: Dictionary = {}  # layer StringName -> AnimatedSprite3D
-var _frames: Dictionary = {}  # layer StringName -> SpriteFrames
+## The model's container: turned by the pose's yaw correction and scaled by
+## `model_scale`, so the imported scene itself is never touched.
+var _model: Node3D = null
+## One per model instance — a worm pile has several — all driven in lockstep.
+var _players: Array[AnimationPlayer] = []
+## Per player, the fraction of a cycle it runs ahead. Zero except in a pile,
+## where sixteen worms in step would read as one drawing.
+var _phases: Array[float] = []
+## Poses this model can show. For a placeholder, every pose there is.
+var _poses: Dictionary = {}
+## pose -> degrees about Y, for an action authored facing somewhere else (the
+## merc's `run`). From the export sidecar.
+var _pose_yaw: Dictionary = {}
+## The pose actually on screen, after cover and fallback resolution.
+var _current: StringName = &""
+var _flash: MeshInstance3D = null
+## Placeholder only: the node posed to crouch or lie down, and the status light.
+var _pose_root: Node3D = null
+var _status_material: StandardMaterial3D = null
+## This unit's own material copies that carry the darkness floor, re-scaled
+## whenever the lighting changes.
+var _floor_materials: Array[BaseMaterial3D] = []
+
 var _light: SpotLight3D = null
 var _light_mount: Marker3D = null
-## pose StringName -> {muzzle: Array[Vector3], direction: Array[Vector3],
-## mean_direction: Vector3}, all in the unit's own frame. Only `mean_direction`
-## is read today — it aims the light, and through it the rules. The per-frame
-## arrays are what a swaying effect would need and are kept exported against
-## that, but nothing sways now: see aimed_light.gd `bore_direction`.
+## pose StringName -> {muzzle, direction, mean_direction}, in the unit's frame.
 var _bore: Dictionary = {}
-## `<pose>_<direction>` StringName -> Array[Vector2] of canvas positions, which
-## is what actually places the lamp on screen.
-var _canvas: Dictionary = {}
-## Metres the body layer's canvas spans. Cached because the lamp's placement
-## needs it every frame and `_frame_size` walks animations to find it.
-var _canvas_metres := Vector2.ZERO
 var _unit: Node3D = null
-## Cached: _sync_direction runs every frame per unit, and a group lookup there
-## would be the most-called line in the game for no reason.
-var _rig: Node3D = null
 
 var _stance: StringName = IDLE
 var _action: StringName = &""
-var _direction := 0
-## True once real authored art is found. Decides whether an action's length comes
-## from the animation or from FALLBACK_TIME — see play_action.
+## True once a real model is found. Decides whether a hit flinch plays at all —
+## see play_hit_react.
 var _authored := false
-## Which layers are showing RENDERED art rather than the code placeholder.
-##
-## Per layer, not one flag for the visual, because only rendered art carries the
-## camera's foreshortening baked into it and therefore only rendered art wants it
-## undone — see `_view_stretch`. A placeholder beside authored art on the same
-## unit is already a mistake (`_build_layers` paints a grey disc over the face),
-## but it should not additionally be stretched 22% too tall.
-var _authored_layers := {}
 var _stepping: bool = false
 var _fidgeting: bool = false
-## COVER_LOW, COVER_HIGH, or "" for a unit not using cover. Written by the unit
-## (Unit.refresh_cover_pose), read by `_bases` on every resolve.
+## COVER_LOW, COVER_HIGH, or "" for a unit not using cover.
 var _cover: StringName = &""
-## Tint for the self-lit `status` layer, if this character has one. White until
-## a unit says otherwise — see CerberusUnit._refresh_status_light.
 var _status_color := Color.WHITE
 
-## Parsed marker tables, keyed by variant. STATIC because every unit of a
-## variant reads the identical table, and a squad of six parsing the same JSON
-## six times is waste that scales with squad size.
+## Parsed bore tables, keyed by variant — every unit of a variant reads the same.
 static var _marker_cache: Dictionary = {}
 
 
 func _ready() -> void:
 	# Children are ready before their parent, so Unit._ready can rely on these.
 	_unit = get_parent() as Node3D
-	_build_layers()
+	_build_model()
 	# Before _build_light, which aims the light off it.
 	_read_markers()
 	if has_light:
 		_build_light()
-	_rig = get_tree().get_first_node_in_group("camera_rig") as Node3D
-	if _rig:
-		_rig.yaw_changed.connect(_on_camera_yaw_changed)
 	if LightingManager:
-		LightingManager.lighting_changed.connect(_apply_tile_light)
-	_sync_direction()
-	# Before the first _process, so a tool that builds a scene and grabs one
-	# frame sees the same thing the running game does.
-	_update_ground_depth()
+		LightingManager.lighting_changed.connect(_apply_floor)
 
 
 ## Whether playback should resolve with no time on the clock. Delegated to the
-## unit rather than cached, because the answer changes DURING a move: a unit that
-## walks into the squad's view stops being fast-forwarded partway through. One
-## authority for it, in Unit.is_instant, keeps the two halves from disagreeing.
+## unit, because the answer changes DURING a move: a unit that walks into the
+## squad's view stops being fast-forwarded partway through.
 func _instant() -> bool:
 	return _unit.is_instant() if _unit and _unit.has_method("is_instant") else false
 
 
 func setup() -> void:
 	_play(IDLE)
-	_apply_tile_light()
-	# Started here as well as from set_stance so a unit fidgets from the moment it
-	# spawns. Aliens spend most of a mission asleep at their nests, which is
-	# precisely when the player is looking at one standing still.
+	_apply_floor()
+	# Started here as well as from set_stance so a unit fidgets from the moment
+	# it spawns.
 	_maybe_start_fidget()
 
 
-# --- Layer construction ------------------------------------------------------
+# --- Model construction ------------------------------------------------------
 
 
-func _build_layers() -> void:
-	# Nothing to draw with no display, and the placeholder generator would paint
-	# 90 textures per layer per unit for a screen nobody is looking at. Every
-	# consumer already handles an empty layer set: _has_any returns false, which
-	# is the same answer a character with no art for a pose gives.
+func _build_model() -> void:
+	# Nothing to draw with no display. Every consumer handles an empty pose set:
+	# _has_any returns false, the same answer a model missing a pose gives.
 	if DisplayServer.get_name() == "headless":
 		return
-	for layer in layers:
-		var frames := _load_frames(layer)
-		_authored_layers[layer] = frames != null
-		if frames == null:
-			frames = _unauthored_frames(layer)
-		else:
-			_authored = true
-		_frames[layer] = frames
-		var sprite := AnimatedSprite3D.new()
-		sprite.name = String(layer).capitalize()
-		sprite.sprite_frames = frames
-		# Scale and pivot both derive from this layer's own texture size, which IS
-		# the pivot contract: every layer resolves to the same world height with
-		# its origin on `foot_anchor`, so reassigning one layer's frames can never
-		# shift it against the others no matter what resolution it was drawn at.
-		_apply_frame_scale(sprite, frames, layer)
-		# Always face the viewer, upright. Direction is carried by WHICH art is
-		# shown, never by turning the quad — that is the whole point of drawing
-		# eight of them.
-		sprite.billboard = BaseMaterial3D.BILLBOARD_FIXED_Y
-		# UNSHADED so hand-painted shading is not fought by the realtime lights;
-		# the tile's light_value drives `modulate` instead, which keeps the screen
-		# agreeing with the accuracy and detection rules.
-		sprite.shaded = false
-		sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
-		sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-		if test_shader:
-			_apply_test_shader(sprite)
-		elif layer in ADDITIVE_LAYERS:
-			# `elif`: the test shader is a debug hook that wants to be seen on
-			# every layer as-is, so it keeps the last word where both apply.
-			_apply_additive(sprite)
-		add_child(sprite)
-		_sprites[layer] = sprite
+	_model = Node3D.new()
+	_model.name = "Model"
+	_model.scale = Vector3.ONE * model_scale
+	add_child(_model)
+	_players.clear()
+	_phases.clear()
+	_poses.clear()
+	_pose_yaw.clear()
+	_flash = null
+	_pose_root = null
+	_status_material = null
+	_floor_materials.clear()
+	_current = &""
+	var sidecar := _load_json(MODEL_DIR + String(variant) + ".json")
+	if sidecar.has("pile_of"):
+		_authored = _build_pile(sidecar)
+	else:
+		_authored = _build_single(sidecar)
+	if not _authored:
+		_build_placeholder()
+	_apply_floor()
 
 
-## Wires the test shader onto one sprite. material_override replaces the
-## sprite's material entirely — Godot does NOT feed AnimatedSprite3D's frame
-## texture into a custom shader automatically, no matter what a uniform is
-## named, so this pushes it in by hand on every frame change. A DUPLICATED
-## material per sprite, because a shared one would have every layer showing
-## whichever sprite last wrote texture_albedo.
-func _apply_test_shader(sprite: AnimatedSprite3D) -> void:
-	var mat: ShaderMaterial = test_shader.duplicate()
-	sprite.material_override = mat
-	var push_texture := func() -> void:
-		if sprite.sprite_frames and sprite.animation != &"" and sprite.sprite_frames.has_animation(sprite.animation):
-			mat.set_shader_parameter("texture_albedo",
-				sprite.sprite_frames.get_frame_texture(sprite.animation, sprite.frame))
-	sprite.frame_changed.connect(push_texture)
-	sprite.animation_changed.connect(push_texture)
-	push_texture.call()
+## One .glb. Returns false when the variant has none.
+func _build_single(sidecar: Dictionary) -> bool:
+	var scene := _load_scene(variant)
+	if scene == null:
+		return false
+	var inst := scene.instantiate() as Node3D
+	_model.add_child(inst)
+	_adopt_players(inst, 0.0)
+	var yaw: Variant = sidecar.get("pose_yaw_degrees", {})
+	if yaw is Dictionary:
+		for pose: String in yaw:
+			_pose_yaw[StringName(pose)] = float(yaw[pose])
+	_flash = inst.find_child(FLASH_NODE, true, false) as MeshInstance3D
+	if _flash:
+		_dress_flash(_flash)
+		_flash.visible = false
+	_dress_surfaces(inst)
+	return true
 
 
-## Draws one layer as emitted light. See ADDITIVE_LAYERS.
-##
-## An override rather than a flag, because `AnimatedSprite3D` has no blend mode
-## to set -- checked against the class in 4.6.3: `alpha_cut`, `shaded` and
-## `transparent` are the whole of what it exposes, and none of them can say
-## "add". So the sprite's own material is shadowed by one that can, and the
-## frame texture is pushed into it by hand on every change, for exactly the
-## reason `_apply_test_shader` does the same: Godot does NOT feed the current
-## frame into an overriding material.
-##
-## Everything the sprite would have configured on its own material has to be
-## restated here, because `material_override` replaces it whole -- the billboard
-## and the unshading especially, which are silent and look like a broken sprite
-## rather than a missing flag when they are forgotten.
-func _apply_additive(sprite: AnimatedSprite3D) -> void:
-	# Cleared so the node does not claim a scissor that nothing is applying. The
-	# override is what actually decides, but a node whose inspector disagrees
-	# with what is on screen is a trap for whoever reads it next.
-	sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISABLED
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.billboard_mode = BaseMaterial3D.BILLBOARD_FIXED_Y
-	# `_update_ground_depth` puts a non-uniform scale on the card to undo the
-	# camera's foreshortening, and a billboard rebuilds its model matrix from the
-	# view -- which drops that scale unless this says to keep it. Without it the
-	# flash is drawn 22% short against a body that is not.
-	mat.billboard_keep_scale = true
-	# LINEAR, alone among the layers. The body is NEAREST because it is drawn art
-	# and wants its texels crisp; this is a glow, and a glow resampled with
-	# nearest is a staircase. Flip it if the flash starts to look soft against
-	# the character rather than in front of it.
-	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
-	mat.albedo_color = Color(ADDITIVE_GAIN, ADDITIVE_GAIN, ADDITIVE_GAIN)
-	# So `modulate` still means something on this layer. It is white today (the
-	# flash is self-lit, see `_emitted_tint`), but a layer whose tint silently
-	# did nothing would be a nasty thing to debug later.
-	mat.vertex_color_use_as_albedo = true
-	# After the body in the transparent pass, whatever order the children ended
-	# up in.
-	mat.render_priority = 1
-	sprite.material_override = mat
-	var push_texture := func() -> void:
-		if sprite.sprite_frames and sprite.animation != &"" \
-				and sprite.sprite_frames.has_animation(sprite.animation):
-			mat.albedo_texture = sprite.sprite_frames.get_frame_texture(
-				sprite.animation, sprite.frame)
-	sprite.frame_changed.connect(push_texture)
-	sprite.animation_changed.connect(push_texture)
-	push_texture.call()
-
-
-## Authored art for one layer, or null while none exists. The naming convention is
-## `[part]_[variant]_[animation]_[direction]_[frame].png` under assets/sprites,
-## collected into one SpriteFrames per part+variant.
-func _load_frames(layer: StringName) -> SpriteFrames:
-	var path := "res://assets/sprites/%s_%s.tres" % [layer, variant]
-	if not ResourceLoader.exists(path):
-		return null
-	return load(path) as SpriteFrames
-
-
-## Sizes one layer from its own art, so resolution is a property of the PNG
-## rather than a number that has to be kept in sync by hand. A 64-px placeholder
-## and a 256-px authored sheet both come out `canvas_height` metres tall with
-## their origin at the feet.
-##
-## Reads the first frame it can find: a set whose frames disagree on size would
-## need a per-frame pivot, which is a problem no art has posed yet. An OVERLAY
-## drawn on a bigger canvas is not that problem and must not be solved as if it
-## were — its frames all agree with each other, they just agree on something
-## other than the body's, which is what `layer_canvas_scale` states.
-func _apply_frame_scale(sprite: AnimatedSprite3D, frames: SpriteFrames,
-		layer: StringName) -> void:
-	var size := _frame_size(frames)
-	var scale := _canvas_scale(layer)
-	var anchor := _layer_anchor(layer)
-	sprite.pixel_size = canvas_height * scale / size.y
-	sprite.offset = Vector2(
-		size.x * (0.5 - anchor.x),
-		size.y * (anchor.y - 0.5))
-
-
-## How many times bigger this layer's canvas is than `canvas_height`.
-##
-## Guarded rather than trusted: a zero or negative scale is not a smaller
-## canvas, it is a division by zero in `pixel_size` and an invisible character.
-func _canvas_scale(layer: StringName) -> float:
-	var scale := float(layer_canvas_scale.get(layer, 1.0))
-	return scale if scale > 0.0 else 1.0
-
-
-## `foot_anchor` restated in this layer's own canvas.
-##
-## The enlarged canvas grows about the SAME centre as the body's (the sprite
-## camera is not moved for it — see `render_sprites.py` `build_camera`), so the
-## pivot keeps its world position by moving toward the middle of the frame by
-## exactly the scale. Derived here rather than measured again per layer, because
-## two anchors for one pivot is two things to keep in step.
-func _layer_anchor(layer: StringName) -> Vector2:
-	var scale := _canvas_scale(layer)
-	if is_equal_approx(scale, 1.0):
-		return foot_anchor
-	var centre := Vector2(0.5, 0.5)
-	return centre + (foot_anchor - centre) / scale
-
-
-## What a layer shows before its art exists.
-##
-## A layer that draws the character gets the code placeholder, which is what
-## lets the game run at all on a half-drawn character. An OVERLAY gets nothing —
-## an empty set, which `_play` reads as "this layer has nothing for this pose"
-## and hides. A placeholder body drawn at twice the canvas size on top of the
-## real one is not a degraded muzzle flash; it is a bug that looks like one, and
-## it would show up the moment a layer was named in the scene before its PNGs
-## had been rendered. Declaring the layer first and rendering after is the
-## normal order of work, so it has to be the safe one.
-func _unauthored_frames(layer: StringName) -> SpriteFrames:
-	if not is_equal_approx(_canvas_scale(layer), 1.0):
-		var empty := SpriteFrames.new()
-		empty.remove_animation(&"default")
-		return empty
-	return _placeholder_frames(layer)
-
-
-## Pixel size of the art in `frames`, falling back to the placeholder canvas when
-## there are no frames to measure.
-func _frame_size(frames: SpriteFrames) -> Vector2:
-	for name in frames.get_animation_names():
-		if frames.get_frame_count(name) == 0:
+## A worm mass: N copies of the single worm laid out by export_models.py, each a
+## fraction of a cycle out of step. One shared asset, and the mass IS its worms.
+func _build_pile(layout: Dictionary) -> bool:
+	var scene := _load_scene(StringName(layout.get("pile_of", "")))
+	if scene == null:
+		return false
+	for entry: Variant in layout.get("instances", []):
+		if not (entry is Dictionary):
 			continue
-		var tex := frames.get_frame_texture(name, 0)
-		if tex:
-			return tex.get_size()
-	return Vector2(CANVAS, CANVAS)
+		var rows: Array = entry.get("basis", [])
+		var o: Array = entry.get("origin", [0, 0, 0])
+		var inst := scene.instantiate() as Node3D
+		if rows.size() == 3:
+			# Rows in the file; Basis takes columns.
+			inst.transform = Transform3D(
+				Basis(Vector3(rows[0][0], rows[1][0], rows[2][0]),
+					Vector3(rows[0][1], rows[1][1], rows[2][1]),
+					Vector3(rows[0][2], rows[1][2], rows[2][2])),
+				Vector3(o[0], o[1], o[2]))
+		_model.add_child(inst)
+		_adopt_players(inst, float(entry.get("phase", 0.0)))
+		_dress_surfaces(inst)
+	# The pile's own pose list, not the worm's: a mass has no `melee`.
+	var poses: Variant = layout.get("poses")
+	if poses is Array:
+		var allowed := {}
+		for p: Variant in poses:
+			allowed[StringName(p)] = true
+		for p: StringName in _poses.keys():
+			if not allowed.has(p):
+				_poses.erase(p)
+	return not _players.is_empty()
 
 
-## Reassigns every layer's art — a gear swap is exactly this and nothing else,
-## because the pivot contract above guarantees the new art lands where the old
-## art was.
+static func _load_scene(model: StringName) -> PackedScene:
+	var path := MODEL_DIR + String(model) + ".glb"
+	if model == &"" or not ResourceLoader.exists(path):
+		return null
+	return load(path) as PackedScene
+
+
+static func _load_json(path: String) -> Dictionary:
+	if not FileAccess.file_exists(path):
+		return {}
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+	return parsed if parsed is Dictionary else {}
+
+
+func _adopt_players(inst: Node, phase: float) -> void:
+	for node in inst.find_children("*", "AnimationPlayer", true, false):
+		var player := node as AnimationPlayer
+		for name in player.get_animation_list():
+			_poses[StringName(name)] = true
+			# The imported resource is shared by every unit of the variant, so
+			# setting this is idempotent rather than per-unit.
+			player.get_animation(name).loop_mode = Animation.LOOP_LINEAR \
+				if StringName(name) in LOOPING else Animation.LOOP_NONE
+		_players.append(player)
+		_phases.append(phase)
+
+
+## The flash is authored as a mesh scaled down to nothing over `fire_shoot`, with
+## emission set for an offline render. Redrawn here as light (see
+## shaders/muzzle_flash.gdshader), and at FLASH_SCALE of its authored size.
+##
+## The scale is applied in the shader, because the flash node's own scale is
+## what `fire_shoot` animates. The mesh origin is the muzzle point, so the
+## shrink is toward the barrel tip and the flash stays registered on it.
+func _dress_flash(flash: MeshInstance3D) -> void:
+	var mat := ShaderMaterial.new()
+	mat.shader = FLASH_SHADER
+	mat.set_shader_parameter("color", FLASH_COLOR)
+	mat.set_shader_parameter("gain", FLASH_GAIN)
+	mat.set_shader_parameter("size", FLASH_SCALE)
+	var extent := flash.mesh.get_aabb()
+	mat.set_shader_parameter("reach", maxf(extent.position.abs().length(),
+		extent.end.abs().length()))
+	flash.material_override = mat
+	flash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+
+## Per-unit copies of the model's materials, carrying the faction tint and the
+## darkness floor.
+##
+## Metallic is zeroed. No character is metal-skinned, but the glTF round trip
+## brings every material in at metallic 0.5 on a packed metal/roughness map —
+## the source .blends leave Metallic unplugged — which laid a grey sheen over
+## pale surfaces that the sprite renders never had.
+func _dress_surfaces(root: Node) -> void:
+	for node in root.find_children("*", "MeshInstance3D", true, false):
+		var mesh := node as MeshInstance3D
+		if mesh.mesh == null or mesh == _flash:
+			continue  # a recoloured merc still fires a white flash
+		for s in mesh.mesh.get_surface_count():
+			var src := mesh.get_active_material(s) as BaseMaterial3D
+			if src == null:
+				continue
+			var mat := src.duplicate() as BaseMaterial3D
+			mat.albedo_color *= faction_tint
+			mat.metallic = 0.0
+			mat.metallic_texture = null
+			_add_floor(mat)
+			mesh.set_surface_override_material(s, mat)
+
+
+## Makes `mat` able to emit its own colour, and registers it for `_apply_floor`
+## to set how much.
+func _add_floor(mat: BaseMaterial3D) -> void:
+	mat.emission_enabled = true
+	mat.emission = mat.albedo_color
+	mat.emission_texture = mat.albedo_texture
+	_floor_materials.append(mat)
+
+
+## Sets the darkness floor from the light on the unit's own tile: MIN_BRIGHTNESS
+## in the dark, nothing at 100% light. See MIN_BRIGHTNESS.
+func _apply_floor() -> void:
+	var lit := 0.0
+	if _unit:
+		var tile: GridTileData = GridManager.get_tile(_unit.get("grid_pos"))
+		lit = clampf(tile.light_value / 100.0, 0.0, 1.0) if tile else 0.0
+	var energy := MIN_BRIGHTNESS * (1.0 - lit)
+	for mat in _floor_materials:
+		mat.emission_energy_multiplier = energy
+
+
+## Swaps the model — a gear swap, or a worm mass changing tier.
 func set_variant(new_variant: StringName) -> void:
 	variant = new_variant
-	for layer in layers:
-		# Headless builds no layers at all (`_build_layers` returns early), so
-		# `_sprites` is empty and there is nothing to reassign. Recorded here as
-		# well as there because a variant swap is no longer only a gear change
-		# the player triggers — `WormUnit` swaps art as a pile grows, which
-		# happens in the AI's own turn and therefore in every headless test run.
-		if not _sprites.has(layer):
-			continue
-		var frames := _load_frames(layer)
-		_authored_layers[layer] = frames != null
-		if frames == null:
-			frames = _unauthored_frames(layer)
-		else:
-			_authored = true
-		_frames[layer] = frames
-		var sprite := _sprites[layer] as AnimatedSprite3D
-		sprite.sprite_frames = frames
-		# Re-derived, not carried over: the incoming art may be a different
-		# resolution from what this layer was showing.
-		_apply_frame_scale(sprite, frames, layer)
-	# New art brings its own barrel with it.
+	# Headless builds no model at all, and a variant swap happens in the AI's own
+	# turn (WormUnit grows its pile) and so in every headless test run.
+	if _model == null:
+		return
+	# Freed NOW, not queued: WormUnit swaps in the same frame the first model was
+	# built, and a queued free of meshes the renderer has not yet drawn once
+	# leaves it reading their materials after they are gone.
+	remove_child(_model)
+	_model.free()
+	_model = null
+	_build_model()
 	_read_markers()
-	_play(_stance)
+	_play(_action if _action != &"" else _stance, true)
 
 
 func _build_light() -> void:
-	# A fixed offset on the unit, not a bone mount. Position follows this node and
-	# orientation follows the unit — see aimed_light.gd for why those must differ.
+	# Position follows the muzzle, orientation follows the unit — see
+	# aimed_light.gd for why those must differ.
 	_light_mount = Marker3D.new()
 	_light_mount.name = "LightMount"
-	# Detached from the unit's rotation, because `muzzle_world` answers in
-	# camera-relative screen space rather than in the unit's own frame; the
-	# turntable would otherwise be applied to it twice. _update_light_rig reimposes
-	# the position every frame, same pattern as aimed_light.gd itself.
+	# Detached from the unit's rotation because `muzzle_world` answers in world
+	# space; _update_light_rig reimposes the position every frame.
 	_light_mount.top_level = true
 	_light_mount.position = Vector3(0.0, LIGHT_HEIGHT, 0.0)
 	add_child(_light_mount)
@@ -766,22 +542,8 @@ func _build_light() -> void:
 	_light.set("facing_path", NodePath(".."))
 	_light.light_color = Color(0.94, 0.96, 1.0)
 	_light.light_energy = 7.0
-	# THE VISIBLE CONE. main.tscn has volumetric_fog_enabled with a density of
-	# 0.01, so this is the whole of the shaft between the barrel and the pool —
-	# no mesh, no shader, and no possibility of drifting out of line with the
-	# floor, because the cone IS this light. Walls occlude it for free, since
-	# the light already casts shadows.
-	#
-	# This was 0 for a while, and the reason it was is worth keeping: mounted at
-	# the body's centre it read as a haze hugging the model rather than as a
-	# beam. That was a POSITION problem, not a technique one. The mount now
-	# tracks the measured muzzle (see _update_light_rig), so the same setting
-	# now scatters from the gun.
-	#
-	# This is the dial for how present the shaft is. Prefer it over raising the
-	# environment's fog DENSITY, which would haze the whole ship rather than
-	# this one beam. 1.0 is Godot's default; 3.0 was the setting that read as a
-	# haze on the model back when the light was mounted at the chest.
+	# THE VISIBLE CONE: main.tscn has volumetric fog, so this is the whole of the
+	# shaft between the barrel and the pool. The dial for how present it is.
 	_light.light_volumetric_fog_energy = 2.0
 	_light.shadow_enabled = true
 	_light.shadow_blur = 0.6
@@ -792,45 +554,20 @@ func _build_light() -> void:
 	_light.spot_attenuation = 1.5
 	_light.spot_angle_attenuation = 2.5
 	add_child(_light)
-
-	# Aimed down the measured bore rather than down the unit's -Z, using the
-	# STABLE cycle mean — see aimed_light.gd `bore_direction` for why the rules
-	# must not be given a direction that sways.
 	_light.set("bore_direction", stable_bore())
 
 
-## Pulls both marker tables for the current variant, and re-measures the canvas
-## so the lamp's placement is derived from the art's own resolution.
 func _read_markers() -> void:
-	var tables := _load_markers(variant)
-	_canvas = tables.get("canvas", {})
-	_bore = tables.get("bore", {})
-	var sprite: AnimatedSprite3D = _sprites.get(&"body")
-	if sprite and sprite.sprite_frames:
-		_canvas_metres = _frame_size(sprite.sprite_frames) * sprite.pixel_size
+	_bore = _load_markers(variant)
 
 
 ## The bore direction the light and the rules both aim by, in the unit's own
-## frame: one stable vector per pose, never the swaying per-frame one — see
-## aimed_light.gd `bore_direction` for why the rules must not be given a
-## direction that moves within a cycle.
+## frame: one stable vector per pose, never a per-frame one — see aimed_light.gd
+## `bore_direction`. Unclamped, so a running merc (rifle across his chest) lights
+## the wall to his left and lighting_manager.gd agrees with the screen about it.
 ##
-## RETURNED UNCLAMPED, however far off the unit's facing the barrel points, and
-## the run cycle is why that is worth stating. A merc runs with the rifle across
-## his chest, so `run` measures 73 degrees off his direction of travel. That was
-## gated for a while — a 35-degree ceiling that admitted every standing pose and
-## rejected only the run — on the grounds that swinging the detection cone
-## three-quarters of a right angle sideways is a real change to how stealth
-## plays. It is, and the gate came out anyway: the light visibly leaving the gun
-## was judged to matter more than the cone pointing where the player is walking.
-##
-## So a running merc lights the wall to his left rather than the corridor ahead,
-## and lighting_manager.gd agrees with the screen about it. That is a property
-## of running, not a bug — move fast and you cannot see where you are going.
-## Reinstating the ceiling is a two-line change here if it plays badly.
-##
-## Falls back to straight ahead only for a pose with no table at all, and for
-## any character without a measured barrel — every character but the merc.
+## Straight ahead for a pose with no table, and for any character without a
+## measured barrel — every character but the merc.
 func stable_bore() -> Vector3:
 	var entry: Variant = _bore.get(_bore_pose())
 	if entry is Dictionary:
@@ -846,124 +583,52 @@ func aim_direction() -> Vector3:
 	return (global_transform.basis * stable_bore()).normalized()
 
 
-## Where the lamp sits on screen right now, in world space. This is where the
-## SpotLight3D is mounted, and therefore where the visible cone starts.
-##
-## FROM THE CANVAS, NOT FROM THE 3D MARKER, and the difference is not a detail.
-## Under this camera a point's screen height mixes its world height with its
-## horizontal depth (screen up is (-0.408, 0.408, 0.816)), and the render baked
-## that mixture into the canvas. A billboard cannot reproduce it: the quad is
-## flat and always faces the viewer, so the depth term is simply gone. Place the
-## lamp at its true 3D position and it lands about 0.15 m BELOW the drawn barrel
-## — physically right, visibly wrong, which is the gap this replaced.
-##
-## The 3D bore is still exactly right for the light's DIRECTION, which is a
-## rotation and carries no such error.
+## Where the lamp sits right now, in world space: the model's barrel tip, which
+## rides the weapon bone through every animation. The mounting point for the
+## SpotLight3D, and therefore where the visible cone starts.
 func muzzle_world() -> Vector3:
-	var sprite: AnimatedSprite3D = _sprites.get(&"body")
-	var here := _canvas_frame()
-	if sprite == null or here == Vector2.ZERO:
-		return global_position + Vector3(0.0, LIGHT_HEIGHT, 0.0)
-	var u := here.x
-	# A mirrored pose shows the art flipped, so the marker flips with it.
-	if sprite.flip_h:
-		u = 1.0 - u
-	# Canvas fraction -> metres out from the sprite's own origin, which
-	# `foot_anchor` places at the feet. The sprite is a FIXED_Y billboard, so its
-	# right IS the camera's horizontal right and its up IS world up — exactly the
-	# pair this offset decomposes onto.
-	var dx := (u - foot_anchor.x) * _canvas_metres.x
-	# `_canvas_metres` is the canvas at its `pixel_size`, but the card is DRAWN
-	# `_view_stretch` taller than that, so the drawn barrel is that much further
-	# up than the un-stretched canvas says. Vertical only, for the same reason
-	# the stretch is: `dx` is already right, because horizontal maps 1:1.
-	var dy := (foot_anchor.y - here.y) * _canvas_metres.y * _view_stretch()
-	var right := _rig.global_transform.basis.x.normalized() if _rig else Vector3.RIGHT
-	return global_position + right * dx + Vector3.UP * dy
+	if _flash and _flash.is_inside_tree():
+		return _flash.global_position
+	return global_position + Vector3(0.0, LIGHT_HEIGHT, 0.0)
 
 
-## This frame's canvas position for the lamp, or ZERO when the pose has none.
-func _canvas_frame() -> Vector2:
-	var sprite: AnimatedSprite3D = _sprites.get(&"body")
-	if sprite == null:
-		return Vector2.ZERO
-	var track: Variant = _canvas.get(sprite.animation)
-	if not (track is Array) or (track as Array).is_empty():
-		return Vector2.ZERO
-	var entries: Array = track
-	return entries[clampi(sprite.frame, 0, entries.size() - 1)]
-
-
-## Which pose's bore table applies. The bore is keyed by POSE, not by the
-## `<pose>_<direction>` animation name, because it lives in the unit's own frame
-## and so does not vary with facing — see MUZZLE_MARKER_PATH.
 func _bore_pose() -> StringName:
-	var sprite: AnimatedSprite3D = _sprites.get(&"body")
-	if sprite == null:
-		return _stance
-	var text := String(sprite.animation)
-	for dir: StringName in DIRECTIONS:
-		var suffix := "_" + String(dir)
-		if text.ends_with(suffix):
-			return StringName(text.substr(0, text.length() - suffix.length()))
-	return StringName(text)
+	return _current if _current != &"" else _stance
 
 
-## Keeps the light sitting on the drawn muzzle and pointing down the measured
-## bore. That is the whole per-frame job now: the visible cone is the light's
-## own volumetric scattering, so there is no second thing to keep in step with
-## it and no way for the shaft and the floor pool to disagree.
 func _update_light_rig() -> void:
 	if _light_mount:
-		# GLOBAL, because `muzzle_world` answers in camera-relative screen space
-		# and the mount's parent turns with the unit. `top_level` in _build_light
-		# is what makes this the whole story rather than half of it.
 		_light_mount.global_position = muzzle_world()
 	if _light:
-		# Refreshed per frame rather than once at build: which pose is playing
-		# decides which stable bore applies, and no pose is playing yet when the
-		# light is built. Cheap — one vector write.
+		# Which pose is playing decides which stable bore applies.
 		_light.set("bore_direction", stable_bore())
 
 
-## The marker tables for `art_variant`, parsed once per variant per run and
-## turned into vectors here rather than on every frame that reads one. Returns
-## {canvas: {<pose>_<dir>: Array[Vector2]}, bore: {<pose>: {...}}}.
+## The bore tables for `art_variant`, parsed once per variant per run. Returns
+## {<pose>: {muzzle, direction, mean_direction}}.
 static func _load_markers(art_variant: StringName) -> Dictionary:
 	if _marker_cache.has(art_variant):
 		return _marker_cache[art_variant]
 	var path: String = MUZZLE_MARKER_PATH % art_variant
 	var document: Variant = null
 	# FileAccess in the editor and wherever the .json ships raw; the JSON
-	# resource importer otherwise. Trying both means the table resolves either
-	# way rather than only under whichever the project happens to be set to.
+	# resource importer otherwise.
 	if FileAccess.file_exists(path):
 		document = JSON.parse_string(FileAccess.get_file_as_string(path))
 	elif ResourceLoader.exists(path):
 		var res: Variant = load(path)
 		document = res.data if res is JSON else null
-	var bore_out: Dictionary = {}
-	var canvas_out: Dictionary = {}
+	var out: Dictionary = {}
 	if document is Dictionary:
 		var bore: Variant = (document as Dictionary).get("bore", {})
 		if bore is Dictionary:
 			for pose: String in (bore as Dictionary):
 				var entry: Dictionary = (bore as Dictionary)[pose]
-				bore_out[StringName(pose)] = {
+				out[StringName(pose)] = {
 					"muzzle": _to_vectors(entry.get("muzzle", [])),
 					"direction": _to_vectors(entry.get("direction", [])),
 					"mean_direction": _to_vector(entry.get("mean_direction")),
 				}
-		var frames: Variant = (document as Dictionary).get("frames", {})
-		if frames is Dictionary:
-			for anim: String in (frames as Dictionary):
-				var rows: Array = (frames as Dictionary)[anim]
-				var track: Array = []
-				for row: Variant in rows:
-					track.append(Vector2(float(row[0]), float(row[1]))
-						if row is Array and (row as Array).size() == 2 else Vector2.ZERO)
-				canvas_out[StringName(anim)] = track
-	var out := {"canvas": canvas_out, "bore": bore_out}
 	_marker_cache[art_variant] = out
 	return out
 
@@ -986,184 +651,17 @@ func set_flashlight_enabled(on: bool) -> void:
 		_light.visible = on
 
 
-# --- Direction ---------------------------------------------------------------
-
-
-func _on_camera_yaw_changed(_yaw: float) -> void:
-	_sync_direction()
-
-
 func _process(_delta: float) -> void:
-	# Unit facing is tweened rather than signalled, so it is polled. One float
-	# compare and a bucket calculation per unit per frame.
-	_sync_direction()
-	# Polled for the same reason, and additionally because the bore moves WITHIN
-	# a pose: the answer changes on every sprite frame, not just when the facing
-	# does.
+	# Polled: the barrel moves on every animation frame.
 	_update_light_rig()
-	# Depends on BOTH yaws — the camera's, which sets the view axis, and the
-	# unit's, which sets the space the offset is assigned in — so it is polled
-	# beside them rather than hung off yaw_changed alone.
-	_update_ground_depth()
 
 
 ## Re-asserts whatever the unit should be showing, for a unit coming back into
 ## view (Unit.set_rendered). Nothing plays while a unit is instant, so without
-## this the sprite keeps whatever it showed when it went out of sight — which for
+## this the model keeps whatever it showed when it went out of sight — which for
 ## a unit killed there is standing up rather than lying where it fell.
 func refresh() -> void:
-	_play(_action if _action != &"" else _stance)
-
-
-## Re-buckets every layer in lockstep. Called on unit facing changes and on
-## camera yaw changes, because either one moves the direction the player sees.
-func _sync_direction() -> void:
-	if _unit == null:
-		return
-	var bucket := _bucket(_unit.rotation.y - _camera_yaw())
-	if bucket == _direction and not _sprites.is_empty():
-		return
-	_direction = bucket
-	_play(_action if _action != &"" else _stance)
-
-
-func _camera_yaw() -> float:
-	return _rig.rotation.y if _rig else 0.0
-
-
-# --- Ground depth ------------------------------------------------------------
-#
-# The sprite is a flat VERTICAL card standing at the tile centre, but the art on
-# it has real depth: the render was shot at 35.264 degrees, so a boot planted
-# toward the viewer was a boot genuinely in FRONT of the character's root,
-# standing on floor that is nearer the camera. The card draws it at the tile
-# centre's depth instead, the deck quad in front wins the depth test, and the
-# boot is sliced off along a screen-horizontal line -- horizontal because that is
-# where the y=0 plane meets a vertical billboard.
-#
-# `foot_anchor` cannot fix this, and no value of it can. The anchor names the row
-# that sits ON the floor; every row beneath it is beneath the floor by
-# construction. Raising the anchor until nothing clips just hangs the character
-# in the air instead, and which row the feet reach depends on the FACING (idle
-# spans 24 px across the merc's eight buckets), so one number cannot satisfy them
-# all. The clipping is a DEPTH problem and has to be answered in depth.
-#
-# What makes the answer free is that the camera is ORTHOGRAPHIC. Translating
-# along the view axis changes depth and nothing else -- there is no perspective
-# divide to scale the result -- so the sprite can be pushed toward the camera
-# until it beats the floor without moving on screen by so much as a pixel.
-
-
-## How far the sprite must travel along the view axis to clear the floor it
-## stands on, in metres.
-##
-## `d / sin(pitch)`, where `d` is how far below the origin the canvas reaches.
-## Both terms of the gap contribute and they collapse neatly: a card point `d`
-## below the origin sits `d*sin(pitch)` FURTHER from the camera than the origin,
-## while the floor pixel it collides with is `d*cos(pitch)^2/sin(pitch)` NEARER,
-## and `sin^2 + cos^2 = 1` does the rest.
-##
-## `d` is measured to the bottom EDGE of the canvas rather than to the lowest
-## opaque pixel, so it is the worst case no art can exceed and it costs no
-## measurement -- and it falls to zero on its own for placeholder art, which is
-## drawn with `foot_anchor.y` of 1.0 and has nothing below the anchor at all.
-## Never take more depth than this fraction of the nearest occluder's.
-##
-## The unit gains depth, so anything it gains MORE of than a legitimate occluder
-## has, it punches through. The nearest legitimate one is a wall on the near edge
-## of the unit's own tile — half a tile of ground — and 0.8 of that leaves a
-## visible margin rather than a photo finish.
-##
-## Costs nothing in practice: `_ground_depth_offset` measures to the bottom EDGE
-## of the canvas, while the art's real reach is shorter, so the cap only ever
-## bites into slack. On the nest, the widest case in the game, it gives up about
-## one pixel of clearance.
-const GROUND_DEPTH_SAFETY := 0.8
-
-
-func _ground_depth_offset() -> float:
-	# Through `_view_stretch`, because the card is drawn taller than its
-	# `pixel_size`: the rows below the anchor reach that much further below the
-	# floor, and a drop measured in un-stretched metres would under-clear them.
-	var drop := (1.0 - foot_anchor.y) * canvas_height * _view_stretch()
-	if drop <= 0.0 or _rig == null:
-		return 0.0
-	# basis.z of the rig points back along the view axis, so its Y component is
-	# sin(pitch) and its horizontal length is cos(pitch) — both read off the rig
-	# rather than recomputed from a copied constant, so a change to the camera's
-	# pitch carries here by itself.
-	var axis: Vector3 = _rig.global_transform.basis.z
-	var sin_pitch := axis.y
-	if sin_pitch <= 0.001:
-		return 0.0
-	var cos_pitch := Vector2(axis.x, axis.z).length()
-	var nearest_occluder := GridManager.TILE_SIZE * 0.5 * cos_pitch
-	return minf(drop / sin_pitch, nearest_occluder * GROUND_DEPTH_SAFETY)
-
-
-## How much taller than its `pixel_size` a RENDERED layer must be drawn, so that
-## a texel lands on screen exactly where the render put it.
-##
-## `1 / cos(pitch)`, and the reason is that the projection is applied TWICE.
-## `CANVAS_HEIGHT` is Blender's `ortho_scale`, which is a SCREEN extent: a point
-## at world height h, at the unit's own depth, was drawn `h * cos(pitch)` of
-## canvas above the origin. `pixel_size = canvas_height / texture_height` then
-## makes the card that many metres tall in WORLD, and the card is upright, so the
-## camera foreshortens the already-foreshortened image a second time. Measured
-## end to end at 0.81 before this, against a predicted cos(pitch) of 0.8165.
-##
-## Vertical only. Horizontally the card maps 1:1 to the screen under this camera,
-## so `pixel_size` is already right across and stretching both axes -- which is
-## all a scalar `pixel_size` can do -- would fix the height by making the figure
-## fat. A non-uniform `scale` is the only lever that separates them, and Godot's
-## billboard shader does preserve it (verified; it is `billboard_keep_scale` that
-## a scaled billboard would otherwise need).
-##
-## NOT applied to the code placeholder, which is drawn filling its canvas and so
-## has no baked foreshortening to undo -- stretching it would just make it 22%
-## too tall. See `_authored_layers`.
-func _view_stretch() -> float:
-	if _rig == null:
-		return 1.0
-	# Horizontal length of the rig's view axis IS cos(pitch); read off the rig so
-	# a change to the camera's pitch carries here by itself.
-	var axis: Vector3 = _rig.global_transform.basis.z
-	var cos_pitch := Vector2(axis.x, axis.z).length()
-	return 1.0 / cos_pitch if cos_pitch > 0.001 else 1.0
-
-
-## Reconciles every layer with the camera: how tall the card is drawn, and how
-## much depth it is given.
-##
-## Applied to the LAYERS, not to this node: `muzzle_world` and `muzzle_origin`
-## both build from this node's `global_position`, and the flashlight hangs off
-## `LightMount` beside them. Moving or scaling the whole `Visual` would drag the
-## lamp and the shot origin off the unit for a change that is purely about what
-## the rasteriser does with the card.
-##
-## Polled rather than done once at build time because `_rig` is found in `_ready`
-## and a unit may be spawned before the rig exists; re-asserting it every frame
-## costs a basis multiply and cannot get stuck wrong.
-func _update_ground_depth() -> void:
-	if _sprites.is_empty():
-		return
-	var offset := _rig.global_transform.basis.z * _ground_depth_offset() if _rig \
-		else Vector3.ZERO
-	# Into this node's space: the unit turns to face, so a world-space offset
-	# would be spun around by the facing if it were assigned raw.
-	var local := global_transform.basis.inverse() * offset
-	# The same axis the ground offset rides, one step further toward the camera,
-	# for the layers that must not be coplanar with the body. See
-	# OVERLAY_DEPTH_BIAS.
-	var overlay := local
-	if _rig:
-		overlay += global_transform.basis.inverse() \
-			* (_rig.global_transform.basis.z * OVERLAY_DEPTH_BIAS)
-	var stretch := _view_stretch()
-	for layer in _sprites:
-		var sprite := _sprites[layer] as AnimatedSprite3D
-		sprite.position = overlay if layer in ADDITIVE_LAYERS else local
-		sprite.scale.y = stretch if _authored_layers.get(layer, false) else 1.0
+	_play(_action if _action != &"" else _stance, true)
 
 
 ## Static so the mapping can be checked without a scene — see
@@ -1173,73 +671,49 @@ static func direction_bucket(relative_yaw: float) -> int:
 		0, DIRECTIONS.size())
 
 
-func _bucket(relative_yaw: float) -> int:
-	return direction_bucket(relative_yaw)
-
-
 ## The poses to try for `base`, most specific first: the current cover family's
-## variant, then the plain pose.
-##
-## This is the whole cover-art mechanism. Because it is a FALLBACK CHAIN rather
-## than a lookup, a cover variant that has not been drawn costs nothing and
-## changes nothing — the plain pose answers instead, exactly as it does for a
-## unit standing in the open.
+## variant, then the plain pose. A cover animation that does not exist costs
+## nothing — the plain pose answers instead.
 func _bases(base: StringName) -> Array[StringName]:
 	if _cover == &"":
 		return [base]
 	return [&"%s_%s" % [base, _cover], base]
 
 
-## The animation name and flip for `base` in the current direction, resolving the
-## cover chain and then the 5-drawn + 3-mirrored rule. Returns
-## [name, flip_h, resolved_base] — the third being WHICH candidate answered, so
-## play_burst can tell a step-out from a shoulder-and-fire.
-func _resolve(layer: StringName, base: StringName) -> Array:
-	var frames: SpriteFrames = _frames[layer]
-	var dir: StringName = DIRECTIONS[_direction]
-	# Cover art in ANY form beats plain art, mirrored included: showing the crate
-	# pose flipped is right, and showing the standing pose unflipped is not.
-	for candidate in _bases(base):
-		var direct := &"%s_%s" % [candidate, dir]
-		# An asymmetric pose authored for all eight wins over the mirror table.
-		if frames.has_animation(direct):
-			return [direct, false, candidate]
-		if MIRROR.has(dir):
-			var m: Array = MIRROR[dir]
-			var mirrored := &"%s_%s" % [candidate, m[0]]
-			if frames.has_animation(mirrored):
-				return [mirrored, m[1], candidate]
-	return [&"", false, &""]
-
-
-## Which candidate `base` actually resolved to, or "" if nothing did. Equal to
-## `base` when the plain pose answered and to the suffixed name when a cover
-## variant did.
+## Which candidate `base` resolves to — the cover variant or the plain pose — or
+## "" if the model has neither.
 func _resolved_base(base: StringName) -> StringName:
-	for layer in layers:
-		if not _frames.has(layer):
-			continue
-		var resolved := _resolve(layer, base)
-		if resolved[0] != &"":
-			return resolved[2]
+	for candidate in _bases(base):
+		if _poses.has(candidate):
+			return candidate
 	return &""
+
+
+func _has_any(base: StringName) -> bool:
+	return _resolved_base(base) != &""
+
+
+## Seconds `pose` occupies on screen — a full cycle for a looping stance, the
+## whole clip for a one-shot. The authored clip is time-scaled to this.
+func _duration(pose: StringName) -> float:
+	var per_variant: Dictionary = VARIANT_LOOP_TIME.get(variant, {})
+	if per_variant.has(pose):
+		return per_variant[pose]
+	if pose in LOOPING:
+		return LOOP_TIME.get(pose, DEFAULT_LOOP_TIME)
+	return ONE_SHOT_TIME.get(pose, FALLBACK_TIME.get(pose, DEFAULT_FALLBACK_TIME))
 
 
 # --- Playback ----------------------------------------------------------------
 
 
-## Sets which cover family every subsequent pose resolves through. A cosmetic
-## switch only: the cover BONUS is a property of the tile edge the shot crosses
-## (GridManager.cover_type_on), never of what the unit is doing on screen, so no
-## value here can move an accuracy number.
+## Sets which cover family every subsequent pose resolves through. Cosmetic only:
+## the cover BONUS is a property of the tile edge the shot crosses, never of
+## what the unit is doing on screen.
 func set_cover_pose(family: StringName) -> void:
 	if family == _cover:
 		return
 	_cover = family
-	# Re-resolved rather than restarted: the pose NAME on screen is unchanged, so
-	# a unit that steps into cover mid-idle swaps art without its cycle jumping
-	# back to frame 0. Restart is what `_play`'s second argument is for, and this
-	# is deliberately not that case.
 	_play(_action if _action != &"" else _stance)
 
 
@@ -1258,26 +732,22 @@ func set_stance(stance: StringName) -> void:
 
 func play_action(action: StringName) -> void:
 	# Coroutine — callers MUST await, or the next game action resolves while this
-	# one is still on screen.
-	# Shooting does NOT come through here — see play_burst. This drives the
-	# one-shots that fire no rounds, so nothing here emits `muzzle`.
+	# one is still on screen. Shooting does NOT come through here — see
+	# play_burst — so nothing here emits `muzzle`.
 	if _instant():
 		# Still recorded, so a unit killed out of sight is a body when it next
-		# comes into view rather than standing there in whatever it last played.
+		# comes into view.
 		if action == DOWNED:
 			_settle_dead()
 		return
 	_action = action
-	_play(action)
-	# With placeholder art an animation is a single held frame, so waiting on
-	# animation_finished would either return instantly or never. Holding for the
-	# length the authored animation will take is what keeps every timing-dependent
-	# caller behaving the same before and after the art exists.
-	if _authored and _has_any(action):
-		await _await_animation(action)
-	else:
-		await get_tree().create_timer(
-			FALLBACK_TIME.get(action, DEFAULT_FALLBACK_TIME)).timeout
+	_play(action, true)
+	# The same length with or without a model, which is what keeps every
+	# timing-dependent caller behaving the same before and after art exists.
+	var resolved := _resolved_base(action)
+	await get_tree().create_timer(
+		_duration(resolved) if resolved != &"" and _authored
+			else FALLBACK_TIME.get(action, DEFAULT_FALLBACK_TIME)).timeout
 	_action = &""
 	# DOWNED hands over to the corpse; every other action returns to the stance.
 	if action == DOWNED:
@@ -1286,13 +756,9 @@ func play_action(action: StringName) -> void:
 		_play(_stance)
 
 
-## Makes DEAD the stance, where it is drawn. A character with no `dead` art keeps
-## DOWNED's last frame on screen instead — asking for DEAD there would fall
-## through `_play` to IDLE and stand the body up.
-##
-## Checked through `_resolved_base` rather than `_has_any` because this is also
-## reached on the instant path, which can run before the layers are built, and
-## only the former skips a layer with no frames yet.
+## Makes DEAD the stance, where the model has it. One without keeps DOWNED's
+## last frame — asking for DEAD there would fall through `_play` to IDLE and
+## stand the body up.
 func _settle_dead() -> void:
 	if _resolved_base(DEAD) == &"":
 		return
@@ -1300,18 +766,10 @@ func _settle_dead() -> void:
 	_play(DEAD)
 
 
-## Plays the flinch for a hit the unit survived, in whatever direction it is
-## already facing, through the cover chain like every other pose — so a unit
-## behind a crate resolves `hit_react_low` and flinches without standing up.
-##
-## Fire-and-forget, and the one action that is: `Unit.take_damage` is
-## synchronous, and nothing about the fight may wait on the victim's reaction.
-## That is also why missing art costs NO time here, unlike play_action — with no
-## flinch drawn the unit simply holds its idle.
-##
-## Skipped rather than stacked when another one-shot is already on screen. Two
-## play_action calls in flight at once would each hand back to the stance when
-## they finished, so the first to end would cut the other off mid-animation.
+## Plays the flinch for a hit the unit survived, through the cover chain like
+## every other pose. Fire-and-forget: nothing about the fight may wait on the
+## victim's reaction, so missing art costs NO time here. Skipped rather than
+## stacked when another one-shot is already on screen.
 func play_hit_react() -> void:
 	if _instant() or _action != &"" or not (_authored and _has_any(HIT_REACT)):
 		return
@@ -1319,20 +777,14 @@ func play_hit_react() -> void:
 
 
 ## Plays a one-shot that bridges the current stance into `next`, then settles
-## there. Coroutine — callers MUST await.
-##
-## Unlike play_action, missing art costs NO time: it falls straight through to
-## the stance. That makes this safe to call before the art has been drawn, and
-## means an absent transition degrades to a hard cut rather than to a mysterious
-## pause on every move.
+## there. Coroutine — callers MUST await. Missing art costs NO time: it falls
+## straight through to the stance, a hard cut rather than a mysterious pause.
 func play_stance_exit(action: StringName, next: StringName) -> void:
 	if _instant() or not _has_any(action):
 		set_stance(next)
 		return
-	# Assigned rather than passed to set_stance: writing the field directly
-	# records where to land WITHOUT playing it, so the exit animation is what
-	# shows on screen. play_action's tail then settles into whatever _stance has
-	# become.
+	# Recorded WITHOUT playing it, so the exit animation is what shows; the tail
+	# of play_action then settles into whatever _stance has become.
 	_stance = next
 	await play_action(action)
 
@@ -1346,30 +798,21 @@ func play_burst(rounds: int) -> void:
 		return
 	_action = FIRE_SHOOT
 	# Resolved BEFORE the phase plays, because the length of the beat depends on
-	# which art answered: a step out of cover takes longer than shouldering a
-	# rifle on the spot. Empty means neither the cover variant nor the plain pose
-	# exists, and the phase degrades to AIM_HOLD as it always has.
+	# which animation answered: a step out of cover takes longer than
+	# shouldering a rifle on the spot.
 	var begin := _resolved_base(BEGIN_SHOOT)
 	var end := _resolved_base(END_SHOOT)
-	# Each phase falls back to AIM_HOLD, so a character missing the raise or the
-	# lower still holds the weapon up for that beat rather than skipping it. The
-	# timers run regardless, which is what keeps burst pacing — and therefore
-	# turn pacing — identical across characters with different amounts of art.
-	_play(BEGIN_SHOOT if begin != &"" else AIM_HOLD)
+	_play(BEGIN_SHOOT if begin != &"" else AIM_HOLD, true)
 	await get_tree().create_timer(
 		_phase_time(BEGIN_SHOOT, begin, RAISE_TIME, COVER_RAISE_TIME)).timeout
-	# FIRE has no cover variant BY DESIGN, and that is the point of the whole
-	# arrangement: the unit has already stepped out, so it fires exactly as it
-	# does in the open. One set of kick art serves both, which halves what has to
-	# be drawn to make cover read.
+	# FIRE has no cover variant BY DESIGN: the unit has already stepped out, so
+	# it fires exactly as it does in the open.
 	for _i in rounds:
-		# Restarted from frame 0 rather than merely played: play() on the
-		# animation already running is a no-op, so every round after the first
-		# would silently skip its kick.
+		# Restarted, so every round gets its own kick and its own flash.
 		_play(FIRE_SHOOT, true)
 		muzzle.emit()
 		await get_tree().create_timer(BURST_CADENCE).timeout
-	_play(END_SHOOT if end != &"" else AIM_HOLD)
+	_play(END_SHOOT if end != &"" else AIM_HOLD, true)
 	await get_tree().create_timer(
 		_phase_time(END_SHOOT, end, SETTLE_TIME, COVER_SETTLE_TIME)).timeout
 	_action = &""
@@ -1377,121 +820,56 @@ func play_burst(rounds: int) -> void:
 
 
 ## How long a burst phase holds: the cover length when a cover variant answered
-## for it, the plain length otherwise. Decided per PHASE rather than per shot, so
-## a character with `begin_shoot_low` drawn but not `end_shoot_low` gets the long
-## step-out and the short settle — which is what its art actually shows.
+## for it, the plain length otherwise.
 func _phase_time(base: StringName, resolved: StringName, plain: float,
 		in_cover: float) -> float:
 	return in_cover if resolved != &"" and resolved != base else plain
 
 
-## Where a shot leaves the weapon, in world space.
-##
-## Derived from the UNIT's yaw rather than from the sprite's screen direction, on
-## purpose: the muzzle is a point in the world that LOS and the shot VFX both
-## read, and rotating the camera must not move it. A per-direction table would be
-## an art refinement on top of this, not a replacement for it.
+## Where a shot leaves the weapon, in world space. Derived from the UNIT's yaw on
+## purpose: LOS and the shot VFX both read it, and it must not move with the
+## animation.
 func muzzle_origin() -> Vector3:
 	var yaw: float = _unit.rotation.y if _unit else 0.0
 	var forward := Vector3(-sin(yaw), 0.0, -cos(yaw))
 	return global_position + forward * MUZZLE_REACH + Vector3(0.0, MUZZLE_HEIGHT, 0.0)
 
 
-func _has_any(base: StringName) -> bool:
-	for layer in layers:
-		if _resolve(layer, base)[0] != &"":
-			return true
-	return false
-
-
-## Drives every layer from one call, which is what keeps them in lockstep: they
-## are started in the same frame with the same animation name and the same
-## restart flag, so no layer can drift a frame behind another.
+## Drives every player from one call, which keeps a pile's instances in lockstep
+## with each other (each at its own phase).
 func _play(base: StringName, restart: bool = false) -> void:
 	if _instant():
 		return
-	# A pose no layer has ANY art for falls through to IDLE rather than being
-	# asked for as-is. Without this, a single-layer character missing (say)
-	# `downed` entirely does not just skip the pose — every layer resolves to
-	# nothing and the whole character goes invisible for as long as the pose
-	# is on screen, which for DOWNED is forever. This only catches the total
-	# loss: a pose that IS drawn for at least one layer still hides the
-	# layers that lack it individually below, which is a deliberate look (a
-	# downed body correctly loses its helmet) rather than a gap to paper over.
-	var effective_base := base if base == IDLE or _has_any(base) else IDLE
-	for layer in layers:
-		var sprite: AnimatedSprite3D = _sprites.get(layer)
-		if sprite == null:
-			continue
-		var resolved := _resolve(layer, effective_base)
-		var name: StringName = resolved[0]
-		if name == &"":
-			sprite.visible = false  # this layer has nothing to show for this pose
-			continue
-		sprite.visible = true
-		sprite.flip_h = resolved[1]
-		if restart or sprite.animation != name:
-			sprite.play(name)
-			if restart:
-				sprite.set_frame_and_progress(0, 0.0)
-
-
-func _await_animation(base: StringName) -> void:
-	# Waited on ONE layer — whichever has art for this pose. Every layer was
-	# started in the same frame with the same length, so one finishing is all of
-	# them finishing.
-	for layer in layers:
-		var name: StringName = _resolve(layer, base)[0]
-		if name == &"":
-			continue
-		var sprite: AnimatedSprite3D = _sprites[layer]
-		while sprite.is_playing() and sprite.animation == name:
-			await sprite.animation_finished
+	# A pose the model has nothing for falls through to IDLE rather than being
+	# asked for as-is — otherwise a model missing `downed` would freeze in
+	# whatever it was doing, forever.
+	var effective := base if base == IDLE or _has_any(base) else IDLE
+	var pose := _resolved_base(effective)
+	if pose == &"":
 		return
-
-
-# --- Lighting ----------------------------------------------------------------
-
-
-## Tints every layer by the light on the unit's own tile. This is the sprite
-## equivalent of being lit, and it is deliberately driven from the same
-## light_value that Combat.light_modifier and alien detection read: a unit that
-## looks dark must be one the rules also treat as dark.
-func _apply_tile_light() -> void:
-	if _unit == null:
+	if pose == _current and not restart:
 		return
-	var tile: GridTileData = GridManager.get_tile(_unit.get("grid_pos"))
-	var lit := clampf(tile.light_value / 100.0, 0.0, 1.0) if tile else 1.0
-	var level := lerpf(MIN_TINT, 1.0, lit)
-	var tint := Color(level, level, level) * faction_tint
-	for layer in layers:
-		var sprite: AnimatedSprite3D = _sprites.get(layer)
-		if sprite:
-			sprite.modulate = _emitted_tint(layer) if layer in SELF_LIT_LAYERS \
-				else tint
-
-
-## What a SELF_LIT layer is modulated by, given that it is not being dimmed by
-## the tile it stands on.
-##
-## The status light carries a colour the unit assigns — that is the whole point
-## of it. Every other self-lit layer is simply left alone at white, the muzzle
-## flash included, and the faction tint has no business on it either: a merc
-## recoloured rust still fires a white flash, because the tint is a stand-in for
-## a second sprite set and not a property of the character's ammunition.
-func _emitted_tint(layer: StringName) -> Color:
-	return _status_color if layer == &"status" else Color.WHITE
-
-
-## Recolours the self-lit `status` layer. The security robots' one concession to
-## readability: a machine's posture cannot be read off its body language the way
-## an alien's can, so the state is a colour instead. A no-op for a character with
-## no status layer, which is every character that is not a robot.
-func set_status_color(color: Color) -> void:
-	_status_color = color
-	var sprite: AnimatedSprite3D = _sprites.get(&"status")
-	if sprite:
-		sprite.modulate = color
+	_current = pose
+	if _pose_root:
+		_pose_placeholder(pose)
+		return
+	if _model:
+		_model.rotation.y = deg_to_rad(_pose_yaw.get(pose, 0.0))
+	if _flash:
+		_flash.visible = pose == FIRE_SHOOT
+	var duration := _duration(pose)
+	# A round's kick restarts from its first frame with no blend — blending into
+	# itself would smear the recoil into nothing.
+	var blend := 0.0 if pose == FIRE_SHOOT else BLEND_TIME
+	for i in _players.size():
+		var player := _players[i]
+		if not player.has_animation(pose):
+			continue
+		var length := player.get_animation(pose).length
+		var speed := length / duration if duration > 0.0 and length > 0.01 else 1.0
+		player.play(pose, blend, speed)
+		if restart or _phases[i] != 0.0:
+			player.seek(_phases[i] * length, true)
 
 
 # --- Idle behaviour ----------------------------------------------------------
@@ -1507,26 +885,17 @@ func _footstep_loop() -> void:
 
 
 func _maybe_start_fidget() -> void:
-	# Silently does nothing for a character with no fidget art. Same shape as
-	# everything else here: the code is written once and the art decides whether
-	# it applies.
-	if _instant() or _fidgeting or not _has_any(IDLE_FIDGET):
+	# Silently does nothing for a model with no fidget.
+	if _instant() or _fidgeting or not _authored or not _has_any(IDLE_FIDGET):
 		return
 	_fidget_loop()  # deliberately not awaited: runs until the stance leaves IDLE
 
 
+## Slips an idle variation in at random intervals. Played directly rather than
+## through play_action: that sets `_action`, which would make a move order wait
+## for the fidget to finish. Leaving `_action` empty means any real stance change
+## cuts the fidget off and wins, which is the priority a decoration should have.
 func _fidget_loop() -> void:
-	## Slips an idle variation in at random intervals. Not awaited by anything —
-	## a fidget is scenery, and no game state may ever depend on one.
-	##
-	## Played directly rather than through play_action, and that is the whole
-	## design. play_action sets `_action`, which makes set_stance record-but-not-
-	## play until the one-shot finishes — correct for a reload, disastrous here,
-	## because IDLE is the default stance and a long fidget would routinely be in
-	## flight when a move order arrives. The unit would then slide to its
-	## destination still convulsing. Leaving `_action` empty means any real stance
-	## change cuts the fidget off mid-frame and wins, which is exactly the
-	## priority a decoration should have.
 	_fidgeting = true
 	while _stance == IDLE and is_inside_tree():
 		await get_tree().create_timer(
@@ -1537,22 +906,33 @@ func _fidget_loop() -> void:
 		if _action != &"":
 			continue  # a real one-shot owns the body; try again after the next gap
 		_play(IDLE_FIDGET, true)
-		await _await_animation(IDLE_FIDGET)
+		await get_tree().create_timer(_duration(IDLE_FIDGET)).timeout
 		if is_inside_tree() and _stance == IDLE and _action == &"":
 			_play(IDLE)
 	_fidgeting = false
 
 
-# --- Placeholder art ---------------------------------------------------------
+# --- Status light ------------------------------------------------------------
+
+
+## Recolours the self-lit `status` part. The security robots' one concession to
+## readability: a machine's posture cannot be read off its body language the way
+## an alien's can, so the state is a colour instead. A no-op for a character with
+## no status part.
+func set_status_color(color: Color) -> void:
+	_status_color = color
+	if _status_material:
+		_status_material.albedo_color = color
+
+
+# --- Placeholder -------------------------------------------------------------
 #
-# Drawn in code rather than shipped as PNGs, so there are no stand-in assets to
-# mistake for real ones later and nothing to delete when the art lands. Every
-# pose and direction the game asks for exists, which means the whole system —
-# layering, bucketing, mirroring, gear swap, lockstep playback — is exercisable
-# now, and dropping real SpriteFrames into assets/sprites/ replaces it silently.
+# Built in code from primitive meshes, so there are no stand-in assets to
+# mistake for real ones and nothing to delete when a model lands. Every pose
+# "exists" (as a held posture), which keeps the whole playback system exercised,
+# and dropping `<variant>.glb` into assets/models/ replaces it silently.
 
-
-## Base colour per layer, so the four are told apart at a glance.
+## Base colour per part, so they are told apart at a glance.
 const PLACEHOLDER_COLOR := {
 	&"body": Color(0.32, 0.36, 0.30),
 	&"head": Color(0.78, 0.62, 0.50),
@@ -1561,24 +941,22 @@ const PLACEHOLDER_COLOR := {
 	&"status": Color(1.0, 1.0, 1.0),  # tinted per alert state; see set_status_color
 }
 
-## Machine-style overrides. Cold greys against the organic set's warmer, dirtier
-## palette, so faction reads off colour as well as off shape.
+## Machine-style overrides: cold greys against the organic set's warmer palette,
+## so faction reads off colour as well as shape.
 const PLACEHOLDER_MACHINE_COLOR := {
 	&"body": Color(0.40, 0.44, 0.50),
 	&"head": Color(0.20, 0.22, 0.26),
 	&"weapon": Color(0.14, 0.15, 0.18),
 }
 
-## Per-variant silhouette for the machine style, in canvas pixels. Four robots
-## that differ only in colour would be four of the same unit as far as a player
-## glancing at a dark corridor is concerned, so each gets a proportion it owns:
-## a squat armored post, a wide heavy weapons platform, a small hovering drone,
-## and something a head taller than a soldier.
+## Per-variant machine proportions, in placeholder units (PLACEHOLDER_UNIT): a
+## squat armored post, a wide weapons platform, a small hovering drone, and
+## something a head taller than a soldier.
 ##
 ##   width/height — chassis box
-##   hover        — pixels of clear air under it, so the drone reads as flying
+##   hover        — clear air under it, so the drone reads as flying
 ##   head         — sensor housing edge; 0 draws none
-##   shoulder     — width of the plate that swings with facing, 0 draws none
+##   shoulder     — width of the side plates, 0 draws none
 const PLACEHOLDER_MACHINE_SPEC := {
 	&"auxilium": {"width": 20, "height": 26, "hover": 0, "head": 9, "shoulder": 5},
 	&"sagittarii": {"width": 28, "height": 30, "hover": 0, "head": 8, "shoulder": 8},
@@ -1586,11 +964,10 @@ const PLACEHOLDER_MACHINE_SPEC := {
 	&"securus": {"width": 24, "height": 42, "hover": 0, "head": 12, "shoulder": 7},
 }
 const PLACEHOLDER_MACHINE_DEFAULT := {"width": 20, "height": 28, "hover": 0, "head": 9, "shoulder": 5}
-## Poses the placeholder draws crouched rather than standing, so overwatch is
-## visibly different from standing there.
+## Poses the placeholder holds crouched, so overwatch is visibly different.
 const PLACEHOLDER_CROUCHED := [OVERWATCH]
-## Every pose the placeholder generates art for — the full vocabulary above, so
-## no caller can ask for something that does not exist.
+## Every pose the placeholder answers for — the full vocabulary, so no caller can
+## ask for something that does not exist.
 const PLACEHOLDER_POSES := [
 	IDLE, RUN, WALK, OVERWATCH, AIM_HOLD,
 	BEGIN_SHOOT, FIRE_SHOOT, END_SHOOT, RUN_STOP,
@@ -1599,140 +976,144 @@ const PLACEHOLDER_POSES := [
 ]
 
 
-func _placeholder_frames(layer: StringName) -> SpriteFrames:
-	var frames := SpriteFrames.new()
-	frames.remove_animation(&"default")
+func _build_placeholder() -> void:
 	for pose: StringName in PLACEHOLDER_POSES:
-		# Only the five DRAWN directions — the mirror table supplies nw, w and sw
-		# — so that table is genuinely exercised rather than bypassed by
-		# generating all eight.
-		for dir: StringName in [&"n", &"ne", &"e", &"se", &"s"]:
-			var name := &"%s_%s" % [pose, dir]
-			frames.add_animation(name)
-			frames.set_animation_loop(name, pose in [IDLE, RUN, WALK, OVERWATCH, AIM_HOLD, DEAD])
-			frames.add_frame(name, _placeholder_texture(layer, pose, dir))
-	return frames
-
-
-func _placeholder_texture(layer: StringName, pose: StringName, dir: StringName) -> ImageTexture:
-	var image := Image.create(CANVAS, CANVAS, false, Image.FORMAT_RGBA8)
-	image.fill(Color(0, 0, 0, 0))
-	var color: Color = PLACEHOLDER_COLOR.get(layer, Color(0.6, 0.6, 0.6))
-	var prone := pose in [DOWNED, DEAD]
-	var crouched := pose in PLACEHOLDER_CROUCHED
-	# How far the art leans toward the viewer, so the eight buckets are told apart
-	# without reading a label: -1 is facing away, +1 is facing the camera.
-	var lean: float = {&"n": -1.0, &"ne": -0.5, &"e": 0.0, &"se": 0.5, &"s": 1.0}.get(dir, 0.0)
-	# Screen-right component, so a weapon sits on the correct side of the body.
-	var side: float = {&"n": 0.0, &"ne": 0.7, &"e": 1.0, &"se": 0.7, &"s": 0.0}.get(dir, 0.0)
-
+		_poses[pose] = true
+	_pose_root = Node3D.new()
+	_pose_root.name = "Placeholder"
+	_model.add_child(_pose_root)
 	if placeholder_style == &"machine":
-		_draw_machine(image, layer, prone, crouched, lean, side)
-		return ImageTexture.create_from_image(image)
-
-	var floor_y := CANVAS - 2
-	var height := 22 if crouched else 38
-	if prone:
-		# Flat on the deck: a downed unit must not read as a standing one.
-		_box(image, 14, floor_y - 8, 36, 7, color)
-		return ImageTexture.create_from_image(image)
-
-	match layer:
-		&"body":
-			_box(image, CANVAS / 2 - 8, floor_y - height, 16, height, color)
-			# A lighter front panel, offset toward the viewer: the fastest read of
-			# which way a featureless block is facing.
-			if lean > 0.0:
-				_box(image, CANVAS / 2 - 6, floor_y - height + 4, 12, 10,
-					color.lightened(0.35))
-		&"head":
-			_disc(image, CANVAS / 2 + int(side * 2.0), floor_y - height - 6, 6, color)
-		&"helmet":
-			_disc(image, CANVAS / 2 + int(side * 2.0), floor_y - height - 8, 7,
-				color.darkened(0.1))
-			# Visor, drawn only when the face is toward the camera.
-			if lean > 0.0:
-				_box(image, CANVAS / 2 - 4 + int(side * 2.0), floor_y - height - 7, 8, 3,
-					Color(0.85, 0.2, 0.18))
-		&"weapon":
-			var x := CANVAS / 2 + int(side * 9.0) - 2
-			_box(image, x, floor_y - height + 8, 4, 16, color)
-	return ImageTexture.create_from_image(image)
+		_build_machine()
+	else:
+		_build_organic()
 
 
-## The machine silhouette. Everything here is a rectangle, and that is the point:
-## the faction is specified as "built, not grown", so the stand-in has no discs,
-## no taper and no rounded anything, and reads as the opposite of the alien
-## placeholder even at the size a character occupies on screen.
-func _draw_machine(image: Image, layer: StringName, prone: bool, crouched: bool,
-		lean: float, side: float) -> void:
-	var color: Color = PLACEHOLDER_MACHINE_COLOR.get(layer, PLACEHOLDER_COLOR.get(layer, Color(0.6, 0.6, 0.6)))
+## The standing biped. Forward is -Z, the unit's facing.
+func _build_organic() -> void:
+	var body_h := 1.35
+	for layer in layers:
+		var color: Color = PLACEHOLDER_COLOR.get(layer, Color(0.6, 0.6, 0.6))
+		match layer:
+			&"body":
+				_part(_box_mesh(Vector3(0.46, body_h, 0.30)), color,
+					Vector3(0.0, body_h / 2.0, 0.0))
+				# A lighter chest panel on the front: the fastest read of which
+				# way a featureless block is facing.
+				_part(_box_mesh(Vector3(0.34, 0.30, 0.04)), color.lightened(0.35),
+					Vector3(0.0, body_h - 0.30, -0.16))
+			&"head":
+				_part(_sphere_mesh(0.17), color, Vector3(0.0, body_h + 0.20, 0.0))
+			&"helmet":
+				_part(_sphere_mesh(0.20), color.darkened(0.1), Vector3(0.0, body_h + 0.25, 0.0))
+				_part(_box_mesh(Vector3(0.24, 0.07, 0.04)), Color(0.85, 0.2, 0.18),
+					Vector3(0.0, body_h + 0.22, -0.19))
+			&"weapon":
+				_part(_box_mesh(Vector3(0.08, 0.10, 0.60)), color,
+					Vector3(0.28, body_h - 0.35, -0.22))
+			&"status":
+				_status_part(Vector3(0.0, body_h - 0.2, -0.17), Vector3(0.1, 0.1, 0.04))
+
+
+## The machine silhouette. Every part a box, and that is the point: the faction
+## is specified as "built, not grown".
+func _build_machine() -> void:
 	var spec: Dictionary = PLACEHOLDER_MACHINE_SPEC.get(variant, PLACEHOLDER_MACHINE_DEFAULT)
-	var floor_y := CANVAS - 2
-	var width: int = spec["width"]
-	var height: int = spec["height"]
-	var hover: int = spec["hover"]
-
-	if prone:
-		# A wreck, not a body: wider than it is tall and flat on the deck, with no
-		# hover left in whatever used to be flying.
-		if layer == &"body":
-			_box(image, CANVAS / 2 - width / 2 - 4, floor_y - 8, width + 8, 8, color.darkened(0.35))
-		return
-
-	# Crouching is a machine lowering itself onto its mounts rather than a body
-	# folding, so it loses height and keeps its width.
-	if crouched:
-		height = maxi(10, height - 10)
-	var top := floor_y - hover - height
-	var cx := CANVAS / 2
-
-	match layer:
-		&"body":
-			_box(image, cx - width / 2, top, width, height, color)
-			# Plate that swings with facing — the fastest read of which way a box
-			# is pointing, and the machine equivalent of the organic front panel.
-			var shoulder: int = spec["shoulder"]
-			if shoulder > 0:
-				_box(image, cx - shoulder / 2 + int(side * (width / 2.0 - shoulder / 2.0)),
-					top + 2, shoulder, height - 4, color.darkened(0.3))
-			if lean > 0.0:
-				_box(image, cx - width / 2 + 3, top + 3, width - 6, 6, color.lightened(0.25))
-			if hover > 0:
-				# Thruster wash under a hovering chassis, so it does not read as a
-				# box someone left floating by mistake.
-				_box(image, cx - 3, floor_y - hover + 2, 6, 3, color.darkened(0.5))
-		&"head":
-			var head: int = spec["head"]
-			if head <= 0:
-				return
-			_box(image, cx - head / 2 + int(side * 2.0), top - head, head, head, color)
-			# Sensor band, only when the face is toward the camera.
-			if lean > 0.0:
-				_box(image, cx - head / 2 + 1 + int(side * 2.0), top - head + 2, head - 2, 2,
-					Color(0.9, 0.25, 0.2))
-		&"weapon":
-			# A barrel on the swinging side, longer and thinner than the soldier's
-			# rifle block so it reads as mounted hardware rather than carried.
-			var x := cx + int(side * (width / 2.0 + 1.0)) - 2
-			_box(image, x, top + 4, 4, 18, color)
-		&"status":
-			# White here and tinted by set_status_color, so one drawn frame serves
-			# every alert state. Two pips: one on the chest and one on the spine,
-			# because a robot's state has to be readable from behind as well.
-			_box(image, cx - 2 + int(side * 3.0), top + (4 if lean > 0.0 else 6), 4, 4, color)
-			if lean <= 0.0:
-				_box(image, cx - 1, top - 2, 3, 3, color)
+	var u := PLACEHOLDER_UNIT
+	var width: float = spec["width"] * u
+	var height: float = spec["height"] * u
+	var hover: float = spec["hover"] * u
+	var head: float = spec["head"] * u
+	var shoulder: float = spec["shoulder"] * u
+	var depth := width * 0.7
+	var top := hover + height
+	for layer in layers:
+		var color: Color = PLACEHOLDER_MACHINE_COLOR.get(layer,
+			PLACEHOLDER_COLOR.get(layer, Color(0.6, 0.6, 0.6)))
+		match layer:
+			&"body":
+				_part(_box_mesh(Vector3(width, height, depth)), color,
+					Vector3(0.0, hover + height / 2.0, 0.0))
+				if shoulder > 0.0:
+					for side in [-1.0, 1.0]:
+						_part(_box_mesh(Vector3(shoulder, height - 4 * u, depth * 1.1)),
+							color.darkened(0.3),
+							Vector3(side * (width + shoulder) / 2.0, hover + height / 2.0, 0.0))
+				_part(_box_mesh(Vector3(width - 6 * u, 6 * u, 0.04)), color.lightened(0.25),
+					Vector3(0.0, top - 6 * u, -depth / 2.0 - 0.02))
+				if hover > 0.0:
+					# Thruster under a hovering chassis, so it does not read as a
+					# box someone left floating by mistake.
+					_part(_box_mesh(Vector3(6 * u, 3 * u, 6 * u)), color.darkened(0.5),
+						Vector3(0.0, hover - 3 * u, 0.0))
+			&"head":
+				if head <= 0.0:
+					continue
+				_part(_box_mesh(Vector3(head, head, head)), color,
+					Vector3(0.0, top + head / 2.0, 0.0))
+				_part(_box_mesh(Vector3(head - 2 * u, 2 * u, 0.04)), Color(0.9, 0.25, 0.2),
+					Vector3(0.0, top + head * 0.6, -head / 2.0 - 0.02))
+			&"weapon":
+				_part(_box_mesh(Vector3(4 * u, 4 * u, 18 * u)), color,
+					Vector3(width / 2.0 + shoulder + 2 * u, top - 8 * u, -6 * u))
+			&"status":
+				# Front and back, because a robot's state has to be readable from
+				# behind as well.
+				_status_part(Vector3(0.0, top - 4 * u, -depth / 2.0 - 0.03), Vector3.ONE * 4 * u)
+				_status_part(Vector3(0.0, top - 4 * u, depth / 2.0 + 0.03), Vector3.ONE * 3 * u)
 
 
-func _box(image: Image, x: int, y: int, w: int, h: int, color: Color) -> void:
-	for py in range(maxi(y, 0), mini(y + h, CANVAS)):
-		for px in range(maxi(x, 0), mini(x + w, CANVAS)):
-			image.set_pixel(px, py, color)
+func _part(mesh: Mesh, color: Color, at: Vector3) -> MeshInstance3D:
+	var inst := MeshInstance3D.new()
+	inst.mesh = mesh
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color * faction_tint
+	mat.roughness = 0.85
+	_add_floor(mat)
+	inst.material_override = mat
+	inst.position = at
+	_pose_root.add_child(inst)
+	return inst
 
 
-func _disc(image: Image, cx: int, cy: int, r: int, color: Color) -> void:
-	for py in range(maxi(cy - r, 0), mini(cy + r + 1, CANVAS)):
-		for px in range(maxi(cx - r, 0), mini(cx + r + 1, CANVAS)):
-			if Vector2(px - cx, py - cy).length() <= float(r):
-				image.set_pixel(px, py, color)
+## A self-lit part: unshaded, so its colour reads the same in the dark as in
+## the light, and one material shared by every status part on the unit.
+func _status_part(at: Vector3, size: Vector3) -> void:
+	if _status_material == null:
+		_status_material = StandardMaterial3D.new()
+		_status_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_status_material.albedo_color = _status_color
+	var inst := MeshInstance3D.new()
+	inst.mesh = _box_mesh(size)
+	inst.material_override = _status_material
+	inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	inst.position = at
+	_pose_root.add_child(inst)
+
+
+static func _box_mesh(size: Vector3) -> BoxMesh:
+	var mesh := BoxMesh.new()
+	mesh.size = size
+	return mesh
+
+
+static func _sphere_mesh(radius: float) -> SphereMesh:
+	var mesh := SphereMesh.new()
+	mesh.radius = radius
+	mesh.height = radius * 2.0
+	mesh.radial_segments = 16
+	mesh.rings = 8
+	return mesh
+
+
+## Holds the placeholder in a posture for `pose`: flat on the deck when down,
+## lowered when crouched, upright otherwise.
+func _pose_placeholder(pose: StringName) -> void:
+	_pose_root.rotation = Vector3.ZERO
+	_pose_root.position = Vector3.ZERO
+	_pose_root.scale = Vector3.ONE
+	if pose in [DOWNED, DEAD]:
+		# Onto its back, lifted by half its depth so it lies ON the deck.
+		_pose_root.rotation.x = PI / 2.0
+		_pose_root.position.y = 0.16
+	elif pose in PLACEHOLDER_CROUCHED or _cover == COVER_LOW:
+		_pose_root.scale.y = 0.62

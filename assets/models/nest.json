@@ -1,0 +1,8 @@
+{
+  "variant": "nest",
+  "poses": [
+    "idle",
+    "run"
+  ],
+  "pose_yaw_degrees": {}
+}

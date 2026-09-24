@@ -1,0 +1,29 @@
+{
+  "variant": "merc",
+  "poses": [
+    "begin_shoot",
+    "begin_shoot_high",
+    "begin_shoot_low",
+    "dead",
+    "downed",
+    "end_shoot",
+    "end_shoot_high",
+    "end_shoot_low",
+    "fire_shoot",
+    "hit_react",
+    "hit_react_low",
+    "idle",
+    "idle_high",
+    "idle_low",
+    "interact",
+    "overwatch_hold",
+    "reload",
+    "reload_high",
+    "reload_low",
+    "run",
+    "throw_grenade"
+  ],
+  "pose_yaw_degrees": {
+    "run": 90.0
+  }
+}
