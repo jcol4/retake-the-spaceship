@@ -35,7 +35,13 @@ var _auto := false
 ## its OWN `--map=` guess in TestMap._ready() by this point (which runs before
 ## anything here), and that guess is only trustworthy for the host. Every
 ## other peer rebuilds once this arrives; see `TestMap.build_layout`.
-signal layout_chosen(path: String)
+signal layout_chosen(path: String, map_seed: Variant, spawn_seed: int)
+
+## Host-side: set once the host's own loadout screen is done. The mission
+## starts only once this AND every connected client's `_rpc_client_ready` are
+## in — see `_try_start_mission`.
+var _host_deployed := false
+var _mission_started := false
 
 
 func _ready() -> void:
@@ -58,27 +64,51 @@ func _ready() -> void:
 	if SteamLobby.is_networked():
 		print("[NET] proceeding to spawn: is_host=%s local_id=%d peers=%s" % [
 			SteamLobby.is_host(), multiplayer.get_unique_id(), multiplayer.get_peers()])
+		multiplayer.server_disconnected.connect(_on_host_left)
+		multiplayer.peer_disconnected.connect(_on_squadmate_left)
+		# Spawning rolls stats off the global RNG (ClassPresets.roll, the
+		# alien/merc presets, the veteran roll below), and every peer spawns
+		# its own copy of the board. Without a shared seed each peer rolls a
+		# different squad — different max HP, AP pools and initiative on the
+		# client than the host is actually simulating.
+		var spawn_seed: int
 		if SteamLobby.is_host():
 			var path: String = map.resolve_layout()
-			print("[NET] host sending layout '%s'" % path)
-			_rpc_use_layout.rpc(path)
+			var map_seed: Variant = map.generated_seed()
+			spawn_seed = randi()
+			print("[NET] host sending layout '%s' map_seed=%s spawn_seed=%d" % [path, map_seed, spawn_seed])
+			_rpc_use_layout.rpc(path, map_seed, spawn_seed)
 		else:
-			var path: String = await layout_chosen
-			print("[NET] client received layout '%s', rebuilding" % path)
-			map.build_layout(path)
+			var chosen: Array = await layout_chosen
+			var path: String = chosen[0]
+			var map_seed: Variant = chosen[1]
+			spawn_seed = chosen[2]
+			print("[NET] client received layout '%s' map_seed=%s, rebuilding" % [path, map_seed])
+			if map_seed != null:
+				map.build_generated(map_seed)
+			else:
+				map.build_layout(path)
+		seed(spawn_seed)
 	_spawn_and_start()
 
 
 @rpc("authority", "call_remote", "reliable")
-func _rpc_use_layout(path: String) -> void:
+func _rpc_use_layout(path: String, map_seed: Variant, spawn_seed: int) -> void:
 	print("[NET] client's _rpc_use_layout fired with '%s'" % path)
-	layout_chosen.emit(path)
+	layout_chosen.emit(path, map_seed, spawn_seed)
 
 
 ## Everything that used to be unconditional in `_ready` — spawning is
-## deterministic (fixed SQUAD, fixed map spawn points, no RNG) so every peer
-## builds an identical node tree independently rather than one peer spawning
-## and replicating nodes to the other. See the co-op plan's Sec 3.
+## deterministic (fixed SQUAD, fixed map spawn points, stat rolls off the
+## host's shared `spawn_seed`) so every peer builds an identical node tree
+## independently rather than one peer spawning and replicating nodes to the
+## other. See the co-op plan's Sec 3.
+##
+## Every unit is NAMED here, before add_child, and that is load-bearing: RPCs
+## and MultiplayerSynchronizers address a unit by node path. Left unnamed, the
+## second PlayerUnit collides with the first and Godot renames it
+## `@PlayerUnit@<n>` off a process-wide counter — which the client, having
+## built its map twice, has advanced further than the host has.
 func _spawn_and_start() -> void:
 	# Which peer owns which merc. Computed identically on every peer — sorted
 	# by peer id rather than "whoever's local" — so a block split lands on the
@@ -103,6 +133,7 @@ func _spawn_and_start() -> void:
 		var peer_slot := mini(spawn_index / mercs_per_peer, owning_peers.size() - 1)
 		unit.owner_peer_id = owning_peers[peer_slot]
 		print("[NET] spawning %s -> owner_peer_id=%d" % [entry[1], unit.owner_peer_id])
+		unit.name = "Player_%d" % spawn_index
 		unit.position = GridManager.grid_to_world(map.player_spawns[spawn_index])
 		add_child(unit)  # Unit._ready snaps to grid + registers occupancy
 		unit.action_logged.connect(_on_unit_log)
@@ -113,6 +144,7 @@ func _spawn_and_start() -> void:
 	for spawn in map.enemy_spawns:
 		var enemy: EnemyUnit = ENEMY_SCENE.instantiate()
 		enemy.stats = AlienPresets.ranged("Alien_%d" % enemy_index)
+		enemy.name = "Alien_%d" % enemy_index
 		enemy.position = GridManager.grid_to_world(spawn)
 		add_child(enemy)
 		enemy.action_logged.connect(_on_unit_log)
@@ -122,6 +154,7 @@ func _spawn_and_start() -> void:
 	for spawn in map.swarm_spawns:
 		var swarm: SwarmUnit = SWARM_SCENE.instantiate()
 		swarm.stats = AlienPresets.swarm("Swarm_%d" % swarm_index)
+		swarm.name = "Swarm_%d" % swarm_index
 		swarm.position = GridManager.grid_to_world(spawn)
 		add_child(swarm)
 		swarm.action_logged.connect(_on_unit_log)
@@ -131,6 +164,7 @@ func _spawn_and_start() -> void:
 	for spawn in map.brawler_spawns:
 		var brawler: BrawlerUnit = BRAWLER_SCENE.instantiate()
 		brawler.stats = AlienPresets.brawler("Brawler_%d" % brawler_index)
+		brawler.name = "Brawler_%d" % brawler_index
 		brawler.position = GridManager.grid_to_world(spawn)
 		add_child(brawler)
 		brawler.action_logged.connect(_on_unit_log)
@@ -140,6 +174,7 @@ func _spawn_and_start() -> void:
 	for spawn in map.hunter_spawns:
 		var hunter: AgileHunterUnit = HUNTER_SCENE.instantiate()
 		hunter.stats = AlienPresets.hunter("Hunter_%d" % hunter_index)
+		hunter.name = "Hunter_%d" % hunter_index
 		hunter.position = GridManager.grid_to_world(spawn)
 		add_child(hunter)
 		hunter.action_logged.connect(_on_unit_log)
@@ -157,6 +192,7 @@ func _spawn_and_start() -> void:
 	for spawn in map.worm_spawns:
 		var worm: WormUnit = WORM_SCENE.instantiate()
 		worm.stats = AlienPresets.worm("Worm_%d" % worm_index)
+		worm.name = "Worm_%d" % worm_index
 		worm.position = GridManager.grid_to_world(spawn)
 		add_child(worm)
 		worm.action_logged.connect(_on_unit_log)
@@ -173,6 +209,7 @@ func _spawn_and_start() -> void:
 	for spawn in map.nest_spawns:
 		var nest: NestUnit = NEST_SCENE.instantiate()
 		nest.stats = AlienPresets.nest("Nest_%d" % nest_index)
+		nest.name = "Nest_%d" % nest_index
 		nest.position = GridManager.grid_to_world(spawn)
 		add_child(nest)
 		nest.action_logged.connect(_on_unit_log)
@@ -202,6 +239,7 @@ func _spawn_and_start() -> void:
 		# without the map needing a second glyph or the spawner a second list —
 		# and it means a level author draws squads by drawing walls.
 		merc.squad_id = "mercs_room_%d" % room
+		merc.name = "Merc_%d" % merc_index
 		merc.position = GridManager.grid_to_world(spawn)
 		add_child(merc)
 		merc.action_logged.connect(_on_unit_log)
@@ -228,7 +266,88 @@ func _spawn_and_start() -> void:
 	var loadout: CanvasLayer = LoadoutMenu.new()
 	add_child(loadout)
 	loadout.setup(player_units)
-	loadout.deployed.connect(func() -> void: TurnManager.start_mission.call_deferred())
+	loadout.deployed.connect(_on_local_deployed)
+
+
+## The ready handshake, the equivalent of a join handshake for a game that
+## doesn't spawn over the network: the host may not start the turn loop — whose
+## first RPCs name units by path — until every client has built those units.
+## A client's Deploy is that signal: it only reaches its loadout screen after
+## spawning, and deploying last means its weapon picks are already in.
+func _on_local_deployed() -> void:
+	if not SteamLobby.is_networked():
+		TurnManager.start_mission.call_deferred()
+	elif SteamLobby.is_host():
+		_host_deployed = true
+		_try_start_mission()
+	else:
+		hud.append_log("Waiting for the host to deploy...")
+		_rpc_client_ready.rpc_id(1)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_client_ready() -> void:
+	if not multiplayer.is_server():
+		return
+	var peer_id := multiplayer.get_remote_sender_id()
+	print("[NET] peer %d reports ready" % peer_id)
+	if peer_id in SteamLobby.ready_peers:
+		return
+	SteamLobby.ready_peers.append(peer_id)
+	for node in get_tree().get_nodes_in_group("units"):
+		var unit := node as Unit
+		if unit:
+			unit.show_to_peer(peer_id)
+	_try_start_mission()
+
+
+func _try_start_mission() -> void:
+	if _mission_started or not _host_deployed:
+		return
+	for peer_id in multiplayer.get_peers():
+		if peer_id not in SteamLobby.ready_peers:
+			hud.append_log("Waiting for your squadmate to deploy...")
+			return
+	_mission_started = true
+	TurnManager.start_mission.call_deferred()
+
+
+## The host is peer 1 and runs the whole simulation, so there is nothing to
+## migrate to — same as any listen-server game, the mission ends with it.
+func _on_host_left() -> void:
+	TurnManager.abandon()
+	var dialog := AcceptDialog.new()
+	dialog.title = "Disconnected"
+	dialog.dialog_text = "The host left the game, so this mission is over."
+	dialog.ok_button_text = "Back to menu"
+	add_child(dialog)
+	dialog.confirmed.connect(_return_to_menu)
+	dialog.canceled.connect(_return_to_menu)
+	dialog.popup_centered()
+
+
+func _return_to_menu() -> void:
+	SteamLobby.leave()
+	get_tree().reload_current_scene()
+
+
+## Host-side: a squadmate dropping doesn't end the mission — their mercs are
+## handed to the host, who can keep playing them. Also unblocks a host still
+## waiting on that squadmate's Deploy.
+func _on_squadmate_left(peer_id: int) -> void:
+	if not multiplayer.is_server():
+		return
+	for node in get_tree().get_nodes_in_group("player_units"):
+		var unit := node as Unit
+		if unit and unit.owner_peer_id == peer_id:
+			unit.owner_peer_id = multiplayer.get_unique_id()
+			# Mid-activation for one of theirs: re-announce it, so the HUD
+			# (which decided on activation that it wasn't ours to drive) picks
+			# it up instead of the turn stalling on nobody.
+			if unit == TurnManager.active_unit:
+				TurnManager.unit_activated.emit(unit)
+	hud.append_log("Your squadmate disconnected — their mercs are yours now.")
+	_try_start_mission()
 
 
 func _spawn_security_robots() -> void:
@@ -246,6 +365,7 @@ func _spawn_security_robots() -> void:
 			var robot: CerberusUnit = CerberusPresets.scene_for(kind).instantiate()
 			robot.stats = CerberusPresets.make_stats(kind, index if spawns.size() > 1 else 1)
 			robot.security_zone = map.zone_at(spawn)
+			robot.name = "Robot_%d_%d" % [kind, index]
 			robot.position = GridManager.grid_to_world(spawn)
 			add_child(robot)
 			robot.action_logged.connect(_on_unit_log)

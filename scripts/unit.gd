@@ -184,6 +184,7 @@ var _pending_target: Unit = null
 var _burst_round: int = 0
 var _burst_strays: Array[int] = []
 var _name_label: Label3D = null
+var _sync: MultiplayerSynchronizer = null  # co-op only; see _setup_replication
 
 
 ## Whether this unit's actions should resolve with no time on the clock.
@@ -252,6 +253,13 @@ func _ready() -> void:
 ## `_on_moved_broadcast_grid_pos`, which pushes it explicitly (with an
 ## occupancy update) only once a move actually settles, rather than every
 ## in-transit frame.
+##
+## Hidden from every peer to begin with, on the host: this node exists here the
+## moment it spawns, but a client builds its own copy only after the host's
+## layout arrives, and state streamed at a path the client can't resolve yet is
+## simply lost. `show_to_peer` opens it up once that client reports ready (see
+## main.gd's `_rpc_client_ready`); a unit spawned AFTER that (a worm shed from a
+## pile) opens straight up for whoever is already in `SteamLobby.ready_peers`.
 func _setup_replication() -> void:
 	var sync := MultiplayerSynchronizer.new()
 	var config := SceneReplicationConfig.new()
@@ -261,7 +269,25 @@ func _setup_replication() -> void:
 		config.add_property(path)
 		config.property_set_replication_mode(path, SceneReplicationConfig.REPLICATION_MODE_ALWAYS)
 	sync.replication_config = config
+	if multiplayer.is_server():
+		sync.public_visibility = false
+		for peer_id in SteamLobby.ready_peers:
+			sync.set_visibility_for(peer_id, true)
+	_sync = sync
+	sync.synchronized.connect(_on_replicated)
 	add_child(sync)
+
+
+## Client-side: runs after each batch of synchronized properties lands. For
+## subclasses whose visuals are derived from a replicated value rather than set
+## alongside it (WormUnit's pile size from `current_hp`).
+func _on_replicated() -> void:
+	pass
+
+
+func show_to_peer(peer_id: int) -> void:
+	if _sync:
+		_sync.set_visibility_for(peer_id, true)
 
 
 ## `grid_pos` drives GridManager occupancy (pathfinding/LOS for every OTHER
@@ -1120,10 +1146,20 @@ func _on_muzzle() -> void:
 	var lands := _pending_shot != null and _pending_shot.hit and round_index not in _burst_strays
 	var crit := _pending_shot != null and _pending_shot.crit
 	vfx.shot_impact(from, _pending_target.global_position, lands, crit)
-	# Same frame as the drawn flash, same origin. Sound is gated on the TARGET
-	# exactly as the impact above is — a covering burst that rolls no shot still
-	# makes the noise a rifle makes.
-	Sfx.play("rifle_fire", from)
+	# ONCE PER BURST, not once per round — unlike `shot_impact` above, which is
+	# per-round because each round leaves its own separate mark.
+	#
+	# The sample is a whole burst (1.33 s of one) and rounds are BURST_CADENCE
+	# apart (0.11 s), so playing it per round stacked 4-6 near-identical copies
+	# of a full-length burst on top of each other every shot. That is the wrong
+	# sound, and the incoherent summing added roughly +7 dB on top of it — enough
+	# to swallow a -6 dB mix trim whole and leave the shot as loud as it started.
+	#
+	# Gated on the TARGET exactly as the impact above is: a covering burst that
+	# rolls no shot still makes the noise a rifle makes. If per-round gunfire is
+	# ever wanted, the SAMPLE has to change with it — a single crack, not a burst.
+	if round_index == 0:
+		Sfx.play("rifle_fire", from)
 
 
 ## Arms the muzzle hook for a burst that resolves NO shot — suppressing fire.

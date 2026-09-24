@@ -32,12 +32,12 @@ func current_intensity() -> float:
 	return _current_intensity
 
 
-func reroll_flicker() -> void:
+func reroll_flicker(rng: RandomNumberGenerator) -> void:
 	# Sec 5.3: flickering lights fluctuate turn-to-turn. Called by
 	# LightingManager.reroll_flicker() at turn start; no-op otherwise.
 	if not flickers:
 		return
-	_current_intensity = randf_range(flicker_min, flicker_max)
+	_current_intensity = rng.randf_range(flicker_min, flicker_max)
 	if _visual:
 		_visual.light_energy = _energy_for(_current_intensity)
 

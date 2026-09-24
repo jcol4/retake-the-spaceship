@@ -20,6 +20,13 @@ const MAX_MEMBERS := 2  # co-op prototype: exactly one squadmate
 var steam_available: bool = false
 var current_lobby_id: int = 0
 
+## Host-side only: clients that have finished building their own copy of the
+## board and deployed (see main.gd's `_rpc_client_ready`). A unit's
+## MultiplayerSynchronizer starts hidden and is only made visible to a peer in
+## this list — streaming state at a node the client hasn't spawned yet just
+## fails to resolve its path.
+var ready_peers: Array[int] = []
+
 
 func _ready() -> void:
 	# Runs before Steam is ever touched, so a dev machine without the Steam
@@ -37,6 +44,7 @@ func _ready() -> void:
 		player_joined.emit(id))
 	multiplayer.peer_disconnected.connect(func(id: int) -> void:
 		print("[NET] peer_disconnected: %d" % id)
+		ready_peers.erase(id)
 		player_left.emit(id))
 	multiplayer.connected_to_server.connect(func() -> void:
 		print("[NET] connected_to_server (local_id=%d)" % multiplayer.get_unique_id()))
@@ -79,6 +87,22 @@ func join_game(lobby_id: int) -> void:
 		join_failed.emit("Steam is not available")
 		return
 	Steam.joinLobby(lobby_id)
+
+
+## Drops back to plain single-player: closes the peer, leaves the Steam lobby,
+## forgets who was ready. Called when the host goes away (see main.gd) — there
+## is no host migration, so a client whose host left has nothing to rejoin.
+func leave() -> void:
+	if multiplayer.multiplayer_peer:
+		multiplayer.multiplayer_peer.close()
+	# Offline rather than null: that is what a fresh boot starts with, so every
+	# `has_multiplayer_peer()`/`is_server()` check reads exactly as it did
+	# before a lobby was ever joined.
+	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
+	if steam_available and current_lobby_id != 0:
+		Steam.leaveLobby(current_lobby_id)
+	current_lobby_id = 0
+	ready_peers.clear()
 
 
 func _on_lobby_created(connect_result: int, lobby_id: int) -> void:

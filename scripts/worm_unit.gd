@@ -95,7 +95,19 @@ const CANVAS_HEIGHT := 2.56
 ## Index 0 duplicates the scene's value rather than reading it, because
 ## `set_variant` back to `&"worm"` has to restore it and the scene is not
 ## consulted again after `_ready`.
-const TIER_FOOT_ANCHOR := [0.90781518, 0.93543150, 0.98307192, 1.0, 1.0]
+##
+## Every pile tier rose when the sheets were rebuilt with their worms laid
+## parallel rather than at random yaws (0.93543150 -> 0.91547340, 0.98307192 ->
+## 0.93716316, 1.0 -> 0.96973822). A disc of worms crossing at every angle is
+## nearly all depth, and a vertical billboard turns depth into height; bodies
+## lying parallel and overlapping occupy a shallower footprint, so the art stops
+## further short of the canvas floor. The Tide had been pinned at 1.0 -- its old
+## sheet reached row 0 and was a frame away from clipping -- and now clears the
+## bottom by 10 px.
+##
+## Re-measure all of these whenever build_worm_piles.py changes a pile's shape,
+## or the tier sits in the deck.
+const TIER_FOOT_ANCHOR := [0.90781518, 0.91547340, 0.93716316, 0.96973822, 0.96973822]
 
 ## Smallest fraction of a tier's sculpt shown at that tier's floor. A Knot at 6
 ## worms draws at 82% of the 9-worm sculpt and grows to full across the tier, so
@@ -125,6 +137,7 @@ var _grew_on_turn: int = -1
 ## Set by `dissolve`. The node is freed at the end of the frame, and anything
 ## still holding a reference to it must stop rather than keep driving it.
 var _dissolved: bool = false
+var _shed_count: int = 0  # names shed worms uniquely; see _spawn_worm_at
 
 ## Where this worm was told to gather, by its own sighting or a neighbour's call.
 ## Only consulted when there is no larger pile to walk to.
@@ -135,6 +148,7 @@ var _has_rally_hint: bool = false
 ## half (a variant swap re-loads and re-scales every layer) on the common case
 ## where HP moved but the tier did not.
 var _shown_tier: int = -1
+var _replicated_hp: int = -1  # client-only; see _on_replicated
 
 
 func _ready() -> void:
@@ -258,6 +272,14 @@ func _refresh_label() -> void:
 	if is_mass():
 		_name_label.text = "%s x%d%s" % [
 			tier_name(), worm_count(), STATE_GLYPH[alert_state]]
+
+
+## A client never runs the merges, sheds or hits that call `_apply_count` —
+## it only sees `current_hp` change underneath it via the synchronizer.
+func _on_replicated() -> void:
+	if current_hp != _replicated_hp:
+		_replicated_hp = current_hp
+		_apply_count()
 
 
 func take_damage(amount: int) -> int:
@@ -569,6 +591,10 @@ func dissolve() -> void:
 	if _dissolved:
 		return
 	_dissolved = true
+	# Only the host runs the pile logic that calls this, so a client's copy
+	# would otherwise stay on the board — visible, and holding its tile.
+	if multiplayer.has_multiplayer_peer() and multiplayer.is_server():
+		_rpc_dissolve.rpc()
 	is_downed = true
 	ap = 0
 	GridManager.set_occupant(grid_pos, null)
@@ -576,6 +602,11 @@ func dissolve() -> void:
 		_name_label.visible = false
 	visible = false
 	queue_free()
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_dissolve() -> void:
+	dissolve()
 
 
 ## UNAWARE upkeep: a settled pile sheds a worm a turn until it is singles again.
@@ -613,11 +644,31 @@ func _free_neighbour() -> Vector3i:
 	return NO_TILE
 
 
+## Host-only in co-op (it runs from `_idle_turn`, i.e. the AI), so the new worm
+## is announced to clients rather than left for them to never see. The node
+## name is picked HERE and sent along, since every unit RPC and synchronizer is
+## addressed by path and has to land on the same node on both peers. Sent
+## BEFORE the host's own add_child, so the client has the node by the time the
+## synchronizer's first update for it arrives.
 func _spawn_worm_at(pos: Vector3i, hp: int) -> void:
+	_shed_count += 1
+	var node_name := "%s_shed_%d" % [name, _shed_count]
+	if multiplayer.has_multiplayer_peer() and multiplayer.is_server():
+		_rpc_spawn_worm.rpc(node_name, pos, hp)
+	_add_worm(node_name, pos, hp)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_spawn_worm(node_name: String, pos: Vector3i, hp: int) -> void:
+	_add_worm(node_name, pos, hp)
+
+
+func _add_worm(node_name: String, pos: Vector3i, hp: int) -> void:
 	var scene := load(WORM_SCENE_PATH) as PackedScene
 	if scene == null:
 		return
 	var worm: WormUnit = scene.instantiate()
+	worm.name = node_name
 	worm.stats = AlienPresets.worm("%s'" % stats.display_name)
 	worm.position = GridManager.grid_to_world(pos)
 	# The combat log is wired per unit by whoever spawned the first worms

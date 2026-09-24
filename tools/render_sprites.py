@@ -632,6 +632,74 @@ FLASH_CANVAS_SCALE = 2
 FLASH_MATERIAL = "muzzle_flash"
 FLASH_OBJECT = "muzzle_flash"
 
+## The flash pass is TONEMAPPED, and it is the only pass that is.
+##
+## `configure_render` renders everything else through `Standard` so the palette
+## pass downstream gets the values it was rendered with. That is right for a
+## body lit at sane levels and catastrophic for this object: the flash emits at
+## 200 (`Muzzle Face`) and 59 (`Muzzle Side`), so `Standard` clamps every pixel
+## of it to 1.0 and hands the game a flat blob. Measured on the old output --
+## R and G were saturated at 1.0 across the ENTIRE flash, every facing, and the
+## only surviving channel was blue. The white-hot core, the yellow body and the
+## orange tip you see in the .blend are all above 1.0 and all became the same
+## colour.
+##
+## `Filmic` has a rolloff instead of a cliff, so the ramp survives into 8 bits.
+## It is not enough on its own -- Filmic's white point is ~16.3 linear and the
+## face emits at 200, which still pins a wide area to white -- so the exposure
+## below drops the whole pass into the range the curve can actually draw.
+FLASH_VIEW_TRANSFORM = "Filmic"
+
+## Stops of exposure taken off the flash pass before the curve, so a 200-strength
+## emitter lands under Filmic's white point instead of on top of it.
+##
+## -4 is a divide by 16: the face's 200 becomes 12.5 and the side's 59 becomes
+## 3.7, which puts the core just under the white point and the whole falloff
+## inside the curve. TUNED BY MEASUREMENT, not by eye -- `--flash` prints the
+## channel spread of what it wrote, and the number to watch is how much of the
+## flash still has R and G both pinned at 1.0. A pass where that is most of the
+## flash is a pass that has thrown the gradient away again.
+##
+## This is an EXPORT setting, not an art change: the .blend keeps its physical
+## emission values, so the flash still lights the merc at full strength in the
+## body pass (see SPILL_EMISSION_SCALE), and re-authoring the flash does not
+## have to account for a fudge factor baked into the materials.
+FLASH_EXPOSURE = -4.0
+
+## How big the flash is DRAWN, against the size it is authored at in the .blend.
+##
+## The flash pass only. The body pass renders the same object at its authored
+## size as an invisible emitter (see SPILL_EMISSION_SCALE), so shrinking what is
+## drawn does not dim what the merc is lit by -- the light on the character is
+## unchanged by this number, which is the entire reason it is a render setting
+## and not a scale keyed into the .blend.
+##
+## Safe to scale about the object's own origin because that origin IS the muzzle
+## point: `Muzzle Face`, the star, starts at 0.000 and runs 0.187 m forward from
+## it, and `Muzzle Side`, the lance, runs out to 1.383 m. Everything therefore
+## shrinks TOWARD the barrel tip and stays registered against it at any scale --
+## which is not true of a mesh whose origin sits in the middle of its own glow,
+## so re-check this if the flash is ever re-authored.
+FLASH_SCALE = 0.5
+
+## How much brighter than physical the flash burns while it is lighting the
+## CHARACTER, in the body pass only. A drama dial, and an honest one: the flash
+## pass never sees it, so turning it up cannot quietly re-grade the flash itself.
+##
+## Above 1 because the sprite rig is bright -- three area lights at 220, 120 and
+## 60 (`setup`) -- and a physically correct 0.237 m emitter competes with all of
+## them at once. At 1.0 the spill is there and reads as a faint warm edge; the
+## point of the exercise was a DRAMATIC one, so it is pushed.
+##
+## What this cannot fix is that the spill is baked into the body layer, and the
+## body layer is dimmed by the tile's light_value down to MIN_TINT
+## (`unit_visual.gd _apply_tile_light`). A merc firing in an unlit corridor
+## therefore shows this at about a third of what is rendered here -- weakest in
+## the dark, which is where a muzzle flash is most dramatic. A self-lit
+## `flash_lit` overlay layer is what would fix that properly; baking was chosen
+## deliberately for fewer moving parts, and this is the price.
+SPILL_EMISSION_SCALE = 3.0
+
 
 def _by_material_or_name(material, name):
     for obj in bpy.data.objects:
@@ -966,6 +1034,65 @@ def _character_channelbags(action, character):
             if cb.slot_handle == slot.handle]
 
 
+# Written on each worm-pile instance by `tools/build_worm_piles.py`, which also
+# names that instance's phase-shifted action copies after it. Keep the property
+# name and the `<action>.pileNN` spelling in step with that file.
+PILE_INDEX_PROP = "pile_index"
+
+
+def sync_pile_instances(character, action):
+    """Hands each pile instance its own phase-shifted copy of `action`.
+
+    A worm mass is not one rig. It is N copies of the worm parented to an Empty
+    (`build_worm_piles.py`), and the Empty is the only thing this renderer knows
+    about: it is what `--character` names, what turns through the eight buckets,
+    and what the pose's action gets assigned to. That assignment animates
+    nothing -- the action keys bones the Empty does not have -- so the motion in
+    a pile sheet is whatever the INSTANCES are playing, which the renderer never
+    touched.
+
+    Which is how the pile's `walk` sheet came to be a pile of worms idling. The
+    builder baked one action into the instances and they played it for every
+    pose, and nothing in either file noticed: the pose loop ran, the frames were
+    sampled off the Empty's action, the right number of correctly named PNGs
+    came out, and only watching a mass cross the floor gives it away.
+
+    So the instances are pointed at their own copy here, per pose. A rig with no
+    `pile_index`, or no copy under this action's name, is left alone -- every
+    other character in this pipeline is a single armature and never enters this
+    loop at all.
+    """
+    if character.type == "ARMATURE":
+        return 0
+    synced = 0
+    for child in character.children_recursive:
+        index = child.get(PILE_INDEX_PROP)
+        if index is None or child.animation_data is None:
+            continue
+        copy = bpy.data.actions.get("%s.pile%02d" % (action.name, int(index)))
+        if copy is None:
+            sys.exit("[render_sprites] %s carries %s=%d but this .blend has no "
+                     "%r -- rebuild the pile with tools/build_worm_piles.py, or "
+                     "it will render the pose it happens to be holding."
+                     % (child.name, PILE_INDEX_PROP, int(index),
+                        "%s.pile%02d" % (action.name, int(index))))
+        # The slot as well as the action: a slotted action assigned without one
+        # plays the rest pose on every frame, in silence.
+        previous = getattr(child.animation_data, "action_slot", None)
+        wanted = previous.name_display if previous is not None else None
+        child.animation_data.action = copy
+        slots = list(getattr(copy, "slots", []))
+        slot = next((s for s in slots if s.name_display == wanted), None)
+        if slot is None and len(slots) == 1:
+            slot = slots[0]
+        if slot is None:
+            sys.exit("[render_sprites] %r has no slot matching %r, so %s would "
+                     "render its rest pose." % (copy.name, wanted, child.name))
+        child.animation_data.action_slot = slot
+        synced += 1
+    return synced
+
+
 def mute_object_transform_curves(action, character):
     """Silences any OBJECT-level transform channels on `action`, and says so.
 
@@ -1170,6 +1297,13 @@ def iter_pose_frames(variant, character, todo, directions):
     for pose in todo:
         action = actions[source_action(pose, variant)]
         character.animation_data.action = action
+        # A worm mass animates through its instances, not through the object the
+        # line above just keyed; single-armature characters no-op here.
+        synced = sync_pile_instances(character, action)
+        if synced:
+            print("[render_sprites] %s: %d instances put on their own "
+                  "phase-shifted copy of %r"
+                  % (pose, synced, action.name))
         # Per POSE, not once per run: an action authored at a different facing
         # needs its own zero (POSE_BUCKET_ZERO).
         original_rotation = math.radians(bucket_zero(pose, variant))
@@ -1230,7 +1364,7 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
     hide_marker(find_marker())
     # Same reason, one object further: the flash is art, but it is art for a
     # DIFFERENT layer, and the body canvas is too small to hold it.
-    hide_flash(find_flash())
+    spill = hide_flash(find_flash())
     unlink_missing_images()
 
     # NOT read from the character -- see BUCKET_ZERO_DEGREES for the bug that
@@ -1263,6 +1397,11 @@ def render_variant(variant, out_dir, character, only_poses=None, directions=None
             lowest_by_facing.get(key, 1.0),
             lowest_point_on_screen(scene, scene.camera, meshes))
 
+        # AFTER the anchor measurement, which walks `meshes` -- a list captured
+        # while the flash was still hide_render, so it is unaffected either way.
+        # The emitter is invisible to the camera, so it cannot be the lowest
+        # point on screen even on the frame it is lit for.
+        set_spill(spill, pose == FLASH_POSE and frame_index == FLASH_FRAME)
         bpy.ops.render.render(write_still=True)
         written += 1
 
@@ -1412,7 +1551,7 @@ def _flash_subtree(flash):
 
 
 def hide_flash(flash):
-    """Keeps the muzzle flash out of the BODY render.
+    """Keeps the muzzle flash's SHAPE out of the body render, but not its LIGHT.
 
     It lives in the same .blend and hangs off the weapon bone, so it is in shot
     for `fire_shoot` unless something says otherwise. Baked into the body layer
@@ -1420,18 +1559,77 @@ def hide_flash(flash):
     the entire thing the separate layer exists to avoid -- and it would then be
     drawn a second time the moment the overlay layer was switched on.
 
+    So the flash is taken off the CAMERA ray and left on every other one. Cycles
+    then renders it as an invisible emitter: nothing of the flash itself reaches
+    the film, and the merc is still lit by it. That is the spill -- the warm edge
+    down the helmet, shoulder and forearm that the .blend has always had and the
+    game never did, because this used to be a flat `hide_render`.
+
+    The toggle is per frame, not per pass: `spill_frames` below turns the emitter
+    on for the ONE frame the flash is drawn on and off everywhere else, so no
+    other pose picks up light from a gun that is not firing.
+
     Same doctrine as `hide_marker`: what does and does not reach the film is
     decided HERE, not left to whatever the .blend was last saved with.
+
+    Returns the subtree, for `set_spill` to drive.
     """
     if flash is None:
         print("[render_sprites] no muzzle flash object found (%r material, else "
               "%r) -- fine if this character has none"
               % (FLASH_MATERIAL, FLASH_OBJECT))
-        return
-    for obj in _flash_subtree(flash):
+        return set()
+    subtree = _flash_subtree(flash)
+    for obj in subtree:
+        # Off the film, on the light. `hide_render` would take it off both, and
+        # `renderable_meshes()` reads `hide_render` to find the lowest point on
+        # screen -- so this ALSO has to stay True until the anchor is measured,
+        # which `set_spill` is careful to preserve by starting the pass dark.
+        obj.visible_camera = False
         obj.hide_render = True
-    print("[render_sprites] %r is the muzzle flash -- hidden from the body "
-          "render; --flash draws it on its own layer" % flash.name)
+    scale_flash_emission(subtree, SPILL_EMISSION_SCALE)
+    print("[render_sprites] %r is the muzzle flash -- off the camera ray for "
+          "the body render, kept as an emitter so it spills onto the character "
+          "on %s frame %d; --flash draws its shape on its own layer"
+          % (flash.name, FLASH_POSE, FLASH_FRAME))
+    return subtree
+
+
+def set_spill(subtree, on):
+    """Turns the invisible flash emitter on or off for the frame about to render."""
+    for obj in subtree:
+        obj.hide_render = not on
+
+
+def scale_flash_emission(subtree, scale):
+    """Multiplies the flash materials' Emission strength, for the spill only.
+
+    The .blend's 200 and 59 are the values the FLASH pass is tonemapped against
+    (FLASH_EXPOSURE), so they must not be edited in the file to make the spill
+    brighter -- that would silently re-grade the flash itself. This scales them
+    in memory, in the body pass only, and the body pass never writes the .blend.
+
+    Applied to every Emission node in every material on the subtree rather than
+    to a named one, because the flash is two materials today (`Muzzle Face` at
+    200, `Muzzle Side` at 59) and the ratio between them is the art, not
+    something this should be picking a favourite out of.
+    """
+    if scale == 1.0:
+        return
+    seen = set()
+    touched = 0
+    for obj in subtree:
+        for slot in getattr(obj, "material_slots", []):
+            material = slot.material
+            if material is None or material.name in seen or not material.node_tree:
+                continue
+            seen.add(material.name)
+            for node in material.node_tree.nodes:
+                if node.type == "EMISSION" and "Strength" in node.inputs:
+                    node.inputs["Strength"].default_value *= scale
+                    touched += 1
+    print("[render_sprites] spill: %d emission node(s) across %d material(s) "
+          "scaled x%g for the body pass only" % (touched, len(seen), scale))
 
 
 def hide_all_but_flash(flash):
@@ -1538,6 +1736,9 @@ def render_flash(variant, out_dir, character, flash, directions=None):
     """
     scene = bpy.context.scene
     configure_render(scene, FLASH_CANVAS_SCALE)
+    # AFTER configure_render, which sets the Standard transform every other pass
+    # wants. This pass is the exception -- see FLASH_VIEW_TRANSFORM.
+    apply_flash_tonemap(scene)
     build_camera(scene, FLASH_CANVAS_SCALE)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -1554,11 +1755,13 @@ def render_flash(variant, out_dir, character, flash, directions=None):
     # the failure this catches produces a complete, correct-looking set of files.
     check_flash_turns(character, flash, variant)
     hide_all_but_flash(flash)
+    scale_flash(flash, FLASH_SCALE)
     unlink_missing_images()
 
     size = int(RESOLUTION * FLASH_CANVAS_SCALE)
     written = 0
     blanks = 0
+    last_written = None
     # `iter_pose_frames` rather than a loop of its own, for the reason given in
     # its docstring: frame N of this layer has to be the same instant as frame N
     # of the body, and one piece of code deciding what the frames ARE is the only
@@ -1574,10 +1777,87 @@ def render_flash(variant, out_dir, character, flash, directions=None):
         scene.render.filepath = path
         bpy.ops.render.render(write_still=True)
         written += 1
+        last_written = path
 
     print("[render_sprites] wrote %d flash frames and %d blank frames to %s"
           % (written, blanks, out_dir))
+    if written:
+        report_flash_clipping(last_written)
     report_flash_layer(variant)
+
+
+def scale_flash(flash, scale):
+    """Shrinks or grows the DRAWN flash about the muzzle. See FLASH_SCALE.
+
+    The root only. Children ride the parent's scale, and because the origin is
+    the muzzle they are pulled toward it as they shrink, which is what keeps a
+    multi-part flash together instead of leaving its sparks hanging where a
+    full-size flash used to reach.
+
+    AFTER `check_flash_turns`, which samples the origin across the eight facings
+    -- scaling cannot move an origin, so the check means the same thing either
+    way, but running it on the unscaled object keeps its failure message about
+    the one thing it tests.
+
+    `delta_scale`, NOT `scale`, and this is the whole subtlety of the function.
+    The flash object carries the `fire_shoot` action itself -- it is keyed, which
+    is how it pops in on the shot -- so `iter_pose_frames` calling `frame_set`
+    re-evaluates that action and writes `scale` back over anything set here. The
+    first attempt at this did exactly that and rendered eight images at full
+    size while reporting that it had shrunk them. A delta multiplies on top of
+    the animated basis and no action ever writes it, so it survives the frame
+    change that the plain channel does not.
+    """
+    if flash is None or scale == 1.0:
+        return
+    flash.delta_scale = tuple(c * scale for c in flash.delta_scale)
+    print("[render_sprites] flash drawn at %g%% of authored size (delta_scale "
+          "%.4f, applied over whatever the action keys). The spill in the body "
+          "pass is NOT affected."
+          % (scale * 100.0, flash.delta_scale[0]))
+
+
+def apply_flash_tonemap(scene):
+    """Puts the flash pass on a curve instead of a cliff. See FLASH_VIEW_TRANSFORM."""
+    scene.view_settings.view_transform = FLASH_VIEW_TRANSFORM
+    scene.view_settings.exposure = FLASH_EXPOSURE
+    print("[render_sprites] flash pass: %s at %+g stops (every other pass "
+          "renders Standard at 0)" % (FLASH_VIEW_TRANSFORM, FLASH_EXPOSURE))
+
+
+def report_flash_clipping(path):
+    """Measures how much gradient actually reached the PNG.
+
+    The failure this exists to catch is silent and looks exactly like success:
+    a full set of correctly named, correctly registered files in which the
+    flash is one flat colour. `pinned` is the number to watch -- pixels whose
+    red and green are BOTH saturated carry no hue and no shape, so a pass that
+    pins most of its flash has thrown away the thing FLASH_EXPOSURE is set to
+    preserve. Under about a fifth is a flash with a hot core; over about a half
+    is a blob with a bright edge.
+    """
+    try:
+        import numpy as np
+    except ImportError:
+        return
+    image = bpy.data.images.load(path)
+    try:
+        width, height = image.size
+        pixels = np.array(image.pixels[:]).reshape(height, width, 4)
+        rgb, alpha = pixels[..., :3], pixels[..., 3]
+        drawn = alpha > 0.004
+        if not drawn.any():
+            print("[render_sprites] flash is EMPTY -- nothing reached the film")
+            return
+        lit = rgb[drawn]
+        pinned = ((lit[:, 0] >= 0.999) & (lit[:, 1] >= 0.999)).sum()
+        print("[render_sprites] flash spread (%s): %d px drawn, %d pinned "
+              "(%.0f%%), rgb mean %s, blue range %.2f-%.2f"
+              % (os.path.basename(path), drawn.sum(), pinned,
+                 100.0 * pinned / drawn.sum(), np.round(lit.mean(axis=0), 3),
+                 lit[:, 2].min(), lit[:, 2].max()))
+    finally:
+        bpy.data.images.remove(image)
 
 
 def report_flash_layer(variant):
@@ -1675,7 +1955,7 @@ def report_framing():
 def main():
     # Declared up front because the --fps help text reads it below, and Python
     # rejects a `global` that follows any use of the name in the same scope.
-    global SAMPLE_FPS
+    global SAMPLE_FPS, FLASH_EXPOSURE, FLASH_SCALE
 
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     parser = argparse.ArgumentParser(prog="render_sprites")
@@ -1711,7 +1991,24 @@ def main():
     parser.add_argument("--flash-object",
                         help="the flash mesh; defaults to the object using the "
                              "%r material, else %r" % (FLASH_MATERIAL, FLASH_OBJECT))
+    parser.add_argument("--flash-exposure", type=float,
+                        help="stops taken off the flash pass before the %s "
+                             "curve, default %g. Lower keeps more gradient and "
+                             "a smaller hot core; raise it until the core "
+                             "blows out. --flash prints the spread it wrote, "
+                             "so tune against that rather than by eye."
+                             % (FLASH_VIEW_TRANSFORM, FLASH_EXPOSURE))
+    parser.add_argument("--flash-scale", type=float,
+                        help="size the flash is DRAWN at, against the .blend, "
+                             "default %g. Flash pass only -- the light it casts "
+                             "on the character comes from the body pass and "
+                             "does not change with it." % FLASH_SCALE)
     args = parser.parse_args(argv)
+
+    if args.flash_exposure is not None:
+        FLASH_EXPOSURE = args.flash_exposure
+    if args.flash_scale is not None:
+        FLASH_SCALE = args.flash_scale
 
     if args.setup:
         setup(args.setup)

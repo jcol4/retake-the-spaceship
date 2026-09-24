@@ -51,6 +51,17 @@ func start_mission() -> void:
 	_start_turn()
 
 
+## Drops everything that points into the current scene, which is about to be
+## reloaded out from under this autoload (main.gd, when the host leaves). A
+## client's TurnManager still holds the last `active_unit` the host synced, and
+## a freed unit left there would be the first thing the next mission reads.
+func abandon() -> void:
+	mission_over = true
+	active_unit = null
+	pool.clear()
+	_awaiting_player = false
+
+
 func _all_units() -> Array[Unit]:
 	var out: Array[Unit] = []
 	for node in get_tree().get_nodes_in_group("units"):
@@ -65,8 +76,11 @@ func _start_turn() -> void:
 		return
 	turn_number += 1
 	pool = _all_units()
-	LightingManager.reroll_flicker()  # Sec 5.3: flickering lights fluctuate turn-to-turn
+	var flicker_seed := randi()
+	LightingManager.reroll_flicker(flicker_seed)  # Sec 5.3: flickering lights fluctuate turn-to-turn
 	turn_started.emit(turn_number)
+	if SteamLobby.is_networked() and SteamLobby.is_host():
+		_rpc_turn_started.rpc(turn_number, flicker_seed)
 	_log("--- Turn %d: %d units in the pool ---" % [turn_number, pool.size()])
 	_draw_next()
 
@@ -124,6 +138,16 @@ func _draw_next() -> void:
 		call_deferred("_draw_next")
 	else:
 		_awaiting_player = true  # wait for end_activation from the player unit
+
+
+## Without this a client's lights never flickered at all (its TurnManager never
+## runs `_start_turn`), so its light map — and every accuracy preview built on
+## it — drifted from the host's a little more each turn.
+@rpc("authority", "call_remote", "reliable")
+func _rpc_turn_started(number: int, flicker_seed: int) -> void:
+	turn_number = number
+	LightingManager.reroll_flicker(flicker_seed)
+	turn_started.emit(turn_number)
 
 
 @rpc("authority", "call_remote", "reliable")

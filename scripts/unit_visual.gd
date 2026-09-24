@@ -344,12 +344,60 @@ const MIN_TINT := 0.35
 ## would put out the one readability aid the security robots have in exactly the
 ## conditions it exists for.
 ##
-## The muzzle flash is the same argument at its strongest, and it is now the
-## ONLY thing on screen making that argument: the room-filling `OmniLight3D`
-## that used to fire alongside it is gone (see vfx_manager.gd), so if this layer
-## is dimmed nothing else says the gun went off. A shot in an unlit corridor is
-## not a dim flash — it is the brightest thing in frame.
+## The muzzle flash is the same argument at its strongest: the room-filling
+## `OmniLight3D` that used to fire alongside it is gone (see vfx_manager.gd), so
+## if this layer is dimmed nothing UNDIMMED says the gun went off. A shot in an
+## unlit corridor is not a dim flash — it is the brightest thing in frame.
+##
+## The flash's spill on the character does not weaken that, it sharpens it. The
+## spill is baked into the BODY layer (render_sprites.py `hide_flash` keeps the
+## flash as an invisible emitter for one frame), so it is tinted by the tile
+## like the rest of the body and fades toward MIN_TINT in the dark — the exact
+## treatment this layer exists to be spared.
 const SELF_LIT_LAYERS: Array[StringName] = [&"status", &"flash"]
+
+## Layers drawn as EMITTED LIGHT rather than as paint: added to what is behind
+## them instead of covering it, and exempt from the alpha scissor every other
+## layer wants.
+##
+## The scissor is the part that matters. `ALPHA_CUT_DISCARD` is right for a
+## character -- a hard silhouette, no sorting to get wrong -- and it is ruinous
+## for a glow, because a glow is MOSTLY soft edge. Measured on the rendered
+## flash: 1100 pixels carry the effect and only 254 of them clear the 0.5
+## threshold, so the scissor was deleting 77% of it and leaving a hard-edged
+## stub. That stub is what the muzzle flash has looked like in game.
+##
+## Additive is then what makes the rest read as light: a flash cannot darken
+## what is behind it, and where it is brightest it blows out to white on its own
+## instead of averaging with the wall.
+const ADDITIVE_LAYERS: Array[StringName] = [&"flash"]
+
+## How much brighter than the PNG an additive layer is drawn.
+##
+## Above 1 on purpose, and not for taste: `main.tscn` sets
+## `glow_hdr_threshold = 1.1`, so anything at or below 1.0 never blooms no
+## matter how bright it looks. The flash pass is tonemapped to fit in 8 bits
+## (render_sprites.py FLASH_VIEW_TRANSFORM), which is what rescued its colour
+## ramp and also what guaranteed nothing in it can exceed 1.0. This puts the hot
+## core back over the line so the glow pass picks it up, without touching the
+## threshold -- which is global, and would start blooming every pale wall in the
+## ship.
+##
+## Lives in `albedo_color` rather than in `modulate`, because `modulate` is
+## carried as a vertex colour and clamps at 1.0; a uniform does not.
+const ADDITIVE_GAIN := 1.8
+
+## Metres an additive layer is pulled toward the camera, past where
+## `_ground_depth_offset` already put the body.
+##
+## Every layer sits at the SAME position, so the flash card and the body card are
+## coplanar. The body is scissored, which makes it opaque and depth-writing; a
+## transparent card at exactly equal depth is then at the mercy of the depth
+## comparison and can drop out entirely. A couple of centimetres is far too
+## little to see and far more than enough to settle it, and it keeps the depth
+## test ON -- so a wall in front of the unit still hides the flash, which
+## disabling the test would have broken.
+const OVERLAY_DEPTH_BIAS := 0.02
 
 ## Where a shot leaves the weapon, relative to the unit: shoulder height, and
 ## forward of the body so a shot does not visibly start inside the chest.
@@ -502,6 +550,10 @@ func _build_layers() -> void:
 		sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 		if test_shader:
 			_apply_test_shader(sprite)
+		elif layer in ADDITIVE_LAYERS:
+			# `elif`: the test shader is a debug hook that wants to be seen on
+			# every layer as-is, so it keeps the last word where both apply.
+			_apply_additive(sprite)
 		add_child(sprite)
 		_sprites[layer] = sprite
 
@@ -519,6 +571,60 @@ func _apply_test_shader(sprite: AnimatedSprite3D) -> void:
 		if sprite.sprite_frames and sprite.animation != &"" and sprite.sprite_frames.has_animation(sprite.animation):
 			mat.set_shader_parameter("texture_albedo",
 				sprite.sprite_frames.get_frame_texture(sprite.animation, sprite.frame))
+	sprite.frame_changed.connect(push_texture)
+	sprite.animation_changed.connect(push_texture)
+	push_texture.call()
+
+
+## Draws one layer as emitted light. See ADDITIVE_LAYERS.
+##
+## An override rather than a flag, because `AnimatedSprite3D` has no blend mode
+## to set -- checked against the class in 4.6.3: `alpha_cut`, `shaded` and
+## `transparent` are the whole of what it exposes, and none of them can say
+## "add". So the sprite's own material is shadowed by one that can, and the
+## frame texture is pushed into it by hand on every change, for exactly the
+## reason `_apply_test_shader` does the same: Godot does NOT feed the current
+## frame into an overriding material.
+##
+## Everything the sprite would have configured on its own material has to be
+## restated here, because `material_override` replaces it whole -- the billboard
+## and the unshading especially, which are silent and look like a broken sprite
+## rather than a missing flag when they are forgotten.
+func _apply_additive(sprite: AnimatedSprite3D) -> void:
+	# Cleared so the node does not claim a scissor that nothing is applying. The
+	# override is what actually decides, but a node whose inspector disagrees
+	# with what is on screen is a trap for whoever reads it next.
+	sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISABLED
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_FIXED_Y
+	# `_update_ground_depth` puts a non-uniform scale on the card to undo the
+	# camera's foreshortening, and a billboard rebuilds its model matrix from the
+	# view -- which drops that scale unless this says to keep it. Without it the
+	# flash is drawn 22% short against a body that is not.
+	mat.billboard_keep_scale = true
+	# LINEAR, alone among the layers. The body is NEAREST because it is drawn art
+	# and wants its texels crisp; this is a glow, and a glow resampled with
+	# nearest is a staircase. Flip it if the flash starts to look soft against
+	# the character rather than in front of it.
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	mat.albedo_color = Color(ADDITIVE_GAIN, ADDITIVE_GAIN, ADDITIVE_GAIN)
+	# So `modulate` still means something on this layer. It is white today (the
+	# flash is self-lit, see `_emitted_tint`), but a layer whose tint silently
+	# did nothing would be a nasty thing to debug later.
+	mat.vertex_color_use_as_albedo = true
+	# After the body in the transparent pass, whatever order the children ended
+	# up in.
+	mat.render_priority = 1
+	sprite.material_override = mat
+	var push_texture := func() -> void:
+		if sprite.sprite_frames and sprite.animation != &"" \
+				and sprite.sprite_frames.has_animation(sprite.animation):
+			mat.albedo_texture = sprite.sprite_frames.get_frame_texture(
+				sprite.animation, sprite.frame)
 	sprite.frame_changed.connect(push_texture)
 	sprite.animation_changed.connect(push_texture)
 	push_texture.call()
@@ -1046,10 +1152,17 @@ func _update_ground_depth() -> void:
 	# Into this node's space: the unit turns to face, so a world-space offset
 	# would be spun around by the facing if it were assigned raw.
 	var local := global_transform.basis.inverse() * offset
+	# The same axis the ground offset rides, one step further toward the camera,
+	# for the layers that must not be coplanar with the body. See
+	# OVERLAY_DEPTH_BIAS.
+	var overlay := local
+	if _rig:
+		overlay += global_transform.basis.inverse() \
+			* (_rig.global_transform.basis.z * OVERLAY_DEPTH_BIAS)
 	var stretch := _view_stretch()
 	for layer in _sprites:
 		var sprite := _sprites[layer] as AnimatedSprite3D
-		sprite.position = local
+		sprite.position = overlay if layer in ADDITIVE_LAYERS else local
 		sprite.scale.y = stretch if _authored_layers.get(layer, false) else 1.0
 
 

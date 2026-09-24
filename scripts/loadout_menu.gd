@@ -79,38 +79,8 @@ func _build_unit_row(unit: PlayerUnit) -> Control:
 
 func _on_deploy() -> void:
 	for i in _units.size():
-		var unit := _units[i]
-		var id: int = _pickers[i].get_selected_metadata()
-		# The unit node this client sees is its OWN local instance (every peer
-		# spawns the squad independently — see main.gd), but combat is resolved
-		# against the HOST's instance. A client editing its local copy alone
-		# would never reach the sim, so the pick is sent to the host and
-		# applied there; the local copy is cosmetic until the host's echo of
-		# unit state (once that exists) catches it up.
-		if not multiplayer.has_multiplayer_peer() or multiplayer.is_server():
-			_apply_loadout(unit, id)
-		else:
-			_rpc_request_loadout.rpc_id(1, unit.get_path(), id)
+		# Routed through the unit, not an RPC on this menu — see
+		# PlayerUnit.choose_loadout for why the menu can't be the address.
+		_units[i].choose_loadout(_pickers[i].get_selected_metadata())
 	deployed.emit()
 	queue_free()
-
-
-func _apply_loadout(unit: PlayerUnit, weapon_id: int) -> void:
-	unit.stats.weapon = WeaponPresets.make(weapon_id)
-	unit.ammo = unit.stats.mag_size  # refill to the newly-chosen weapon's magazine
-	unit.reserve = unit.stats.weapon.starting_reserve
-
-
-@rpc("any_peer", "call_remote", "reliable")
-func _rpc_request_loadout(unit_path: NodePath, weapon_id: int) -> void:
-	if not multiplayer.is_server():
-		return
-	var unit := get_tree().root.get_node_or_null(unit_path) as PlayerUnit
-	if unit == null:
-		return
-	var sender := multiplayer.get_remote_sender_id()
-	if unit.owner_peer_id != 0 and sender != unit.owner_peer_id:
-		push_warning("LoadoutMenu: rejected loadout pick from peer %d for %s (owned by %d)" % [
-			sender, unit.stats.display_name, unit.owner_peer_id])
-		return
-	_apply_loadout(unit, weapon_id)
