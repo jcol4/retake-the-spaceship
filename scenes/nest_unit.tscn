@@ -21,6 +21,7 @@ script = ExtResource("1_script")
 script = ExtResource("2_visual")
 variant = &"nest"
 has_light = false
+darkness_floor = false
 
 [node name="Body" type="StaticBody3D" parent="."]
 collision_layer = 2

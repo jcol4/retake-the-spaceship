@@ -1,6 +1,7 @@
-[gd_scene load_steps=2 format=3 uid="uid://ccamerarig01"]
+[gd_scene load_steps=3 format=3 uid="uid://ccamerarig01"]
 
 [ext_resource type="Script" path="res://scripts/camera_rig.gd" id="1_script"]
+[ext_resource type="Script" path="res://scripts/pixel_view.gd" id="2_pixel"]
 
 [node name="CameraRig" type="Node3D"]
 script = ExtResource("1_script")
@@ -34,3 +35,10 @@ projection = 1
 ; player now makes themselves; see MAX_ZOOM_SIZE in camera_rig.gd.
 size = 10.5
 far = 200.0
+
+; Low-res render + nearest upscale of the world (see pixel_view.gd). Layer -1
+; so the HUD's layers draw over it.
+[node name="PixelView" type="CanvasLayer" parent="." node_paths=PackedStringArray("source")]
+layer = -1
+script = ExtResource("2_pixel")
+source = NodePath("../Camera3D")

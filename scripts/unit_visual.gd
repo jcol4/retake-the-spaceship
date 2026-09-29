@@ -213,6 +213,11 @@ const COVER_HIGH := &"high"
 ## effect once a model exists.
 @export var placeholder_style: StringName = &"organic"
 
+## Whether this unit gets the MIN_BRIGHTNESS darkness floor. Off for fixtures
+## like the nest: the floor exists so a unit in the dark stays findable, and on
+## something that sits in the room it just glows against the unlit deck around it.
+@export var darkness_floor: bool = true
+
 ## Height of the placeholder figure, in metres — the old placeholder canvas.
 const PLACEHOLDER_HEIGHT := 1.92
 ## Metres per placeholder "pixel": the machine specs below were drawn on a
@@ -241,8 +246,15 @@ const FLASH_COLOR := Color(1.0, 0.78, 0.45)
 const FLASH_SCALE := 0.5
 const FLASH_SHADER := preload("res://shaders/muzzle_flash.gdshader")
 ## The node in the merc's model that IS the muzzle flash. Its origin sits on the
-## barrel tip, so it doubles as the muzzle marker for the rig light.
+## barrel tip, so it doubles as the mounting point for the rig light.
 const FLASH_NODE := "muzzle_flash"
+
+## Inverted-hull outline, drawn as a second pass on every character surface in
+## a darkened copy of that surface's own colour. See `_outline_for`.
+const OUTLINE_SHADER := preload("res://shaders/outline.gdshader")
+## Outline materials by the albedo they mirror, so every unit of a variant (and
+## every surface sharing a texture and tint) shares one.
+static var _outlines: Dictionary = {}
 
 ## Where a shot leaves the weapon, relative to the unit: shoulder height, and
 ## forward of the body. Derived from unit yaw rather than from the model, because
@@ -251,11 +263,6 @@ const MUZZLE_HEIGHT := 1.4
 const MUZZLE_REACH := 0.3
 ## Height the rig light is mounted at when the model has no muzzle to mount on.
 const LIGHT_HEIGHT := 1.6
-
-## Where the rifle's bore points, per pose, in the unit's own frame — written by
-## `tools/render_sprites.py --markers`. Only `mean_direction` is read: it aims
-## the light, and through it the rules, so it must not sway within a cycle.
-const MUZZLE_MARKER_PATH := "res://assets/sprites/muzzle_%s.json"
 
 ## The model's container: turned by the pose's yaw correction and scaled by
 ## `model_scale`, so the imported scene itself is never touched.
@@ -281,9 +288,8 @@ var _status_material: StandardMaterial3D = null
 var _floor_materials: Array[BaseMaterial3D] = []
 
 var _light: SpotLight3D = null
-var _light_mount: Marker3D = null
-## pose StringName -> {muzzle, direction, mean_direction}, in the unit's frame.
-var _bore: Dictionary = {}
+## Kept apart from the light, which is rebuilt with the model on a variant swap.
+var _light_on := true
 var _unit: Node3D = null
 
 var _stance: StringName = IDLE
@@ -297,16 +303,12 @@ var _fidgeting: bool = false
 var _cover: StringName = &""
 var _status_color := Color.WHITE
 
-## Parsed bore tables, keyed by variant — every unit of a variant reads the same.
-static var _marker_cache: Dictionary = {}
-
 
 func _ready() -> void:
 	# Children are ready before their parent, so Unit._ready can rely on these.
 	_unit = get_parent() as Node3D
 	_build_model()
-	# Before _build_light, which aims the light off it.
-	_read_markers()
+	# After _build_model: the light mounts on the model's rifle.
 	if has_light:
 		_build_light()
 	if LightingManager:
@@ -481,7 +483,25 @@ func _dress_surfaces(root: Node) -> void:
 			mat.metallic = 0.0
 			mat.metallic_texture = null
 			_add_floor(mat)
+			mat.next_pass = _outline_for(mat)
 			mesh.set_surface_override_material(s, mat)
+
+
+## The outline pass for `mat`: its albedo colour and texture (faction tint
+## already multiplied in), which the shader samples at the same UV and darkens.
+static func _outline_for(mat: BaseMaterial3D) -> ShaderMaterial:
+	var key := [mat.albedo_texture, mat.albedo_color, mat.uv1_scale, mat.uv1_offset]
+	var outline: ShaderMaterial = _outlines.get(key)
+	if outline == null:
+		outline = ShaderMaterial.new()
+		outline.shader = OUTLINE_SHADER
+		outline.set_shader_parameter("albedo_color", mat.albedo_color)
+		if mat.albedo_texture:
+			outline.set_shader_parameter("albedo_texture", mat.albedo_texture)
+		outline.set_shader_parameter("uv1_scale", mat.uv1_scale)
+		outline.set_shader_parameter("uv1_offset", mat.uv1_offset)
+		_outlines[key] = outline
+	return outline
 
 
 ## Makes `mat` able to emit its own colour, and registers it for `_apply_floor`
@@ -500,7 +520,7 @@ func _apply_floor() -> void:
 	if _unit:
 		var tile: GridTileData = GridManager.get_tile(_unit.get("grid_pos"))
 		lit = clampf(tile.light_value / 100.0, 0.0, 1.0) if tile else 0.0
-	var energy := MIN_BRIGHTNESS * (1.0 - lit)
+	var energy := MIN_BRIGHTNESS * (1.0 - lit) if darkness_floor else 0.0
 	for mat in _floor_materials:
 		mat.emission_energy_multiplier = energy
 
@@ -518,28 +538,31 @@ func set_variant(new_variant: StringName) -> void:
 	remove_child(_model)
 	_model.free()
 	_model = null
+	# The light rode the old rifle and went with it — unless it was the fallback
+	# one hung on this node, which would otherwise be doubled.
+	if is_instance_valid(_light):
+		_light.free()
+	_light = null
 	_build_model()
-	_read_markers()
+	if has_light:
+		_build_light()
 	_play(_action if _action != &"" else _stance, true)
 
 
+## A plain SpotLight3D riding the rifle: placed on the barrel tip and pointed
+## down the bore, so it follows the weapon bone through every animation with no
+## per-frame bookkeeping. Rebuilt with the model, which owns the rifle.
+##
+## Hung off the flash's PARENT (the rifle mesh) at the flash's transform, not off
+## the flash itself: `fire_shoot` animates the flash's scale to nothing, which
+## would collapse the light's basis mid-burst. The flash's -Z runs down the bore,
+## which is also a light's forward, so its rotation carries straight over.
+##
+## A model with no flash, or the placeholder, gets the light at chest height
+## pointing straight ahead.
 func _build_light() -> void:
-	# Position follows the muzzle, orientation follows the unit — see
-	# aimed_light.gd for why those must differ.
-	_light_mount = Marker3D.new()
-	_light_mount.name = "LightMount"
-	# Detached from the unit's rotation because `muzzle_world` answers in world
-	# space; _update_light_rig reimposes the position every frame.
-	_light_mount.top_level = true
-	_light_mount.position = Vector3(0.0, LIGHT_HEIGHT, 0.0)
-	add_child(_light_mount)
-
 	_light = SpotLight3D.new()
 	_light.name = "Flashlight"
-	_light.set_script(load("res://scripts/aimed_light.gd"))
-	_light.set("origin_path", NodePath("../LightMount"))
-	# This node shares the unit's basis, so it is the facing source.
-	_light.set("facing_path", NodePath(".."))
 	_light.light_color = Color(0.94, 0.96, 1.0)
 	_light.light_energy = 7.0
 	# THE VISIBLE CONE: main.tscn has volumetric fog, so this is the whole of the
@@ -553,107 +576,30 @@ func _build_light() -> void:
 	_light.spot_angle = 45.0
 	_light.spot_attenuation = 1.5
 	_light.spot_angle_attenuation = 2.5
-	add_child(_light)
-	_light.set("bore_direction", stable_bore())
+	_light.visible = _light_on
+	var barrel := _flash.get_parent() as Node3D if _flash else null
+	if barrel:
+		barrel.add_child(_light)
+		_light.transform = Transform3D(_flash.transform.basis.orthonormalized(),
+			_flash.transform.origin)
+	else:
+		add_child(_light)
+		_light.position = Vector3(0.0, LIGHT_HEIGHT, 0.0)
 
 
-func _read_markers() -> void:
-	_bore = _load_markers(variant)
-
-
-## The bore direction the light and the rules both aim by, in the unit's own
-## frame: one stable vector per pose, never a per-frame one — see aimed_light.gd
-## `bore_direction`. Unclamped, so a running merc (rifle across his chest) lights
-## the wall to his left and lighting_manager.gd agrees with the screen about it.
-##
-## Straight ahead for a pose with no table, and for any character without a
-## measured barrel — every character but the merc.
-func stable_bore() -> Vector3:
-	var entry: Variant = _bore.get(_bore_pose())
-	if entry is Dictionary:
-		var mean: Variant = (entry as Dictionary).get("mean_direction")
-		if mean is Vector3 and (mean as Vector3).length_squared() > 0.5:
-			return mean
-	return Vector3(0.0, 0.0, -1.0)
-
-
-## The same vector in WORLD space, for LightingManager — which must aim its cone
-## at exactly what the light on screen is aiming at.
+## Which way the beam points right now, in world space — LightingManager aims
+## its cone by this, so the tiles the rules light are the ones lit on screen.
+## Unit facing where there is no light (headless, or a character without one).
 func aim_direction() -> Vector3:
-	return (global_transform.basis * stable_bore()).normalized()
-
-
-## Where the lamp sits right now, in world space: the model's barrel tip, which
-## rides the weapon bone through every animation. The mounting point for the
-## SpotLight3D, and therefore where the visible cone starts.
-func muzzle_world() -> Vector3:
-	if _flash and _flash.is_inside_tree():
-		return _flash.global_position
-	return global_position + Vector3(0.0, LIGHT_HEIGHT, 0.0)
-
-
-func _bore_pose() -> StringName:
-	return _current if _current != &"" else _stance
-
-
-func _update_light_rig() -> void:
-	if _light_mount:
-		_light_mount.global_position = muzzle_world()
-	if _light:
-		# Which pose is playing decides which stable bore applies.
-		_light.set("bore_direction", stable_bore())
-
-
-## The bore tables for `art_variant`, parsed once per variant per run. Returns
-## {<pose>: {muzzle, direction, mean_direction}}.
-static func _load_markers(art_variant: StringName) -> Dictionary:
-	if _marker_cache.has(art_variant):
-		return _marker_cache[art_variant]
-	var path: String = MUZZLE_MARKER_PATH % art_variant
-	var document: Variant = null
-	# FileAccess in the editor and wherever the .json ships raw; the JSON
-	# resource importer otherwise.
-	if FileAccess.file_exists(path):
-		document = JSON.parse_string(FileAccess.get_file_as_string(path))
-	elif ResourceLoader.exists(path):
-		var res: Variant = load(path)
-		document = res.data if res is JSON else null
-	var out: Dictionary = {}
-	if document is Dictionary:
-		var bore: Variant = (document as Dictionary).get("bore", {})
-		if bore is Dictionary:
-			for pose: String in (bore as Dictionary):
-				var entry: Dictionary = (bore as Dictionary)[pose]
-				out[StringName(pose)] = {
-					"muzzle": _to_vectors(entry.get("muzzle", [])),
-					"direction": _to_vectors(entry.get("direction", [])),
-					"mean_direction": _to_vector(entry.get("mean_direction")),
-				}
-	_marker_cache[art_variant] = out
-	return out
-
-
-static func _to_vectors(rows: Array) -> Array:
-	var out: Array = []
-	for row: Variant in rows:
-		out.append(_to_vector(row))
-	return out
-
-
-static func _to_vector(row: Variant) -> Vector3:
-	if row is Array and (row as Array).size() == 3:
-		return Vector3(float(row[0]), float(row[1]), float(row[2]))
-	return Vector3.ZERO
+	if _light and _light.is_inside_tree():
+		return -_light.global_transform.basis.z.normalized()
+	return -global_transform.basis.z.normalized()
 
 
 func set_flashlight_enabled(on: bool) -> void:
+	_light_on = on
 	if _light:
 		_light.visible = on
-
-
-func _process(_delta: float) -> void:
-	# Polled: the barrel moves on every animation frame.
-	_update_light_rig()
 
 
 ## Re-asserts whatever the unit should be showing, for a unit coming back into
@@ -1069,6 +1015,7 @@ func _part(mesh: Mesh, color: Color, at: Vector3) -> MeshInstance3D:
 	mat.albedo_color = color * faction_tint
 	mat.roughness = 0.85
 	_add_floor(mat)
+	mat.next_pass = _outline_for(mat)
 	inst.material_override = mat
 	inst.position = at
 	_pose_root.add_child(inst)

@@ -19,7 +19,7 @@ signal lighting_changed
 ## faint ambient the scene actually renders (main.tscn ambient_light_energy 0.2).
 ## At the old 0.0 the screen showed a legible room while Combat.light_modifier
 ## charged the full -30 for standing in it, which is exactly the divergence
-## aimed_light.gd exists to prevent.
+## the barrel-mounted flashlight (unit_visual.gd) is aimed to prevent.
 ##
 ## Moved up with that ambient rather than pinned: the two are a pair, and the
 ## screen showing more than the rules admit is the failure this exists to avoid.
@@ -124,22 +124,17 @@ func flashlight_source(pos: Vector3i) -> Unit:
 
 ## Which way a unit's beam points, in world space.
 ##
-## THE RIFLE, NOT THE SHOULDERS. A character whose barrel has been measured
-## (two locators on the bore, exported by tools/render_sprites.py --markers)
-## lights what its gun is actually pointing at — about 18 degrees off forward
-## for the merc's carry — and the SpotLight3D on screen is aimed by the very
-## same vector, so what looks lit and what counts as lit cannot drift apart.
-## That agreement is the rule this whole layer exists to hold (see aimed_light.gd).
+## THE RIFLE, NOT THE SHOULDERS. The SpotLight3D is mounted on the model's
+## barrel (unit_visual.gd `_build_light`), and this reads the same light's
+## forward, so what looks lit and what counts as lit cannot drift apart. That
+## agreement is the rule this whole layer exists to hold.
 ##
-## The vector is the pose's STABLE cycle mean, never the per-frame bore. This
-## function is called from a recompute that only happens on discrete triggers —
-## move, toggle, turn start — so a direction that swayed with the animation
-## would be sampled at whatever frame happened to be showing when a unit moved,
-## and two identical moves could light different tiles. The drawn beam sways;
-## this must not.
+## Sampled live, so it carries whatever the animation is doing at the moment of
+## a recompute (move, toggle, turn start). The idle sway is a few degrees
+## against a 90 degree cone, so only tiles right on the cone's edge can differ.
 ##
-## Falls back to unit facing for everything without a measured barrel, which is
-## every character but the merc.
+## Falls back to unit facing for anything without a light — headless runs build
+## no model, so there it is always facing.
 func _aim_of(unit: Unit) -> Vector3:
 	var visual: Variant = unit.get("visual")
 	if visual is Node3D and (visual as Node3D).has_method("aim_direction"):
