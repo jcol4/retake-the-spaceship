@@ -77,19 +77,9 @@ func _build() -> void:
 	pivot.add_child(cam)
 	cam.make_current()
 
-	# Sprites hide themselves when a layer has no art for the pose, so report
-	# what actually resolved -- an empty screenshot and a correctly-hidden layer
-	# look identical otherwise.
 	var vis: Node = unit.get_node_or_null("Visual")
 	if vis:
 		print("[preview] variant=", vis.get("variant"), " layers=", vis.get("layers"))
-		for child in vis.get_children():
-			var sprite := child as AnimatedSprite3D
-			if sprite:
-				var tex := sprite.sprite_frames.get_frame_texture(sprite.animation, 0)
-				print("[preview]   %s: '%s' visible=%s flip_h=%s tex=%s px=%.5f offset=%s" % [
-					sprite.name, sprite.animation, sprite.visible, sprite.flip_h,
-					tex.get_size() if tex else "none", sprite.pixel_size, sprite.offset])
 	_built = true
 
 

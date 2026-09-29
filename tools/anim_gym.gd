@@ -96,16 +96,7 @@ func _build() -> void:
 		quit(1)
 		return
 
-	# Report what RESOLVED, not what was asked for. A layer with no art hides
-	# itself, so a missing pose and a correct one look identical on screen --
-	# this is the only place the difference is visible.
 	print("[gym] %s  variant=%s  layers=%s" % [path, _visual.get("variant"), _visual.get("layers")])
-	for child in _visual.get_children():
-		var sprite := child as AnimatedSprite3D
-		if sprite:
-			print("[gym]   %s: %d animations, pixel_size=%.5f, offset=%s"
-				% [sprite.name, sprite.sprite_frames.get_animation_names().size(),
-				   sprite.pixel_size, sprite.offset])
 
 	# One muzzle line per round, so the burst count is checkable from the log
 	# rather than counted by eye at 0.11 s intervals.

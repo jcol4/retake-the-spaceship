@@ -1,5 +1,5 @@
 extends SceneTree
-## The eight-direction sprite bucketing, the mirror rule, and the thing the snap
+## The eight-direction bucketing that game rules still speak in, and the thing the snap
 ## camera makes necessary — that a camera yaw change re-buckets every character
 ## even though nothing turned.
 ##
@@ -60,7 +60,6 @@ func _initialize() -> void:
 	_visual = load("res://scripts/unit_visual.gd")
 	_check_buckets()
 	_check_boundaries()
-	_check_mirror()
 	await _check_camera_relative()
 
 	print("")
@@ -90,23 +89,6 @@ func _check_boundaries() -> void:
 		var n: int = _visual.DIRECTIONS.size()
 		_check(wrapi(hi - lo, 0, n) <= 1,
 			"boundary at %.0f deg steps one bucket at most (%d -> %d)" % [deg, lo, hi])
-
-
-func _check_mirror() -> void:
-	# Five drawn + three mirrored. Every mirror entry must point at a direction
-	# that IS drawn — one aiming at another mirror entry would resolve to
-	# nothing.
-	var mirror: Dictionary = _visual.MIRROR
-	_check(mirror.size() == 3, "3 directions are mirrored (got %d)" % mirror.size())
-	for dir: StringName in mirror:
-		var entry: Array = mirror[dir]
-		_check(not mirror.has(entry[0]), "%s mirrors %s, which is drawn" % [dir, entry[0]])
-		_check(entry[1] == true, "%s is flipped horizontally" % dir)
-	var drawn := 0
-	for dir: StringName in _visual.DIRECTIONS:
-		if not mirror.has(dir):
-			drawn += 1
-	_check(drawn == 5, "5 directions are drawn (got %d)" % drawn)
 
 
 func _check_camera_relative() -> void:
