@@ -42,7 +42,9 @@ func _init() -> void:
 	var merc_flash: Node = (load("res://assets/models/merc.glb") as PackedScene) \
 		.instantiate()
 	_check(merc_flash.find_child("muzzle_flash", true, false) != null,
-		"merc carries the muzzle_flash node the rig light mounts on")
+		"merc carries the muzzle_flash node the flash and rig light mount on")
+	_check(ResourceLoader.exists("res://assets/vfx/muzzle_flash.glb"),
+		"the baked muzzle flash exists (tools/bake_muzzle_flash.py)")
 	merc_flash.free()
 
 	var sidecar: Variant = JSON.parse_string(

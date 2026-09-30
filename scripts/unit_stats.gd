@@ -151,6 +151,13 @@ const LEVEL_BONUS_INITIATIVE := 0
 # the class. `null` means unarmed at range (e.g. the Fodder swarm, Sec 11.4).
 @export var weapon: WeaponData = null
 
+## Whether ammo counts this unit as ARMORED (Penetrator, Hollow Point, Slugs
+## read it). A classification, deliberately separate from how much armor the
+## unit has: the presets set it per faction (contractors, mercs and robots yes,
+## aliens no), and a soldier's armor choice will be able to flip it once armor
+## types exist.
+@export var armored: bool = false
+
 ## Max HP before the Fitness term. 15 is the soldier's — it lands the squad at
 ## 17-22 max HP depending on class, centred on 20 — and non-player types hand-set
 ## their own (Sec 4.5/5.5) rather than being squeezed through the player's
@@ -182,13 +189,13 @@ const LEVEL_BONUS_INITIATIVE := 0
 @export var equipment_initiative: int = 5
 
 var weapon_base_accuracy: int:
-	get: return weapon.base_accuracy if weapon else 0
+	get: return weapon.effective_accuracy() if weapon else 0
 
 var weapon_damage: int:
-	get: return weapon.damage if weapon else 0
+	get: return weapon.effective_damage() if weapon else 0
 
 var mag_size: int:
-	get: return weapon.mag_size if weapon else 0
+	get: return weapon.effective_mag_size() if weapon else 0
 
 # Contact-range attack (Sec 11.4). Separate from the weapon numbers above so a
 # unit can be dangerous in melee and harmless at range, or the reverse — the
@@ -204,7 +211,27 @@ func ap_pool() -> int:
 
 
 func action_cost(action: Action) -> int:
-	return discounted_cost(BASE_AP_COST[action], K_REFLEXES[action], reflexes)
+	return discounted_cost(BASE_AP_COST[action] + weapon_ap_modifier(action), K_REFLEXES[action], reflexes)
+
+
+## What the carried weapon (base stat plus attachments) adds to `action`'s base
+## price. Added BEFORE the Reflexes discount and the rounding, so a -1 is a real
+## AP off rather than one the round-up can swallow. Melee, Grenade and Hunker
+## don't touch the gun. Aimed Shot isn't in `Action` — see `aimed_ap_modifier`.
+func weapon_ap_modifier(action: Action) -> int:
+	if weapon == null:
+		return 0
+	match action:
+		Action.SHOOT: return weapon.ap_modifier(WeaponData.ApAction.SHOOT)
+		Action.OVERWATCH: return weapon.ap_modifier(WeaponData.ApAction.OVERWATCH)
+		Action.SUPPRESS: return weapon.ap_modifier(WeaponData.ApAction.SUPPRESS)
+		Action.RELOAD: return weapon.ap_modifier(WeaponData.ApAction.RELOAD)
+	return 0
+
+
+## The weapon's Aimed Shot modifier, read by Unit.aimed_shot_cost.
+func aimed_ap_modifier() -> int:
+	return weapon.ap_modifier(WeaponData.ApAction.AIMED) if weapon else 0
 
 
 ## Sec 4.3b, the cost half of the rounding convention: costs round UP, and never

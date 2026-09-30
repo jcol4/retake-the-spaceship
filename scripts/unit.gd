@@ -22,9 +22,9 @@ const TURN_TIME := 0.09  # seconds to swing toward the next tile
 # roll, one damage number, one round of ammo — so this is purely how many
 # kicks and impacts that shot draws, and changing it cannot unbalance anything.
 #
-# Raised from 3-5 to buy the drawn muzzle flash more time on screen. The flash is
-# ONE frame of `fire_shoot`, which at BURST_CADENCE 0.11 s is 55 ms a round, so
-# the only dial that makes a burst read as a burst is how many times it repeats.
+# Raised from 3-5 to buy the muzzle flash more time on screen. The flash lasts
+# one BURST_CADENCE (0.11 s) a round, so the only dial that makes a burst read
+# as a burst is how many times it repeats.
 const BURST_MIN := 4
 const BURST_MAX := 6
 # On a hit, this many rounds are thrown wide anyway so the burst reads as a
@@ -220,7 +220,7 @@ func _ready() -> void:
 		stats = UnitStats.new()
 	current_hp = stats.max_hp()
 	ammo = stats.mag_size
-	reserve = stats.weapon.starting_reserve if stats.weapon else 0
+	reserve = stats.weapon.effective_reserve() if stats.weapon else 0
 	grid_pos = GridManager.world_to_grid(global_position)
 	global_position = GridManager.grid_to_world(grid_pos)
 	GridManager.set_occupant(grid_pos, self)
@@ -891,7 +891,8 @@ func action_cost(action: UnitStats.Action) -> int:
 
 
 func aimed_shot_cost(body_part: int) -> int:
-	return Combat.aimed_shot_ap_cost(body_part, stats.reflexes)
+	return Combat.aimed_shot_ap_cost(body_part, stats.reflexes,
+		stats.aimed_ap_modifier())
 
 
 ## The cheapest zone this unit could aim at — the Torso, always. What gates the
@@ -928,6 +929,19 @@ func move_tiles_affordable() -> int:
 
 func move_cost_for(tiles: int) -> int:
 	return tiles * move_ap_per_tile()
+
+
+## Scales how far enemies can SEE this unit (EnemyUnit._can_see and the robots'
+## override). Above 1 is a visual tell — a Laser Sight's dot.
+func visibility_multiplier() -> float:
+	return stats.weapon.visibility_multiplier() if stats.weapon else 1.0
+
+
+## How many tiles this unit's gunfire carries: the weapon's own radius with its
+## attachments (a suppressor takes tiles off). The network's default covers the
+## unarmed case, which should never fire anyway.
+func gunfire_noise_radius() -> int:
+	return stats.weapon.effective_noise_radius() if stats.weapon else SecurityNetwork.NOISE_RADIUS
 
 
 func ranged_accuracy_penalty() -> int:
@@ -1050,7 +1064,7 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	# Sec 5.4: gunfire is loud, and it leaves brass. The first is what the robot
 	# faction shares with the (deferred) alien sound channel; the second is what
 	# only a Proctor ever reads, turns later.
-	SecurityNetwork.report_noise(grid_pos, self)
+	SecurityNetwork.report_noise(grid_pos, self, gunfire_noise_radius())
 	SecurityNetwork.report_evidence(grid_pos, SecurityNetwork.Evidence.BRASS)
 	is_busy = false
 	return result
@@ -1122,10 +1136,10 @@ func _on_muzzle() -> void:
 	# same impacts as a real burst. A rifle going off looks like a rifle going
 	# off — the only thing the roll decides is where the rounds end up.
 	#
-	# The FLASH is not fired from here and never was: it is a frame of the
-	# `fire_shoot` art (`UnitVisual` layer `flash`), drawn on the barrel by the
-	# same `_play` call that emits this signal. Nothing here has to place it, and
-	# that is the whole reason the old room-filling muzzle light is gone.
+	# The FLASH is not fired from here and never was: UnitVisual.play_burst fires
+	# it on the barrel (MuzzleFlash) alongside the signal that calls this.
+	# Nothing here has to place it, and that is the whole reason the old
+	# room-filling muzzle light is gone.
 	if is_instant() or _pending_target == null:
 		return
 	var round_index := _burst_round

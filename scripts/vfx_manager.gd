@@ -5,8 +5,8 @@ extends Node3D
 ## THERE IS NO TRACER AND NO MUZZLE LIGHT any more. Both were stand-ins from
 ## before the character art existed: the beam said "a shot travelled" because
 ## nothing on the shooter showed it, and the room-filling `OmniLight3D` said "a
-## gun went off" for the same reason. The drawn `flash` sprite layer now says
-## both, at the barrel, in the frame the kick lands on -- and it says it far
+## gun went off" for the same reason. The muzzle flash (MuzzleFlash) now says
+## both, at the barrel, on the round the kick lands on -- and it says it far
 ## better than a 10-energy white flood, which blew out the whole room and took
 ## the flash it was supposed to be selling with it.
 ##

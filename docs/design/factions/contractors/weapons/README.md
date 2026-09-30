@@ -92,6 +92,19 @@ short of a full 6, which reads as "scrounging the last shells" rather than "swap
   assigns the chosen `WeaponData` to each unit and resets its `ammo`/`reserve` to that weapon's
   full mag and starting reserve, then starts the mission. `main.gd` skips this screen entirely in
   `--auto` (headless smoke test) mode, so every unit just deploys with its default.
+- **Attachments** ([attachments.md](attachments.md)) — `scripts/attachment_data.gd` (`AttachmentData`)
+  holds one attachment's slot and stat bonuses; `scripts/attachment_presets.gd` (`AttachmentPresets`)
+  holds the roster from [attachments.md](attachments.md). `WeaponData` has one field per slot (`underbarrel`, `barrel`,
+  `optic`, `magazine`, `stock`) plus base `fire_ap_modifier`/`reload_ap_modifier` (all 0 for now) and
+  `noise_radius` (gunfire noise in tiles, all 5 for now), and exposes the summed totals through
+  `effective_*()` accessors. Each unlock is one copy that fits one soldier at a time: the loadout
+  screen reads an inventory (id -> copies owned; one of each until progression exists) and disables
+  a copy that's already fitted to another soldier.
+- **Ammo types** — `scripts/ammo_data.gd` (`AmmoData`) and `scripts/ammo_presets.gd` (`AmmoPresets`,
+  same roster doc). `WeaponData.ammo` holds one type (null = Standard).
+  Ammo and attachments are both `WeaponMod`s (`scripts/weapon_mod.gd`), which holds the stacking
+  rules; damage that depends on the target goes through `Combat.shot_damage`. Each type has a list of
+  weapons it fits. Unlocks are per type, so any number of soldiers can load an unlocked type.
 
 ```
 accuracy = shooter.perception + weapon.base_accuracy  (+ Reflexes for Shoot/Overwatch, Section 4.6.2)

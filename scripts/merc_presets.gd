@@ -32,6 +32,7 @@ extends RefCounted
 ## played with; baking it in now would be tuning a knob nobody has watched yet.
 static func rifleman(display_name: String, veteran: bool = false) -> UnitStats:
 	var stats := UnitStats.new()
+	stats.armored = true  # see UnitStats.armored
 	stats.display_name = display_name
 	# Against a rolled Assault's 30-50 / 45-65 / 60-85 / 30-60.
 	stats.perception = randi_range(30, 45)

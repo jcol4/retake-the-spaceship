@@ -35,6 +35,7 @@ const RANGES := {
 static func roll(unit_class: UnitStats.UnitClass, display_name: String) -> UnitStats:
 	var r: Dictionary = RANGES[unit_class]
 	var stats := UnitStats.new()
+	stats.armored = true  # see UnitStats.armored
 	stats.display_name = display_name
 	stats.unit_class = unit_class
 	stats.perception = randi_range(r["perception"][0], r["perception"][1])

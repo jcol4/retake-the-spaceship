@@ -285,7 +285,7 @@ func _can_see(unit: Unit) -> bool:
 	# exactly as much as being lit by your own flashlight does.
 	if unit == null or unit.is_downed:
 		return false
-	if GridManager.chebyshev_dist(grid_pos, unit.grid_pos) > detection_range:
+	if GridManager.chebyshev_dist(grid_pos, unit.grid_pos) > roundi(detection_range * unit.visibility_multiplier()):
 		return false
 	var t: GridTileData = GridManager.get_tile(unit.grid_pos)
 	if t == null or t.light_value < sight_light_threshold:

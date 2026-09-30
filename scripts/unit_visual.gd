@@ -236,18 +236,11 @@ const PLACEHOLDER_UNIT := PLACEHOLDER_HEIGHT / 64.0
 ## detection rules read, so a unit that looks dark is one the rules treat as dark.
 const MIN_BRIGHTNESS := 0.3
 
-## How much brighter than white the muzzle flash is drawn. Above 1 so it clears
-## main.tscn's glow_hdr_threshold (1.1) and blooms; the flash is the brightest
-## thing in frame in a dark corridor, and it must stay so.
-const FLASH_GAIN := 1.8
-const FLASH_COLOR := Color(1.0, 0.78, 0.45)
-## Drawn size against authored size — render_sprites.py FLASH_SCALE, which is
-## what the flash was judged at when it was a sprite.
-const FLASH_SCALE := 0.5
-const FLASH_SHADER := preload("res://shaders/muzzle_flash.gdshader")
-## The node in the merc's model that IS the muzzle flash. Its origin sits on the
-## barrel tip, so it doubles as the mounting point for the rig light.
-const FLASH_NODE := "muzzle_flash"
+## The node in the merc's model marking the barrel tip, -Z down the bore. It is
+## the old muzzle flash mesh, now hidden and read only for where it sits: the
+## flash (MuzzleFlash, baked from assets/gun_vfx.blend) and the rig light both
+## mount there.
+const MUZZLE_NODE := "muzzle_flash"
 
 ## Inverted-hull outline, drawn as a second pass on every character surface in
 ## a darkened copy of that surface's own colour. See `_outline_for`.
@@ -263,6 +256,9 @@ const MUZZLE_HEIGHT := 1.4
 const MUZZLE_REACH := 0.3
 ## Height the rig light is mounted at when the model has no muzzle to mount on.
 const LIGHT_HEIGHT := 1.6
+## Render layer 2, set on every character surface on top of the default layer 1:
+## the flashlight's hotspot lights only this layer. See `_build_hotspot`.
+const CHARACTER_LAYER := 1 << 1
 
 ## The model's container: turned by the pose's yaw correction and scaled by
 ## `model_scale`, so the imported scene itself is never touched.
@@ -279,7 +275,9 @@ var _poses: Dictionary = {}
 var _pose_yaw: Dictionary = {}
 ## The pose actually on screen, after cover and fallback resolution.
 var _current: StringName = &""
-var _flash: MeshInstance3D = null
+## The model's barrel-tip marker (MUZZLE_NODE) and the flash mounted beside it.
+var _muzzle: Node3D = null
+var _flash: MuzzleFlash = null
 ## Placeholder only: the node posed to crouch or lie down, and the status light.
 var _pose_root: Node3D = null
 var _status_material: StandardMaterial3D = null
@@ -346,6 +344,7 @@ func _build_model() -> void:
 	_phases.clear()
 	_poses.clear()
 	_pose_yaw.clear()
+	_muzzle = null
 	_flash = null
 	_pose_root = null
 	_status_material = null
@@ -373,11 +372,12 @@ func _build_single(sidecar: Dictionary) -> bool:
 	if yaw is Dictionary:
 		for pose: String in yaw:
 			_pose_yaw[StringName(pose)] = float(yaw[pose])
-	_flash = inst.find_child(FLASH_NODE, true, false) as MeshInstance3D
-	if _flash:
-		_dress_flash(_flash)
-		_flash.visible = false
+	_muzzle = inst.find_child(MUZZLE_NODE, true, false) as Node3D
+	if _muzzle:
+		_muzzle.visible = false
 	_dress_surfaces(inst)
+	# After dressing, which would otherwise tint and outline the flash too.
+	_mount_flash()
 	return true
 
 
@@ -442,24 +442,17 @@ func _adopt_players(inst: Node, phase: float) -> void:
 		_phases.append(phase)
 
 
-## The flash is authored as a mesh scaled down to nothing over `fire_shoot`, with
-## emission set for an offline render. Redrawn here as light (see
-## shaders/muzzle_flash.gdshader), and at FLASH_SCALE of its authored size.
-##
-## The scale is applied in the shader, because the flash node's own scale is
-## what `fire_shoot` animates. The mesh origin is the muzzle point, so the
-## shrink is toward the barrel tip and the flash stays registered on it.
-func _dress_flash(flash: MeshInstance3D) -> void:
-	var mat := ShaderMaterial.new()
-	mat.shader = FLASH_SHADER
-	mat.set_shader_parameter("color", FLASH_COLOR)
-	mat.set_shader_parameter("gain", FLASH_GAIN)
-	mat.set_shader_parameter("size", FLASH_SCALE)
-	var extent := flash.mesh.get_aabb()
-	mat.set_shader_parameter("reach", maxf(extent.position.abs().length(),
-		extent.end.abs().length()))
-	flash.material_override = mat
-	flash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+## Hangs a MuzzleFlash on the rifle at the marker's rest transform. A sibling of
+## the marker rather than its child: `fire_shoot` animates the marker's scale to
+## nothing, which would take the flash with it before it ever showed.
+func _mount_flash() -> void:
+	var barrel := _muzzle.get_parent() as Node3D if _muzzle else null
+	if barrel == null:
+		return
+	_flash = MuzzleFlash.new()
+	_flash.name = "MuzzleFlash"
+	barrel.add_child(_flash)
+	_flash.transform = _muzzle.transform
 
 
 ## Per-unit copies of the model's materials, carrying the faction tint and the
@@ -472,8 +465,9 @@ func _dress_flash(flash: MeshInstance3D) -> void:
 func _dress_surfaces(root: Node) -> void:
 	for node in root.find_children("*", "MeshInstance3D", true, false):
 		var mesh := node as MeshInstance3D
-		if mesh.mesh == null or mesh == _flash:
-			continue  # a recoloured merc still fires a white flash
+		if mesh.mesh == null or mesh == _muzzle:
+			continue
+		mesh.layers |= CHARACTER_LAYER
 		for s in mesh.mesh.get_surface_count():
 			var src := mesh.get_active_material(s) as BaseMaterial3D
 			if src == null:
@@ -553,13 +547,16 @@ func set_variant(new_variant: StringName) -> void:
 ## down the bore, so it follows the weapon bone through every animation with no
 ## per-frame bookkeeping. Rebuilt with the model, which owns the rifle.
 ##
-## Hung off the flash's PARENT (the rifle mesh) at the flash's transform, not off
-## the flash itself: `fire_shoot` animates the flash's scale to nothing, which
-## would collapse the light's basis mid-burst. The flash's -Z runs down the bore,
-## which is also a light's forward, so its rotation carries straight over.
+## Hung off the muzzle marker's PARENT (the rifle mesh) at the marker's
+## transform, not off the marker itself: `fire_shoot` animates its scale to
+## nothing, which would collapse the light's basis mid-burst. The marker's -Z
+## runs down the bore, which is also a light's forward, so its rotation carries
+## straight over.
 ##
-## A model with no flash, or the placeholder, gets the light at chest height
+## A model with no muzzle, or the placeholder, gets the light at chest height
 ## pointing straight ahead.
+##
+## Carries a second, character-only light as a child — see `_build_hotspot`.
 func _build_light() -> void:
 	_light = SpotLight3D.new()
 	_light.name = "Flashlight"
@@ -577,14 +574,45 @@ func _build_light() -> void:
 	_light.spot_attenuation = 1.5
 	_light.spot_angle_attenuation = 2.5
 	_light.visible = _light_on
-	var barrel := _flash.get_parent() as Node3D if _flash else null
+	_light.add_child(_build_hotspot())
+	var barrel := _muzzle.get_parent() as Node3D if _muzzle else null
 	if barrel:
 		barrel.add_child(_light)
-		_light.transform = Transform3D(_flash.transform.basis.orthonormalized(),
-			_flash.transform.origin)
+		_light.transform = Transform3D(_muzzle.transform.basis.orthonormalized(),
+			_muzzle.transform.origin)
 	else:
 		add_child(_light)
 		_light.position = Vector3(0.0, LIGHT_HEIGHT, 0.0)
+
+
+## THE HARSH LOOK ON WHAT THE BEAM CATCHES, borrowed from the overhead fixtures
+## (light_source.gd): a hot source with a steep falloff, so a character within
+## two or three tiles blows out past 1.0 and clips to white (the environment
+## has no tonemapper and glows above 1.1), fading to nothing extra by the far
+## end of the beam. Stacked on the plain flashlight and culled to
+## CHARACTER_LAYER, so the floor and walls keep the ordinary pool while mercs
+## and creatures get the stark, hard-shadowed top light the fixtures give.
+##
+## The cull mask applies to its shadow casters too, so scenery does not shadow
+## it: a character just behind a crate inside the cone still catches it. Rare
+## at these ranges, and cheaper than a second light that lit everything.
+func _build_hotspot() -> SpotLight3D:
+	var hot := SpotLight3D.new()
+	hot.name = "Hotspot"
+	hot.light_color = _light.light_color
+	# Energy and attenuation are a pair: clipping out to three tiles or so, then
+	# the range window (spot_range, shared with the base light) fades it out.
+	hot.light_energy = 60.0
+	hot.spot_attenuation = 2.0
+	hot.light_volumetric_fog_energy = 0.0  # the base light owns the shaft
+	hot.light_cull_mask = CHARACTER_LAYER
+	hot.shadow_enabled = true
+	hot.shadow_blur = 0.1  # hard-edged, like the ceiling lights
+	hot.spot_range = _light.spot_range
+	hot.spot_angle = _light.spot_angle
+	# Even across the disc and sharp at the rim, as the fixtures are.
+	hot.spot_angle_attenuation = 1.0
+	return hot
 
 
 ## Which way the beam points right now, in world space — LightingManager aims
@@ -756,6 +784,8 @@ func play_burst(rounds: int) -> void:
 	for _i in rounds:
 		# Restarted, so every round gets its own kick and its own flash.
 		_play(FIRE_SHOOT, true)
+		if _flash:
+			_flash.fire(BURST_CADENCE)
 		muzzle.emit()
 		await get_tree().create_timer(BURST_CADENCE).timeout
 	_play(END_SHOOT if end != &"" else AIM_HOLD, true)
@@ -801,8 +831,6 @@ func _play(base: StringName, restart: bool = false) -> void:
 		return
 	if _model:
 		_model.rotation.y = deg_to_rad(_pose_yaw.get(pose, 0.0))
-	if _flash:
-		_flash.visible = pose == FIRE_SHOOT
 	var duration := _duration(pose)
 	# A round's kick restarts from its first frame with no blend — blending into
 	# itself would smear the recoil into nothing.
@@ -1017,6 +1045,7 @@ func _part(mesh: Mesh, color: Color, at: Vector3) -> MeshInstance3D:
 	_add_floor(mat)
 	mat.next_pass = _outline_for(mat)
 	inst.material_override = mat
+	inst.layers |= CHARACTER_LAYER
 	inst.position = at
 	_pose_root.add_child(inst)
 	return inst

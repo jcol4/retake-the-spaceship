@@ -163,6 +163,7 @@ func _can_see(unit: Unit) -> bool:
 		return false
 	var moving := TurnManager.turn_number - unit.last_moved_turn <= MOTION_MEMORY_TURNS
 	var reach := detection_range if moving else motionless_detection_range
+	reach = roundi(reach * unit.visibility_multiplier())
 	if GridManager.chebyshev_dist(grid_pos, unit.grid_pos) > reach:
 		return false
 	return GridManager.has_line_of_sight(self, unit)

@@ -124,6 +124,7 @@ const DATA := {
 static func make_stats(kind: int, index: int = 1) -> UnitStats:
 	var d: Dictionary = DATA[kind]
 	var stats := UnitStats.new()
+	stats.armored = true  # see UnitStats.armored
 	# Numbered only when a deck places more than one, so the common case reads as
 	# a model designation rather than as a spawn slot.
 	stats.display_name = "%s" % d["name"] if index <= 1 else "%s #%d" % [d["name"], index]

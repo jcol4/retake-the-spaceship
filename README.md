@@ -81,11 +81,16 @@ Re-run the build after any change to the worm itself — the piles are copies of
 pick the change up otherwise. `tools/build_worm_piles.py` seeds its own RNG, so rebuilding
 reproduces the same heap rather than reshuffling art that has already been judged on screen.
 
-**The muzzle flash is part of the merc's model** — a `muzzle_flash` mesh on the rifle, scaled
-to nothing over `fire_shoot`. `UnitVisual` redraws it with an additive glow shader
-(`shaders/muzzle_flash.gdshader`) bright enough to clear the glow threshold and bloom, and
-hangs a short-lived light at the barrel. It is skipped when a variant's materials are
-recoloured, so a recoloured merc still fires a white flash.
+**The muzzle flash comes from `assets/gun_vfx.blend`.** Its look is two procedural node
+materials, which glTF cannot carry, so `tools/bake_muzzle_flash.py` bakes each to an RGBA
+texture and exports the mesh with them to `assets/vfx/muzzle_flash.glb`:
+
+    blender.exe -b assets/gun_vfx.blend -P tools/bake_muzzle_flash.py
+
+`MuzzleFlash` (`scripts/muzzle_flash.gd`) draws those textures unshaded and additive, and
+`UnitVisual` mounts one on the rifle at the merc model's `muzzle_flash` node. That node is
+the old flash mesh, now hidden and kept only as the barrel-tip marker the flash and the rig
+light hang from. Re-run the bake after editing the flash in Blender.
 
 **`tools/render_sprites.py` is still load-bearing**, though nothing renders sprites any more:
 `export_models.py` imports its pose tables (`POSES`, `POSE_ACTION`) and the rest-yaw constants

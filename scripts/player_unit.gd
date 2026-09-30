@@ -72,6 +72,8 @@ var _throw_tiles: Array[Vector3i] = []
 var _preview_path: Array[Vector3i] = []
 var _preview_cost: int = 0
 var _loadout_weapon_id: int = -1  # host's record of the deployed pick; see show_to_peer
+var _loadout_attachment_ids := PackedInt32Array()  # ...and the attachments fitted to it
+var _loadout_ammo_id: int = -1  # ...and the ammo loaded in it
 
 
 func _init() -> void:
@@ -506,20 +508,22 @@ func _rpc_command(method: StringName, args: Array) -> void:
 	callv(method, resolved)
 
 
-## Pre-mission weapon pick (LoadoutMenu). Lives on the unit rather than the
+## Pre-mission weapon and attachment pick (LoadoutMenu). `attachment_ids` is
+## AttachmentPresets ids, -1 for an empty slot; `ammo_id` an AmmoPresets id, -1
+## for Standard. Lives on the unit rather than the
 ## menu because an RPC is addressed by node path: the menu is a nameless
 ## overlay that gets an engine-generated name — different on each peer — and is
 ## freed the moment its peer hits Deploy, so the host's copy is usually gone
 ## by the time a client's pick arrives.
-func choose_loadout(weapon_id: int) -> void:
+func choose_loadout(weapon_id: int, attachment_ids := PackedInt32Array(), ammo_id := -1) -> void:
 	if not multiplayer.has_multiplayer_peer() or multiplayer.is_server():
-		_apply_loadout(weapon_id)
+		_apply_loadout(weapon_id, attachment_ids, ammo_id)
 	else:
-		_rpc_request_loadout.rpc_id(1, weapon_id)
+		_rpc_request_loadout.rpc_id(1, weapon_id, attachment_ids, ammo_id)
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func _rpc_request_loadout(weapon_id: int) -> void:
+func _rpc_request_loadout(weapon_id: int, attachment_ids: PackedInt32Array, ammo_id: int) -> void:
 	if not multiplayer.is_server():
 		return
 	var sender := multiplayer.get_remote_sender_id()
@@ -527,19 +531,27 @@ func _rpc_request_loadout(weapon_id: int) -> void:
 		push_warning("%s: rejected loadout pick from peer %d (owned by %d)" % [
 			stats.display_name, sender, owner_peer_id])
 		return
-	_apply_loadout(weapon_id)
+	_apply_loadout(weapon_id, attachment_ids, ammo_id)
 
 
 ## `stats.weapon` isn't a synchronized property (ammo/reserve are), so the host
 ## pushes the pick back out explicitly — otherwise every client keeps showing
 ## the class default: wrong name, wrong accuracy preview, wrong range.
-func _apply_loadout(weapon_id: int) -> void:
+func _apply_loadout(weapon_id: int, attachment_ids: PackedInt32Array, ammo_id: int) -> void:
 	_loadout_weapon_id = weapon_id
-	stats.weapon = WeaponPresets.make(weapon_id)
-	ammo = stats.mag_size  # refill to the newly-chosen weapon's magazine
-	reserve = stats.weapon.starting_reserve
+	_loadout_attachment_ids = attachment_ids
+	_loadout_ammo_id = ammo_id
+	_equip(weapon_id, attachment_ids, ammo_id)
 	if multiplayer.has_multiplayer_peer() and multiplayer.is_server():
-		_rpc_sync_loadout.rpc(weapon_id)
+		_rpc_sync_loadout.rpc(weapon_id, attachment_ids, ammo_id)
+
+
+## Swaps in the weapon and refills to ITS magazine and reserve — the attachments
+## are already counted, so an Extended Mag deploys full.
+func _equip(weapon_id: int, attachment_ids: PackedInt32Array, ammo_id: int) -> void:
+	stats.weapon = WeaponPresets.make(weapon_id, attachment_ids, ammo_id)
+	ammo = stats.mag_size
+	reserve = stats.weapon.effective_reserve()
 
 
 ## The host can deploy before a client has even built this unit, and the
@@ -548,14 +560,12 @@ func _apply_loadout(weapon_id: int) -> void:
 func show_to_peer(peer_id: int) -> void:
 	super(peer_id)
 	if _loadout_weapon_id >= 0:
-		_rpc_sync_loadout.rpc_id(peer_id, _loadout_weapon_id)
+		_rpc_sync_loadout.rpc_id(peer_id, _loadout_weapon_id, _loadout_attachment_ids, _loadout_ammo_id)
 
 
 @rpc("authority", "call_remote", "reliable")
-func _rpc_sync_loadout(weapon_id: int) -> void:
-	stats.weapon = WeaponPresets.make(weapon_id)
-	ammo = stats.mag_size
-	reserve = stats.weapon.starting_reserve
+func _rpc_sync_loadout(weapon_id: int, attachment_ids: PackedInt32Array, ammo_id: int) -> void:
+	_equip(weapon_id, attachment_ids, ammo_id)
 
 
 func _accepting_input() -> bool:

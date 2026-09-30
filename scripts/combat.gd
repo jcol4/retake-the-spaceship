@@ -91,8 +91,10 @@ const K_REFLEXES_AIMED := 0.015
 
 ## What an Aimed Shot at `body_part` costs a shooter with this much Reflexes.
 ## Rounded by UnitStats so every AP price in the game rounds by one rule.
-static func aimed_shot_ap_cost(body_part: int, reflex_value: int) -> int:
-	return UnitStats.discounted_cost(AIMED_SHOT_BASE_AP[body_part], K_REFLEXES_AIMED, reflex_value)
+## `ap_modifier` is the weapon's firing modifier (UnitStats.weapon_ap_modifier),
+## added to the base before the discount like every other action's.
+static func aimed_shot_ap_cost(body_part: int, reflex_value: int, ap_modifier: int = 0) -> int:
+	return UnitStats.discounted_cost(AIMED_SHOT_BASE_AP[body_part] + ap_modifier, K_REFLEXES_AIMED, reflex_value)
 
 # Light modifier (Sec 5.1): linear between a dark target (penalty) and a
 # fully-lit one (bonus). GridTileData.light_value is written by LightingManager.
@@ -214,9 +216,13 @@ static func weapon_range_penalty(weapon: WeaponData, dist: int) -> int:
 	# the global distance curve above. Shotgun/SMG use this to be noticeably
 	# worse past their optimal range; most weapons leave it at 0 and rely on
 	# the global curve alone.
-	if weapon == null or weapon.falloff_rate <= 0 or dist <= weapon.optimal_range:
+	if weapon == null:
 		return 0
-	return (dist - weapon.optimal_range) * weapon.falloff_rate
+	var rate := weapon.effective_falloff_rate()
+	var optimal := weapon.effective_optimal_range()
+	if rate <= 0 or dist <= optimal:
+		return 0
+	return (dist - optimal) * rate
 
 
 static func light_modifier(target_pos: Vector3i) -> int:
@@ -273,8 +279,15 @@ static func compute_accuracy(shooter, target, action: ShotAction, body_part: int
 	var dist := GridManager.chebyshev_dist(shooter.grid_pos, target.grid_pos)
 	acc -= distance_penalty(dist)
 	acc -= weapon_range_penalty(shooter.stats.weapon, dist)
+	var weapon: WeaponData = shooter.stats.weapon
+	if weapon:
+		acc += weapon.close_accuracy_at(dist)
 	if light_matters(shooter, target):
-		acc += light_modifier(target.grid_pos)
+		var light := light_modifier(target.grid_pos)
+		# Thermal: the dark stops costing accuracy; a lit target still helps.
+		if weapon and weapon.ignores_darkness():
+			light = maxi(light, 0)
+		acc += light
 	acc -= shooter.ranged_accuracy_penalty()  # Sec 4.2: an injured arm shakes every ranged shot, not just melee
 	return clampi(acc, 1, 99)
 
@@ -302,6 +315,18 @@ static func _roll_hit(result: ShotResult, attacker, target, crit_divisor: float 
 			result.lucky_dodge = true
 
 
+## What one hit from `shooter` does to `target` before crits: the weapon's
+## damage with every percent that applies at this range and to this target
+## (armored or not, UnitStats.armored). Weapon-less shooters fall back to the
+## flat stat.
+static func shot_damage(shooter, target) -> int:
+	var weapon: WeaponData = shooter.stats.weapon
+	if weapon == null:
+		return shooter.stats.weapon_damage
+	var dist := GridManager.chebyshev_dist(shooter.grid_pos, target.grid_pos)
+	return weapon.damage_against(target.stats.armored, dist)
+
+
 static func resolve_shot(shooter, target, action: ShotAction, body_part: int = BodyPart.TORSO) -> ShotResult:
 	var result := ShotResult.new()
 	result.accuracy = compute_accuracy(shooter, target, action, body_part)
@@ -313,7 +338,7 @@ static func resolve_shot(shooter, target, action: ShotAction, body_part: int = B
 		if is_headshot and result.crit and randf() * 100.0 < shooter.stats.luck / SEVERE_CRIT_DIVISOR:
 			result.severe_crit = true
 			mult = SEVERE_CRIT_MULTIPLIER
-		result.damage = roundi(shooter.stats.weapon_damage * mult)
+		result.damage = roundi(shot_damage(shooter, target) * mult)
 		if action == ShotAction.AIMED_SHOT:
 			result.body_part = body_part
 			# Sec 4.2: a crit to center-mass knocks the wind out of them.
