@@ -64,13 +64,19 @@ func recompute_base() -> void:
 	recompute_dynamic()
 
 
-func reroll_flicker() -> void:
+## Seeded, and off its own RNG rather than the global one, so co-op peers land
+## on identical intensities: the host rolls `flicker_seed` and hands the same
+## number to every client (TurnManager `_rpc_turn_started`). `_sources` is in
+## map-build order, which is the same on every peer.
+func reroll_flicker(flicker_seed: int) -> void:
 	# Sec 5.3 — called on turn start. Only sources flagged to flicker change;
 	# skip the full base recompute if nothing actually did.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = flicker_seed
 	var any_flicker := false
 	for source in _sources:
 		if source.flickers:
-			source.reroll_flicker()
+			source.reroll_flicker(rng)
 			any_flicker = true
 	if any_flicker:
 		recompute_base()

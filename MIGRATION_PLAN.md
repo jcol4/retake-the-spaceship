@@ -222,7 +222,7 @@ The only `.glb` instancing today is characters and the rifle (`assets/soldier_mi
 | Per-fixture shadow-casting `SpotLight3D`, aimed down | [light_source.gd](scripts/light_source.gd) `_make_visual()`, built at runtime |
 | Per-unit helmet `SpotLight3D` (`AimedLight`, `top_level`, 7.0 energy, shadows on) | [character_base.tscn:123](scenes/character_base.tscn#L123) |
 | Visible beam cone — custom shader | [shaders/flashlight_beam.gdshader](shaders/flashlight_beam.gdshader) + [flashlight_beam.gd](scripts/flashlight_beam.gd) |
-| Transient `OmniLight3D` muzzle flashes | [vfx_manager.gd:76](scripts/vfx_manager.gd#L76) |
+| ~~Transient `OmniLight3D` muzzle flashes~~ — **removed**; the flash is drawn art now (`UnitVisual` layer `flash`), so it emits no light at all | — |
 
 Note `main.tscn:13-15`: `ambient_light_energy = 1.0` is a **`TESTING:` override**, with the
 intended dark-scene values (`0.015` ambient, `0.02` sun, shadows off) preserved in a comment.

@@ -72,10 +72,13 @@ exactly the eight reachable ones, and the set is closed under a camera snap. At 
 yaw of 0° the same eight directions would land rotated 45°, which is a different art set
 and a flatter read.
 
-**Why zoom went entirely.** Under orthographic projection, camera distance no longer
-changes apparent scale, so zoom would have had to become `Camera3D.size`. One scale is
-simpler, and it also dissolved a question about `Label3D.fixed_size` behaviour that only
-existed because zoom did.
+**Why zoom is `Camera3D.size`, and why it only opens outward.** Under orthographic
+projection, camera distance no longer changes apparent scale, so zoom had to become
+`Camera3D.size` or go away. It went away first, and came back as size: `camera_rig.gd`
+scrolls between `MIN_ZOOM_SIZE` 10.5 and `MAX_ZOOM_SIZE` 30.0. 10.5 is the floor rather
+than a midpoint on purpose — it is the scale the sprites were authored against, so the
+player can only ever pull *back* from the authoring framing, never push past it into a
+character drawn at fewer pixels than it has.
 
 ---
 
@@ -287,14 +290,100 @@ composite against each other with nothing rescaled by hand:
 | | Placeholder | Rendered art (merc) |
 |---|---|---|
 | `canvas_height` | 1.92 m — canvas cut to the character | **2.56 m** — must equal `render_sprites.CANVAS_HEIGHT` |
-| `foot_anchor.y` | 1.0 — feet flush to the bottom edge | **0.82421875** = `1 − FLOOR_MARGIN / CANVAS_HEIGHT` |
+| `foot_anchor.y` | 1.0 — feet flush to the bottom edge | **0.93359375** — row 17 of 256, the MEAN foot row over idle's eight facings |
+| vertical scale | 1.0 — drawn filling its canvas, foreshortened by nothing | **1/cos(pitch) = 1.2247** — undoes the second foreshortening, see below |
 
 The defaults on `UnitVisual` describe the placeholder; a character with rendered art
 **must override both on its scene** (`scenes/player_unit.tscn` does). Rendered art cannot use
 the placeholder's values for the reason in §2.1 — the floor projects to a diagonal, so the
 origin sits `FLOOR_MARGIN` above the bottom edge rather than on it. Get the anchor wrong and
 every unit of that variant floats or sinks by the difference, uniformly and quietly.
-`render_sprites.report_framing` prints the two values to paste in.
+`render_sprites.report_framing` prints `canvas_height`; a render prints the anchor.
+
+The anchor is **measured, never derived**, and it is neither of the two numbers that look like
+they ought to work:
+
+- `1 − FLOOR_MARGIN / CANVAS_HEIGHT` (0.82421875) is the world origin, which is geometrically
+  exact and **wrong on screen**. The sprite is a vertical billboard that writes depth, so every
+  row below the anchor is drawn under the floor mesh and occluded — and the feet project *below*
+  the origin, because a foot planted toward the viewer falls down the screen diagonal. Anchoring
+  there cuts the character off at the knee.
+- The **lowest opaque row over every frame** never clips anything, and floats everything. Which
+  row the feet reach depends on the facing: the merc's idle bottoms out at row 8 facing south
+  and row 32 facing west. Pick the minimum and seven facings out of eight hang in the air.
+
+So: the mean over the grounding pose's facings. The facings that reach lowest push a toe under
+the floor, which reads as *planted*; the rest sit on it. The exception is a **low, sprawling
+body** — the worm — whose silhouette is mostly depth rather than height. A vertical
+billboard renders depth as height, so the mean buries it instead of lifting it; it takes
+the no-clip minimum, and `scenes/worm_unit.tscn` says so.
+
+### The ground-depth offset
+
+The anchor decides *where* the art sits. It cannot stop the deck from **slicing the boots off**,
+and no value of it can — the anchor names the row that sits on the floor, so every row beneath
+it is beneath the floor by construction. That clipping is a **depth** problem and is answered in
+depth, by `UnitVisual._update_ground_depth`.
+
+The cause is that the card is flat and vertical while the art on it has real depth. In Blender
+the near boot is genuinely ~0.3 m in front of the character's root, standing on floor nearer the
+camera; Godot draws it at the tile centre's depth, and the deck quad in front wins. The tell is
+that **the cut is horizontal** — the `y = 0` plane meets a vertical billboard in a
+screen-horizontal line. A cut from a camera *angle* mismatch would not be straight.
+
+The fix is free because the camera is orthographic: **translating along the view axis changes
+depth and nothing else**, with no perspective divide to scale the result. So the layers are slid
+toward the camera by `(1 − foot_anchor.y) × canvas_height / sin(pitch)` — about 0.29 m for the
+merc — and do not move on screen by a pixel. `sin(pitch)` falls out of the two halves of the gap
+adding to `sin²+cos² = 1`; it is read off the rig's basis, not a copied constant.
+
+Two things keep it honest:
+
+- It is applied to the **layers**, not to `Visual`. `muzzle_world`, `muzzle_origin` and the
+  `LightMount` flashlight all build from `Visual.global_position`; moving that node would drag
+  the lamp and the shot origin off the unit for a change that is purely about the rasteriser.
+- It is **capped** at `GROUND_DEPTH_SAFETY` (0.8) of the nearest legitimate occluder's depth —
+  half a tile of ground — because depth the unit gains over a wall is depth it punches through.
+  The cap costs nothing real: the offset is derived to the canvas *edge* while the art's reach is
+  shorter, so it only ever bites into slack. Verified with cover at half a tile and at one tile;
+  the unit stays correctly hidden at both.
+
+It self-disables for placeholder art, which has `foot_anchor.y` of 1.0 and so nothing below the
+anchor to rescue.
+
+The **nest is the one character whose anchor is not set by its art**: at the mean row its near
+edge needed 0.62 m of offset, over the cap, so it sits 6 px higher to bring the requirement
+under it. `scenes/nest_unit.tscn` carries the working.
+
+### The vertical stretch
+
+`CANVAS_HEIGHT` is Blender's `ortho_scale`, which is a **screen** extent — a point at world
+height `h` was drawn `h × cos(pitch)` of canvas above the origin. But
+`pixel_size = canvas_height / texture_height` makes the card that many metres tall in **world**,
+and the card is upright, so the camera foreshortens the already-foreshortened image a second
+time. Everything vertical came out at cos(pitch) = **81.65%**: a 1.92 m character read as 1.57 m,
+and the 14.9% of viewport this document and `camera_rig.tscn` both claim was really 12.2%.
+
+`UnitVisual._view_stretch` undoes it with `scale.y = 1/cos(pitch)`. Three things make that the
+right lever rather than a bigger `pixel_size`:
+
+- **Vertical only.** Horizontally the card maps 1:1 to the screen under this camera, so
+  `pixel_size` is already correct across. A scalar `pixel_size` can only scale both axes, which
+  would fix the height by making the figure fat; a non-uniform `scale` is the only lever that
+  separates them.
+- Godot's billboard shader **does** preserve node scale here (verified by measurement — a scaled
+  billboard otherwise needs `billboard_keep_scale`).
+- It is **not applied to the code placeholder**, which is drawn filling its canvas and so has no
+  baked foreshortening to undo. `_authored_layers` tracks that per layer.
+
+Two things read the card's metrics and had to follow it: the ground-depth offset above (the rows
+below the anchor now reach further below the floor) and `muzzle_world`'s vertical term (the drawn
+barrel is that much further up). Both go through `_view_stretch` rather than carrying a copy.
+
+Measured end to end by `tools/_squash_check.gd`, which compares the topmost drawn pixel against
+the unit's own unprojected origin: **0.81 before, 0.99 after** (the residual is the top pixel not
+sitting exactly at the unit's depth). Characters are now 22% taller on screen, which is the point
+— it is the size the camera framing was chosen for.
 
 ### Lighting
 

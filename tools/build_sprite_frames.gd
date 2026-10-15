@@ -139,6 +139,9 @@ const DEFAULT_LOOP_TIME := 1.6
 ## Change one and the feet slide; the pair is the contract.
 const VARIANT_LOOP_TIME := {
 	"brawler": {"walk": 1.6},
+	# The `walking` action as drawn: 24 frames at 12 fps. No contacts to keep
+	# planted, so this is chosen, not forced — see worm_unit.tscn move_speed.
+	"worm": {"walk": 2.0},
 }
 
 const DIR := "res://assets/sprites"

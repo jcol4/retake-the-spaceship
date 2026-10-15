@@ -1,0 +1,11 @@
+[gd_resource type="AudioStreamRandomizer" load_steps=2 format=3 uid="uid://crifefire001"]
+
+[ext_resource type="AudioStream" path="res://assets/audio/sfx/weapons/rifle_fire_01.wav" id="1_shot01"]
+
+[resource]
+playback_mode = 1
+random_pitch = 1.08
+random_volume_offset_db = 2.0
+streams_count = 1
+stream_0/stream = ExtResource("1_shot01")
+stream_0/weight = 1.0

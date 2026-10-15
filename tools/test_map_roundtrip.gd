@@ -42,6 +42,7 @@ func _initialize() -> void:
 	# change what that fight is measuring.
 	_check(data.spawns(MapData.Spawn.MERC).size() == 2, "2 merc spawns")
 	_check(data.spawns(MapData.Spawn.HUNTER).size() == 1, "1 Agile Hunter spawn")
+	_check(data.spawns(MapData.Spawn.WORM).size() == 2, "2 worm spawns")
 	# The deck now DOES carry one robot — the Lictor, so the security faction's
 	# cover-breaking doctrine is exercised by the map the game actually loads
 	# rather than only by a test fixture.

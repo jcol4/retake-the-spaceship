@@ -25,8 +25,12 @@ const ORTHO_SIZE := 12.0
 ## Rounds per burst. The burst length is rolled per shot in game, so the gym
 ## rolls it too -- a fixed count would hide the thing most likely to be wrong,
 ## which is how the kick reads when it repeats.
-const BURST_MIN := 3
-const BURST_MAX := 5
+##
+## MIRRORS unit.gd BURST_MIN/BURST_MAX. A gym rolling a different burst length
+## from the game is a gym answering a question nobody asked, so these two move
+## together or the pacing judged here is not the pacing that ships.
+const BURST_MIN := 4
+const BURST_MAX := 6
 
 ## Seconds of idle either side of a burst, so the entry and exit seams are
 ## visible as seams rather than blurring into the next cycle.

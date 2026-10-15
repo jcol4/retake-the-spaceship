@@ -366,6 +366,7 @@ class DestroyCover extends GoapAction:
 		# not one with a private rule about crates.
 		var left := GridManager.damage_cover_edge(
 			target.grid_pos, defence[1], unit.cover_breaking_damage())
+		unit.broadcast_visual(&"burst", [NodePath(), 3, false, false, []])
 		await unit.visual.play_burst(3)
 		unit.report_action("%s fires on the cover shielding %s%s" % [
 			unit.stats.display_name, target.stats.display_name,

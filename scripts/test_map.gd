@@ -55,6 +55,17 @@ func resolve_layout() -> String:
 	return layout_path
 
 
+## The generated deck's seed if this peer built one (`--seed=`), else null —
+## what the co-op host hands a client alongside `resolve_layout()`, since a
+## host on a generated deck has no layout file for the client to load.
+func generated_seed() -> Variant:
+	return _cmdline_seed()
+
+
+func build_generated(map_seed: int) -> void:
+	build(MapGenerator.generate(map_seed))
+
+
 ## `--seed=<n>` from the command line, or null if not passed. A generated deck
 ## takes priority over `--map=` when both are given, since asking for a seed
 ## is the more specific request.

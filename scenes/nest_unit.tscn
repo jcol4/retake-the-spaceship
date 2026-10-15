@@ -1,0 +1,52 @@
+[gd_scene format=3 uid="uid://cnestunit001"]
+
+[ext_resource type="Script" path="res://scripts/nest_unit.gd" id="1_script"]
+[ext_resource type="Script" path="res://scripts/unit_visual.gd" id="2_visual"]
+
+; A PICK volume, and unlike the worm's it is close to the art's real size: the
+; nest measures 1.86 x 1.10 x 0.89 m (art_src/worm_spawn_scaled.blend, scaled to
+; the merc's own 1.864 m). Boxed rather than capsuled because the thing lies
+; flat -- a capsule tall enough to cover it would stand a metre of empty collider
+; above a prone body. Kept a little under the art's footprint so it does not
+; reach into the neighbouring tile it visually overhangs.
+[sub_resource type="BoxShape3D" id="box_shape"]
+size = Vector3(1.3, 0.9, 1.1)
+
+[node name="NestUnit" type="Node3D" groups=["enemy_units", "units"]]
+script = ExtResource("1_script")
+
+; ONE layer, like the worm and the swarm: the whole nest is rendered flat in a
+; single pass, so there is nothing to composite.
+;
+; canvas_height mirrors render_sprites.py CANVAS_HEIGHT. foot_anchor is the
+; world origin's row, like every rendered character (see player_unit.tscn) --
+; but 1 - 0.65 / 2.56 rather than 1 - 0.45 / 2.56, because the nest renders
+; with its own VARIANT_FLOOR_MARGIN of 0.65 m. The rig was lowered 0.243 m in
+; worm_spawn_scaled.blend so its right thigh lies on the deck, and at the shared
+; 0.45 its near edge ran off the bottom of the canvas facing the camera.
+; body_depth_nest.tres gives every pixel its real depth, so the parts that sit
+; in front of the origin draw over the floor instead of being cut by it.
+[node name="Visual" type="Node3D" parent="."]
+script = ExtResource("2_visual")
+layers = Array[StringName]([&"body"])
+variant = &"nest"
+canvas_height = 2.56
+foot_anchor = Vector2(0.5, 0.74609375)
+has_light = false
+
+[node name="Body" type="StaticBody3D" parent="."]
+collision_layer = 2
+collision_mask = 0
+
+[node name="Collision" type="CollisionShape3D" parent="Body"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.45, 0)
+shape = SubResource("box_shape")
+
+[node name="NameLabel" type="Label3D" parent="."]
+; Higher than a standing unit's label sits over its head, not lower. The art is
+; only 0.89 m tall but it is 1.86 m WIDE, so at the camera's 35-degree pitch the
+; sprite's top edge reads much further up the screen than its height suggests --
+; at 1.1 the label landed on the body.
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.5, 0)
+billboard = 1
+text = "Nest"

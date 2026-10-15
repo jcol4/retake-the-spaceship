@@ -24,7 +24,7 @@ func _ready() -> void:
 	visual.variant = &"merc"
 	visual.has_light = false
 	visual.canvas_height = 2.56
-	visual.foot_anchor = Vector2(0.5, 0.984375)
+	visual.foot_anchor = Vector2(0.5, 0.93359375)
 	visual.test_shader = load("res://shaders/gritty_fallout_test.tres")
 	var host := Node3D.new()
 	add_child(host)

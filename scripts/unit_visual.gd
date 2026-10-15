@@ -16,9 +16,11 @@ extends Node3D
 ## and it keeps action pacing identical across the swap — the same guarantee the
 ## no-AnimationPlayer fallback used to give.
 
-## Fired at the shot's muzzle-flash frame. Drives the VFX tracer, so the beam
-## leaves the barrel when the arm is up rather than the instant the order was
-## given.
+## Fired at the shot's muzzle frame. Drives the shot SFX and the impact at the
+## far end, so a round arrives when the arm is up rather than the instant the
+## order was given. The drawn flash is NOT fired from here — it is a frame of
+## the `fire_shoot` art on the `flash` layer, played by the same call that emits
+## this.
 signal muzzle
 
 ## Fired as each boot lands during the run stance. Hook for footstep SFX and a
@@ -268,13 +270,34 @@ const BUCKET_OFFSET := PI / 4.0
 ## Exported rather than a constant because it is a property of the CANVAS, like
 ## `canvas_height` beside it, and the placeholder and the authored art no longer
 ## agree on it. The placeholder is drawn with the feet flush to the bottom edge,
-## so 1.0 is right for it and is the default. Rendered art cannot be: the sprite
-## camera is tilted, so the floor projects to a DIAGONAL through the world origin
-## rather than to a horizontal line under the boots, and a foot planted toward
-## the camera falls below the frame. `render_sprites.py` answers that with
-## FLOOR_MARGIN metres of floor below the origin, which moves the anchor up off
-## the bottom edge by exactly that fraction -- see that file for the arithmetic.
+## so 1.0 is right for it and is the default.
+##
+## Rendered art is anchored on the WORLD ORIGIN's row, 1 - FLOOR_MARGIN /
+## CANVAS_HEIGHT (`render_sprites.py` prints it). Under the ortho sprite camera
+## that row is where the model's true ground point lands for every facing,
+## pose and frame, so every pixel lands on screen where the 3D model would have
+## put it. Feet planted toward the camera project BELOW that row, and they are
+## drawn in front of the floor rather than under it because the layer writes
+## its real per-pixel depth -- see DEPTH_LAYER_SUFFIX. A layer with no depth
+## sidecar yet falls back to `_ground_depth_offset`.
 @export var foot_anchor: Vector2 = Vector2(0.5, 1.0)
+
+## Layers drawn on a BIGGER canvas than `canvas_height`, as layer -> how many
+## times bigger. Anything absent is 1.0, which is every layer that draws the
+## character itself.
+##
+## The muzzle flash is what this exists for, and the reason is FRAMING. The
+## barrel tip sits 29 px from the top edge of the merc's 256 px canvas facing
+## NW, so a flash of any real size runs off the frame -- and it cannot simply be
+## rendered bigger into the body layer, because `_apply_frame_scale` sizes a
+## layer ONCE for all of its frames. `render_sprites.py --flash` renders it
+## through the same camera at the same centre with the ortho extent and the
+## resolution both multiplied, which leaves metres-per-pixel untouched and puts
+## a world point at fraction 0.5 + (f - 0.5) / scale of the larger image. This
+## number is the ONLY thing the scene states; `_layer_anchor` undoes that
+## fraction and the height falls out of the multiply, so there is no second
+## hand-measured anchor to disagree with the first.
+@export var layer_canvas_scale: Dictionary = {}
 
 ## Whether this character carries the rig-mounted light (Sec 5.2). Aliens do not.
 @export var has_light: bool = true
@@ -292,6 +315,14 @@ const BUCKET_OFFSET := PI / 4.0
 ## `merc` (`variant = &"merc"`). A real second sprite set replaces this; until
 ## then a flat multiply beats shipping two identical-looking factions.
 @export var faction_tint: Color = Color.WHITE
+
+## Radius of the soft shadow under the unit's feet, in metres; 0 turns it off.
+## See CONTACT_SHADOW_SHADER. Sized to the footprint, not the figure: a
+## shadow wider than the stance reads as a puddle.
+@export var contact_shadow_radius: float = 0.42
+
+## How dark the centre of that shadow is, 0..1.
+@export_range(0.0, 1.0) var contact_shadow_strength: float = 0.45
 
 ## TEST HOOK for shaders/gritty_fallout.gdshader — assign the material here (or
 ## shaders/gritty_fallout_test.tres directly) to see it on every layer of this
@@ -324,10 +355,93 @@ const MIN_TINT := 0.35
 ## is the thing emitting, not the thing being lit — and dimming it in a dark room
 ## would put out the one readability aid the security robots have in exactly the
 ## conditions it exists for.
-const SELF_LIT_LAYERS: Array[StringName] = [&"status"]
+##
+## The muzzle flash is the same argument at its strongest: the room-filling
+## `OmniLight3D` that used to fire alongside it is gone (see vfx_manager.gd), so
+## if this layer is dimmed nothing UNDIMMED says the gun went off. A shot in an
+## unlit corridor is not a dim flash — it is the brightest thing in frame.
+##
+## The flash's spill on the character does not weaken that, it sharpens it. The
+## spill is baked into the BODY layer (render_sprites.py `hide_flash` keeps the
+## flash as an invisible emitter for one frame), so it is tinted by the tile
+## like the rest of the body and fades toward MIN_TINT in the dark — the exact
+## treatment this layer exists to be spared.
+const SELF_LIT_LAYERS: Array[StringName] = [&"status", &"flash"]
+
+## Layers drawn as EMITTED LIGHT rather than as paint: added to what is behind
+## them instead of covering it, and exempt from the alpha scissor every other
+## layer wants.
+##
+## The scissor is the part that matters. `ALPHA_CUT_DISCARD` is right for a
+## character -- a hard silhouette, no sorting to get wrong -- and it is ruinous
+## for a glow, because a glow is MOSTLY soft edge. Measured on the rendered
+## flash: 1100 pixels carry the effect and only 254 of them clear the 0.5
+## threshold, so the scissor was deleting 77% of it and leaving a hard-edged
+## stub. That stub is what the muzzle flash has looked like in game.
+##
+## Additive is then what makes the rest read as light: a flash cannot darken
+## what is behind it, and where it is brightest it blows out to white on its own
+## instead of averaging with the wall.
+const ADDITIVE_LAYERS: Array[StringName] = [&"flash"]
+
+## How much brighter than the PNG an additive layer is drawn.
+##
+## Above 1 on purpose, and not for taste: `main.tscn` sets
+## `glow_hdr_threshold = 1.1`, so anything at or below 1.0 never blooms no
+## matter how bright it looks. The flash pass is tonemapped to fit in 8 bits
+## (render_sprites.py FLASH_VIEW_TRANSFORM), which is what rescued its colour
+## ramp and also what guaranteed nothing in it can exceed 1.0. This puts the hot
+## core back over the line so the glow pass picks it up, without touching the
+## threshold -- which is global, and would start blooming every pale wall in the
+## ship.
+##
+## Lives in `albedo_color` rather than in `modulate`, because `modulate` is
+## carried as a vertex colour and clamps at 1.0; a uniform does not.
+const ADDITIVE_GAIN := 1.8
+
+## Suffix of a layer's DEPTH SIDECAR set: `body` art at `body_merc.tres` has
+## its depth at `body_depth_merc.tres`, same animations, same frames.
+##
+## `render_sprites.py` writes one per frame, holding how far each pixel's
+## surface sat in front of the world origin along the sprite camera's axis, and
+## `shaders/sprite_depth.gdshader` writes that as the fragment's depth. The flat
+## card then depth-tests as the model it was rendered from: a boot planted
+## toward the camera beats the floor in front of the tile centre, the heel
+## behind it does not, and a crate edge that really is nearer hides exactly
+## what is behind it. MIRRORS `render_sprites.py` DEPTH_LAYER_SUFFIX.
+const DEPTH_LAYER_SUFFIX := "_depth"
+
+## Half-range of the sidecar encoding, in canvas heights. MIRRORS
+## `render_sprites.py` DEPTH_RANGE; change both or neither.
+const DEPTH_RANGE := 2.0
+
+const DEPTH_SHADER := preload("res://shaders/sprite_depth.gdshader")
+const DEPTH_ADD_SHADER := preload("res://shaders/sprite_depth_add.gdshader")
+
+## The soft dark patch under the feet. A sprite placed exactly on the floor
+## still reads as hovering with nothing tying it to the ground, and in this
+## lighting model (unshaded sprites tinted by tile) nothing else does.
+const CONTACT_SHADOW_SHADER := preload("res://shaders/contact_shadow.gdshader")
+
+## Metres the contact shadow floats above the unit's floor. Enough to never
+## z-fight the deck under an orthographic depth buffer, far too little to see.
+const CONTACT_SHADOW_LIFT := 0.01
+
+## Metres an additive layer WITHOUT a depth sidecar is pulled toward the camera,
+## past where `_ground_depth_offset` put the body. A layer with a sidecar needs
+## none of this: it tests at its real depth.
+##
+## Every layer sits at the SAME position, so the flash card and the body card are
+## coplanar. The body is scissored, which makes it opaque and depth-writing; a
+## transparent card at exactly equal depth is then at the mercy of the depth
+## comparison and can drop out entirely. A couple of centimetres is far too
+## little to see and far more than enough to settle it, and it keeps the depth
+## test ON -- so a wall in front of the unit still hides the flash, which
+## disabling the test would have broken.
+const OVERLAY_DEPTH_BIAS := 0.02
 
 ## Where a shot leaves the weapon, relative to the unit: shoulder height, and
-## forward of the body so a tracer does not visibly start inside the chest.
+## forward of the body so a shot does not visibly start inside the chest.
 ## Derived from unit yaw in world space rather than from a per-direction table,
 ## because the muzzle is a world point and the camera must not move it.
 const MUZZLE_HEIGHT := 1.4
@@ -380,6 +494,22 @@ var _direction := 0
 ## True once real authored art is found. Decides whether an action's length comes
 ## from the animation or from FALLBACK_TIME — see play_action.
 var _authored := false
+## Which layers are showing RENDERED art rather than the code placeholder.
+##
+## Per layer, not one flag for the visual, because only rendered art carries the
+## camera's foreshortening baked into it and therefore only rendered art wants it
+## undone — see `_view_stretch`. A placeholder beside authored art on the same
+## unit is already a mistake (`_build_layers` paints a grey disc over the face),
+## but it should not additionally be stretched 22% too tall.
+var _authored_layers := {}
+## Layers drawn with a depth sidecar, layer -> its SpriteFrames. Those stand at
+## the unit's origin and need no `_ground_depth_offset`; see DEPTH_LAYER_SUFFIX.
+var _depth_frames := {}
+## layer -> its depth ShaderMaterial, kept across variant swaps so the frame
+## hooks are connected once. See `_refresh_depth`.
+var _depth_materials := {}
+## Layers already warned about a stale depth build, so it is said once.
+var _depth_warned := {}
 var _stepping: bool = false
 var _fidgeting: bool = false
 ## COVER_LOW, COVER_HIGH, or "" for a unit not using cover. Written by the unit
@@ -409,6 +539,9 @@ func _ready() -> void:
 	if LightingManager:
 		LightingManager.lighting_changed.connect(_apply_tile_light)
 	_sync_direction()
+	# Before the first _process, so a tool that builds a scene and grabs one
+	# frame sees the same thing the running game does.
+	_update_ground_depth()
 
 
 ## Whether playback should resolve with no time on the clock. Delegated to the
@@ -440,19 +573,28 @@ func _build_layers() -> void:
 		return
 	for layer in layers:
 		var frames := _load_frames(layer)
+		_authored_layers[layer] = frames != null
 		if frames == null:
-			frames = _placeholder_frames(layer)
+			frames = _unauthored_frames(layer)
 		else:
 			_authored = true
 		_frames[layer] = frames
 		var sprite := AnimatedSprite3D.new()
 		sprite.name = String(layer).capitalize()
 		sprite.sprite_frames = frames
+		# Authored sets arrive with their frames not yet loaded (see
+		# LazySpriteFrames). Hooked to the sprite's own signals rather than to
+		# `_play`, so whatever path changes what it shows fills that animation in
+		# first — and connected before the depth and additive hooks below, which
+		# read the frame's texture on the same signals.
+		var fill := func() -> void: LazySpriteFrames.ensure(sprite.sprite_frames, sprite.animation)
+		sprite.animation_changed.connect(fill)
+		sprite.sprite_frames_changed.connect(fill)
 		# Scale and pivot both derive from this layer's own texture size, which IS
 		# the pivot contract: every layer resolves to the same world height with
 		# its origin on `foot_anchor`, so reassigning one layer's frames can never
 		# shift it against the others no matter what resolution it was drawn at.
-		_apply_frame_scale(sprite, frames)
+		_apply_frame_scale(sprite, frames, layer)
 		# Always face the viewer, upright. Direction is carried by WHICH art is
 		# shown, never by turning the quad — that is the whole point of drawing
 		# eight of them.
@@ -465,8 +607,13 @@ func _build_layers() -> void:
 		sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
 		if test_shader:
 			_apply_test_shader(sprite)
+		elif not _refresh_depth(sprite, layer) and layer in ADDITIVE_LAYERS:
+			# `elif`: the test shader is a debug hook that wants to be seen on
+			# every layer as-is, so it keeps the last word where both apply.
+			_apply_additive(sprite)
 		add_child(sprite)
 		_sprites[layer] = sprite
+	_build_contact_shadow()
 
 
 ## Wires the test shader onto one sprite. material_override replaces the
@@ -487,14 +634,184 @@ func _apply_test_shader(sprite: AnimatedSprite3D) -> void:
 	push_texture.call()
 
 
+## Draws one layer as emitted light. See ADDITIVE_LAYERS.
+##
+## An override rather than a flag, because `AnimatedSprite3D` has no blend mode
+## to set -- checked against the class in 4.6.3: `alpha_cut`, `shaded` and
+## `transparent` are the whole of what it exposes, and none of them can say
+## "add". So the sprite's own material is shadowed by one that can, and the
+## frame texture is pushed into it by hand on every change, for exactly the
+## reason `_apply_test_shader` does the same: Godot does NOT feed the current
+## frame into an overriding material.
+##
+## Everything the sprite would have configured on its own material has to be
+## restated here, because `material_override` replaces it whole -- the billboard
+## and the unshading especially, which are silent and look like a broken sprite
+## rather than a missing flag when they are forgotten.
+func _apply_additive(sprite: AnimatedSprite3D) -> void:
+	# Cleared so the node does not claim a scissor that nothing is applying. The
+	# override is what actually decides, but a node whose inspector disagrees
+	# with what is on screen is a trap for whoever reads it next.
+	sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISABLED
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_FIXED_Y
+	# `_update_ground_depth` puts a non-uniform scale on the card to undo the
+	# camera's foreshortening, and a billboard rebuilds its model matrix from the
+	# view -- which drops that scale unless this says to keep it. Without it the
+	# flash is drawn 22% short against a body that is not.
+	mat.billboard_keep_scale = true
+	# LINEAR, alone among the layers. The body is NEAREST because it is drawn art
+	# and wants its texels crisp; this is a glow, and a glow resampled with
+	# nearest is a staircase. Flip it if the flash starts to look soft against
+	# the character rather than in front of it.
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	mat.albedo_color = Color(ADDITIVE_GAIN, ADDITIVE_GAIN, ADDITIVE_GAIN)
+	# So `modulate` still means something on this layer. It is white today (the
+	# flash is self-lit, see `_emitted_tint`), but a layer whose tint silently
+	# did nothing would be a nasty thing to debug later.
+	mat.vertex_color_use_as_albedo = true
+	# After the body in the transparent pass, whatever order the children ended
+	# up in.
+	mat.render_priority = 1
+	sprite.material_override = mat
+	var push_texture := func() -> void:
+		if sprite.sprite_frames and sprite.animation != &"" \
+				and sprite.sprite_frames.has_animation(sprite.animation):
+			mat.albedo_texture = sprite.sprite_frames.get_frame_texture(
+				sprite.animation, sprite.frame)
+	sprite.frame_changed.connect(push_texture)
+	sprite.animation_changed.connect(push_texture)
+	push_texture.call()
+
+
+## Draws one layer with its depth sidecar. See DEPTH_LAYER_SUFFIX.
+##
+## An override, for the reason `_apply_additive` gives: AnimatedSprite3D has no
+## way to write depth, and Godot does not feed its current frame into an
+## overriding material, so both textures are pushed in by hand on every change.
+## The sidecar is looked up by the SAME animation name and frame index the
+## sprite is showing -- `build_sprite_frames.gd` builds both sets from the same
+## file names, so the two stay in step by construction.
+##
+## The additive flash gets the additive variant of the shader rather than
+## losing its blend: it still adds light, it just tests at its real depth.
+##
+## Returns whether the layer is now drawn with depth. Called again by
+## `set_variant`, because a variant swap brings its own sidecar set, or none:
+## `WormUnit` swaps sheets as a pile grows and rescales `canvas_height` with it.
+func _refresh_depth(sprite: AnimatedSprite3D, layer: StringName) -> bool:
+	var depth := _load_depth_frames(layer) if _authored_layers.get(layer, false) else null
+	var mat: ShaderMaterial = _depth_materials.get(layer)
+	if depth == null:
+		_depth_frames.erase(layer)
+		if mat and sprite.material_override == mat:
+			# Back to the stock material. The push callback stays connected but
+			# does nothing while the layer has no entry in `_depth_frames`.
+			sprite.material_override = null
+			sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISCARD
+			if layer in ADDITIVE_LAYERS:
+				_apply_additive(sprite)
+		return false
+	_depth_frames[layer] = depth
+	if mat == null:
+		mat = _build_depth_material(sprite, layer)
+		_depth_materials[layer] = mat
+	sprite.material_override = mat
+	if layer in ADDITIVE_LAYERS:
+		sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISABLED
+	# UNSCALED canvas height, even on an enlarged-canvas layer: the sidecar is
+	# encoded in the body canvas's heights whatever its own resolution. Set on
+	# every refresh because a worm pile rescales it with the tier.
+	mat.set_shader_parameter("canvas_metres", canvas_height)
+	_push_depth_textures(sprite, layer)
+	return true
+
+
+## The depth ShaderMaterial for one layer, and the hooks that keep its textures
+## on the frame the sprite is showing. Built once per layer.
+func _build_depth_material(sprite: AnimatedSprite3D, layer: StringName) -> ShaderMaterial:
+	var additive := layer in ADDITIVE_LAYERS
+	var mat := ShaderMaterial.new()
+	mat.shader = DEPTH_ADD_SHADER if additive else DEPTH_SHADER
+	mat.set_shader_parameter("depth_range", DEPTH_RANGE)
+	if additive:
+		mat.set_shader_parameter("gain", ADDITIVE_GAIN)
+		# After the body in the transparent pass, as `_apply_additive` has it.
+		mat.render_priority = 1
+	var push := _push_depth_textures.bind(sprite, layer)
+	sprite.frame_changed.connect(push)
+	sprite.animation_changed.connect(push)
+	return mat
+
+
+## Pushes the current frame and its sidecar into the layer's depth material.
+## Looks both up by the SAME animation name and frame index, which
+## `build_sprite_frames.gd` keeps in step by building both from the same names.
+func _push_depth_textures(sprite: AnimatedSprite3D, layer: StringName) -> void:
+	var depth: SpriteFrames = _depth_frames.get(layer)
+	var mat: ShaderMaterial = _depth_materials.get(layer)
+	if depth == null or mat == null:
+		return
+	var frames := sprite.sprite_frames
+	var anim := sprite.animation
+	if frames == null or anim == &"" or not frames.has_animation(anim):
+		return
+	LazySpriteFrames.ensure(frames, anim)
+	LazySpriteFrames.ensure(depth, anim)
+	mat.set_shader_parameter("texture_albedo", frames.get_frame_texture(anim, sprite.frame))
+	var has := depth.has_animation(anim) and sprite.frame < depth.get_frame_count(anim)
+	mat.set_shader_parameter("use_depth", has)
+	if has:
+		mat.set_shader_parameter("texture_depth", depth.get_frame_texture(anim, sprite.frame))
+	elif not _depth_warned.has(layer):
+		# A stale depth build. The shader falls back to the origin's depth for
+		# the whole card (see `use_depth`); said once, because the fix is a
+		# rebuild, not anything here.
+		_depth_warned[layer] = true
+		push_warning("%s: %s%s_%s has no depth frame for %s:%d -- rebuild it with build_sprite_frames.gd" % [
+			name, layer, DEPTH_LAYER_SUFFIX, variant, anim, sprite.frame])
+
+
+## The depth sidecar set for one layer, or null if it has not been rendered.
+func _load_depth_frames(layer: StringName) -> SpriteFrames:
+	return LazySpriteFrames.open(
+		"res://assets/sprites/%s%s_%s.tres" % [layer, DEPTH_LAYER_SUFFIX, variant])
+
+
+## Lays the contact shadow on the floor under the unit. See CONTACT_SHADOW_SHADER.
+##
+## A child of this node, so it moves with the unit and hides with it
+## (`Unit.set_rendered` hides the whole visual). A circle, so the unit's facing
+## -- which this node turns with -- does not matter.
+func _build_contact_shadow() -> void:
+	if contact_shadow_radius <= 0.0:
+		return
+	var mesh := PlaneMesh.new()
+	mesh.size = Vector2.ONE * contact_shadow_radius * 2.0
+	var mat := ShaderMaterial.new()
+	mat.shader = CONTACT_SHADOW_SHADER
+	mat.set_shader_parameter("strength", contact_shadow_strength)
+	var node := MeshInstance3D.new()
+	node.name = "ContactShadow"
+	node.mesh = mesh
+	node.material_override = mat
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	node.position.y = CONTACT_SHADOW_LIFT
+	add_child(node)
+
+
 ## Authored art for one layer, or null while none exists. The naming convention is
 ## `[part]_[variant]_[animation]_[direction]_[frame].png` under assets/sprites,
 ## collected into one SpriteFrames per part+variant.
+##
+## Opened through LazySpriteFrames rather than `load()`: a set's textures load
+## per animation as it is first shown, not all at once here.
 func _load_frames(layer: StringName) -> SpriteFrames:
-	var path := "res://assets/sprites/%s_%s.tres" % [layer, variant]
-	if not ResourceLoader.exists(path):
-		return null
-	return load(path) as SpriteFrames
+	return LazySpriteFrames.open("res://assets/sprites/%s_%s.tres" % [layer, variant])
 
 
 ## Sizes one layer from its own art, so resolution is a property of the PNG
@@ -503,13 +820,61 @@ func _load_frames(layer: StringName) -> SpriteFrames:
 ## their origin at the feet.
 ##
 ## Reads the first frame it can find: a set whose frames disagree on size would
-## need a per-frame pivot, which is a problem no art has posed yet.
-func _apply_frame_scale(sprite: AnimatedSprite3D, frames: SpriteFrames) -> void:
+## need a per-frame pivot, which is a problem no art has posed yet. An OVERLAY
+## drawn on a bigger canvas is not that problem and must not be solved as if it
+## were — its frames all agree with each other, they just agree on something
+## other than the body's, which is what `layer_canvas_scale` states.
+func _apply_frame_scale(sprite: AnimatedSprite3D, frames: SpriteFrames,
+		layer: StringName) -> void:
 	var size := _frame_size(frames)
-	sprite.pixel_size = canvas_height / size.y
+	var scale := _canvas_scale(layer)
+	var anchor := _layer_anchor(layer)
+	sprite.pixel_size = canvas_height * scale / size.y
 	sprite.offset = Vector2(
-		size.x * (0.5 - foot_anchor.x),
-		size.y * (foot_anchor.y - 0.5))
+		size.x * (0.5 - anchor.x),
+		size.y * (anchor.y - 0.5))
+
+
+## How many times bigger this layer's canvas is than `canvas_height`.
+##
+## Guarded rather than trusted: a zero or negative scale is not a smaller
+## canvas, it is a division by zero in `pixel_size` and an invisible character.
+func _canvas_scale(layer: StringName) -> float:
+	var scale := float(layer_canvas_scale.get(layer, 1.0))
+	return scale if scale > 0.0 else 1.0
+
+
+## `foot_anchor` restated in this layer's own canvas.
+##
+## The enlarged canvas grows about the SAME centre as the body's (the sprite
+## camera is not moved for it — see `render_sprites.py` `build_camera`), so the
+## pivot keeps its world position by moving toward the middle of the frame by
+## exactly the scale. Derived here rather than measured again per layer, because
+## two anchors for one pivot is two things to keep in step.
+func _layer_anchor(layer: StringName) -> Vector2:
+	var scale := _canvas_scale(layer)
+	if is_equal_approx(scale, 1.0):
+		return foot_anchor
+	var centre := Vector2(0.5, 0.5)
+	return centre + (foot_anchor - centre) / scale
+
+
+## What a layer shows before its art exists.
+##
+## A layer that draws the character gets the code placeholder, which is what
+## lets the game run at all on a half-drawn character. An OVERLAY gets nothing —
+## an empty set, which `_play` reads as "this layer has nothing for this pose"
+## and hides. A placeholder body drawn at twice the canvas size on top of the
+## real one is not a degraded muzzle flash; it is a bug that looks like one, and
+## it would show up the moment a layer was named in the scene before its PNGs
+## had been rendered. Declaring the layer first and rendering after is the
+## normal order of work, so it has to be the safe one.
+func _unauthored_frames(layer: StringName) -> SpriteFrames:
+	if not is_equal_approx(_canvas_scale(layer), 1.0):
+		var empty := SpriteFrames.new()
+		empty.remove_animation(&"default")
+		return empty
+	return _placeholder_frames(layer)
 
 
 ## Pixel size of the art in `frames`, falling back to the placeholder canvas when
@@ -530,9 +895,17 @@ func _frame_size(frames: SpriteFrames) -> Vector2:
 func set_variant(new_variant: StringName) -> void:
 	variant = new_variant
 	for layer in layers:
+		# Headless builds no layers at all (`_build_layers` returns early), so
+		# `_sprites` is empty and there is nothing to reassign. Recorded here as
+		# well as there because a variant swap is no longer only a gear change
+		# the player triggers — `WormUnit` swaps art as a pile grows, which
+		# happens in the AI's own turn and therefore in every headless test run.
+		if not _sprites.has(layer):
+			continue
 		var frames := _load_frames(layer)
+		_authored_layers[layer] = frames != null
 		if frames == null:
-			frames = _placeholder_frames(layer)
+			frames = _unauthored_frames(layer)
 		else:
 			_authored = true
 		_frames[layer] = frames
@@ -540,7 +913,11 @@ func set_variant(new_variant: StringName) -> void:
 		sprite.sprite_frames = frames
 		# Re-derived, not carried over: the incoming art may be a different
 		# resolution from what this layer was showing.
-		_apply_frame_scale(sprite, frames)
+		_apply_frame_scale(sprite, frames, layer)
+		# And its own depth sidecars, or none -- in which case the layer drops
+		# back to the stock material and `_ground_depth_offset`.
+		if not test_shader:
+			_refresh_depth(sprite, layer)
 	# New art brings its own barrel with it.
 	_read_markers()
 	_play(_stance)
@@ -674,7 +1051,11 @@ func muzzle_world() -> Vector3:
 	# right IS the camera's horizontal right and its up IS world up — exactly the
 	# pair this offset decomposes onto.
 	var dx := (u - foot_anchor.x) * _canvas_metres.x
-	var dy := (foot_anchor.y - here.y) * _canvas_metres.y
+	# `_canvas_metres` is the canvas at its `pixel_size`, but the card is DRAWN
+	# `_view_stretch` taller than that, so the drawn barrel is that much further
+	# up than the un-stretched canvas says. Vertical only, for the same reason
+	# the stretch is: `dx` is already right, because horizontal maps 1:1.
+	var dy := (foot_anchor.y - here.y) * _canvas_metres.y * _view_stretch()
 	var right := _rig.global_transform.basis.x.normalized() if _rig else Vector3.RIGHT
 	return global_position + right * dx + Vector3.UP * dy
 
@@ -798,6 +1179,10 @@ func _process(_delta: float) -> void:
 	# a pose: the answer changes on every sprite frame, not just when the facing
 	# does.
 	_update_light_rig()
+	# Depends on BOTH yaws — the camera's, which sets the view axis, and the
+	# unit's, which sets the space the offset is assigned in — so it is polled
+	# beside them rather than hung off yaw_changed alone.
+	_update_ground_depth()
 
 
 ## Re-asserts whatever the unit should be showing, for a unit coming back into
@@ -822,6 +1207,154 @@ func _sync_direction() -> void:
 
 func _camera_yaw() -> float:
 	return _rig.rotation.y if _rig else 0.0
+
+
+# --- Ground depth ------------------------------------------------------------
+#
+# The sprite is a flat VERTICAL card standing at the tile centre, but the art on
+# it has real depth: the render was shot at 35.264 degrees, so a boot planted
+# toward the viewer was a boot genuinely in FRONT of the character's root,
+# standing on floor that is nearer the camera. The card draws it at the tile
+# centre's depth instead, the deck quad in front wins the depth test, and the
+# boot is sliced off along a screen-horizontal line -- horizontal because that is
+# where the y=0 plane meets a vertical billboard.
+#
+# `foot_anchor` cannot fix this, and no value of it can. The anchor names the row
+# that sits ON the floor; every row beneath it is beneath the floor by
+# construction. Raising the anchor until nothing clips just hangs the character
+# in the air instead, and which row the feet reach depends on the FACING (idle
+# spans 24 px across the merc's eight buckets), so one number cannot satisfy them
+# all. The clipping is a DEPTH problem and has to be answered in depth.
+#
+# What makes the answer free is that the camera is ORTHOGRAPHIC. Translating
+# along the view axis changes depth and nothing else -- there is no perspective
+# divide to scale the result -- so the sprite can be pushed toward the camera
+# until it beats the floor without moving on screen by so much as a pixel.
+#
+# THE WHOLE-CARD PUSH BELOW IS NOW THE FALLBACK. A layer with a depth sidecar
+# (DEPTH_LAYER_SUFFIX) answers the same problem per PIXEL instead: each one is
+# moved along the view axis to where its surface really was, which fixes the
+# foot without dragging the head forward into whatever stands in front of the
+# unit. `_update_ground_depth` leaves those layers at the origin and applies
+# this only to layers that have no sidecar rendered yet.
+
+
+## How far the sprite must travel along the view axis to clear the floor it
+## stands on, in metres.
+##
+## `d / sin(pitch)`, where `d` is how far below the origin the canvas reaches.
+## Both terms of the gap contribute and they collapse neatly: a card point `d`
+## below the origin sits `d*sin(pitch)` FURTHER from the camera than the origin,
+## while the floor pixel it collides with is `d*cos(pitch)^2/sin(pitch)` NEARER,
+## and `sin^2 + cos^2 = 1` does the rest.
+##
+## `d` is measured to the bottom EDGE of the canvas rather than to the lowest
+## opaque pixel, so it is the worst case no art can exceed and it costs no
+## measurement -- and it falls to zero on its own for placeholder art, which is
+## drawn with `foot_anchor.y` of 1.0 and has nothing below the anchor at all.
+## Never take more depth than this fraction of the nearest occluder's.
+##
+## The unit gains depth, so anything it gains MORE of than a legitimate occluder
+## has, it punches through. The nearest legitimate one is a wall on the near edge
+## of the unit's own tile — half a tile of ground — and 0.8 of that leaves a
+## visible margin rather than a photo finish.
+##
+## Costs nothing in practice: `_ground_depth_offset` measures to the bottom EDGE
+## of the canvas, while the art's real reach is shorter, so the cap only ever
+## bites into slack. On the nest, the widest case in the game, it gives up about
+## one pixel of clearance.
+const GROUND_DEPTH_SAFETY := 0.8
+
+
+func _ground_depth_offset() -> float:
+	# Through `_view_stretch`, because the card is drawn taller than its
+	# `pixel_size`: the rows below the anchor reach that much further below the
+	# floor, and a drop measured in un-stretched metres would under-clear them.
+	var drop := (1.0 - foot_anchor.y) * canvas_height * _view_stretch()
+	if drop <= 0.0 or _rig == null:
+		return 0.0
+	# basis.z of the rig points back along the view axis, so its Y component is
+	# sin(pitch) and its horizontal length is cos(pitch) — both read off the rig
+	# rather than recomputed from a copied constant, so a change to the camera's
+	# pitch carries here by itself.
+	var axis: Vector3 = _rig.global_transform.basis.z
+	var sin_pitch := axis.y
+	if sin_pitch <= 0.001:
+		return 0.0
+	var cos_pitch := Vector2(axis.x, axis.z).length()
+	var nearest_occluder := GridManager.TILE_SIZE * 0.5 * cos_pitch
+	return minf(drop / sin_pitch, nearest_occluder * GROUND_DEPTH_SAFETY)
+
+
+## How much taller than its `pixel_size` a RENDERED layer must be drawn, so that
+## a texel lands on screen exactly where the render put it.
+##
+## `1 / cos(pitch)`, and the reason is that the projection is applied TWICE.
+## `CANVAS_HEIGHT` is Blender's `ortho_scale`, which is a SCREEN extent: a point
+## at world height h, at the unit's own depth, was drawn `h * cos(pitch)` of
+## canvas above the origin. `pixel_size = canvas_height / texture_height` then
+## makes the card that many metres tall in WORLD, and the card is upright, so the
+## camera foreshortens the already-foreshortened image a second time. Measured
+## end to end at 0.81 before this, against a predicted cos(pitch) of 0.8165.
+##
+## Vertical only. Horizontally the card maps 1:1 to the screen under this camera,
+## so `pixel_size` is already right across and stretching both axes -- which is
+## all a scalar `pixel_size` can do -- would fix the height by making the figure
+## fat. A non-uniform `scale` is the only lever that separates them, and Godot's
+## billboard shader does preserve it (verified; it is `billboard_keep_scale` that
+## a scaled billboard would otherwise need).
+##
+## NOT applied to the code placeholder, which is drawn filling its canvas and so
+## has no baked foreshortening to undo -- stretching it would just make it 22%
+## too tall. See `_authored_layers`.
+func _view_stretch() -> float:
+	if _rig == null:
+		return 1.0
+	# Horizontal length of the rig's view axis IS cos(pitch); read off the rig so
+	# a change to the camera's pitch carries here by itself.
+	var axis: Vector3 = _rig.global_transform.basis.z
+	var cos_pitch := Vector2(axis.x, axis.z).length()
+	return 1.0 / cos_pitch if cos_pitch > 0.001 else 1.0
+
+
+## Reconciles every layer with the camera: how tall the card is drawn, and how
+## much depth it is given.
+##
+## Applied to the LAYERS, not to this node: `muzzle_world` and `muzzle_origin`
+## both build from this node's `global_position`, and the flashlight hangs off
+## `LightMount` beside them. Moving or scaling the whole `Visual` would drag the
+## lamp and the shot origin off the unit for a change that is purely about what
+## the rasteriser does with the card.
+##
+## Polled rather than done once at build time because `_rig` is found in `_ready`
+## and a unit may be spawned before the rig exists; re-asserting it every frame
+## costs a basis multiply and cannot get stuck wrong.
+func _update_ground_depth() -> void:
+	if _sprites.is_empty():
+		return
+	var offset := _rig.global_transform.basis.z * _ground_depth_offset() if _rig \
+		else Vector3.ZERO
+	# Into this node's space: the unit turns to face, so a world-space offset
+	# would be spun around by the facing if it were assigned raw.
+	var local := global_transform.basis.inverse() * offset
+	# The same axis the ground offset rides, one step further toward the camera,
+	# for the layers that must not be coplanar with the body. See
+	# OVERLAY_DEPTH_BIAS.
+	var overlay := local
+	if _rig:
+		overlay += global_transform.basis.inverse() \
+			* (_rig.global_transform.basis.z * OVERLAY_DEPTH_BIAS)
+	var stretch := _view_stretch()
+	for layer in _sprites:
+		var sprite := _sprites[layer] as AnimatedSprite3D
+		if _depth_frames.has(layer):
+			# Real per-pixel depth: the card stands exactly on the origin its
+			# sidecar is measured from. Any push here would move every pixel
+			# off the depth the render gave it.
+			sprite.position = Vector3.ZERO
+		else:
+			sprite.position = overlay if layer in ADDITIVE_LAYERS else local
+		sprite.scale.y = stretch if _authored_layers.get(layer, false) else 1.0
 
 
 ## Static so the mapping can be checked without a scene — see
@@ -1046,9 +1579,9 @@ func _phase_time(base: StringName, resolved: StringName, plain: float,
 ## Where a shot leaves the weapon, in world space.
 ##
 ## Derived from the UNIT's yaw rather than from the sprite's screen direction, on
-## purpose: the muzzle is a point in the world that LOS and the tracer both read,
-## and rotating the camera must not move it. A per-direction table would be an
-## art refinement on top of this, not a replacement for it.
+## purpose: the muzzle is a point in the world that LOS and the shot VFX both
+## read, and rotating the camera must not move it. A per-direction table would be
+## an art refinement on top of this, not a replacement for it.
 func muzzle_origin() -> Vector3:
 	var yaw: float = _unit.rotation.y if _unit else 0.0
 	var forward := Vector3(-sin(yaw), 0.0, -cos(yaw))
@@ -1125,7 +1658,20 @@ func _apply_tile_light() -> void:
 	for layer in layers:
 		var sprite: AnimatedSprite3D = _sprites.get(layer)
 		if sprite:
-			sprite.modulate = _status_color if layer in SELF_LIT_LAYERS else tint
+			sprite.modulate = _emitted_tint(layer) if layer in SELF_LIT_LAYERS \
+				else tint
+
+
+## What a SELF_LIT layer is modulated by, given that it is not being dimmed by
+## the tile it stands on.
+##
+## The status light carries a colour the unit assigns — that is the whole point
+## of it. Every other self-lit layer is simply left alone at white, the muzzle
+## flash included, and the faction tint has no business on it either: a merc
+## recoloured rust still fires a white flash, because the tint is a stand-in for
+## a second sprite set and not a property of the character's ammunition.
+func _emitted_tint(layer: StringName) -> Color:
+	return _status_color if layer == &"status" else Color.WHITE
 
 
 ## Recolours the self-lit `status` layer. The security robots' one concession to

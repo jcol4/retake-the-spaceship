@@ -46,9 +46,11 @@ lights is the answer to one and buys nothing against the other.
 Characters are **prerendered 3D**, not hand-drawn. A rigged character is posed per action in
 Blender, turned through eight facings under an orthographic camera locked to the game's exact
 pitch and yaw, and rendered to flat PNGs that the game composites as `Sprite3D`s. This is what
-Fallout and Diablo did, and the fixed camera is what makes it affordable: with exactly one
-viewpoint, the key light can be fixed in world space and genuinely relights a character as it
-turns — eight renders per pose rather than the sixty-four a rotatable camera would need.
+Fallout and Diablo did, and the camera's fixed pitch is what makes it affordable: the yaw
+snaps in quarter turns and nothing else moves, so a quarter turn shifts the eight direction
+buckets by exactly two whole steps and needs no new art. The key light can therefore be fixed
+in world space and genuinely relights a character as it turns — eight renders per pose rather
+than the sixty-four a freely orbitable camera would need.
 
 ```sh
 # 1. Write a .blend containing the camera and light rig and nothing else — the file to animate into.
@@ -63,6 +65,49 @@ SF_VARIANT=merc SF_LAYERS=body,arm godot --headless --path . --script res://tool
 # Review: one looping GIF per direction, at the cadence the game will actually play it.
 blender -b art_src/merc_anim.blend -P tools/make_sprite_gif.py -- --variant merc --pose run --out out
 ```
+
+The muzzle flash is rendered separately, and on a bigger canvas, because it does not fit in
+the body's: the barrel tip sits 29 px from the top edge of the 256 px frame facing `nw`, so a
+flash of any real size is cut off — on a different edge for every facing. It is its own
+`flash` layer, drawn through the same camera at the same centre with double the extent and
+double the resolution, so metres-per-pixel is unchanged and it still registers with the body.
+One frame of `fire_shoot`, eight facings, and no body art is touched:
+
+```sh
+# Render the flash alone, oversized. Re-runnable in about a minute.
+blender -b art_src/merc_anim.blend -P tools/render_sprites.py -- --variant merc --flash
+
+# Collect it, same as any layer.
+SF_VARIANT=merc SF_LAYERS=flash godot --headless --path . --script res://tools/build_sprite_frames.gd
+```
+
+The character scene names the layer LAST in `layers` (layers draw back to front) and states
+`layer_canvas_scale = {&"flash": 2.0}`. That one number is all it states: `UnitVisual` derives
+the layer's canvas height and its anchor from it, so there is no second hand-measured anchor
+to drift out of step with the body's.
+
+The flash layer is also exempt from the tile-light tint (`SELF_LIT_LAYERS`), for the same
+reason the robots' status light is: it is the thing emitting, not the thing being lit. A shot
+fired in an unlit corridor is the brightest thing on screen — and since the room-filling
+`OmniLight3D` that used to fire alongside it was removed, this layer is the only thing left
+saying the gun went off.
+
+The worm piles have a step 0, because their .blends are **generated rather than authored** —
+each is the single worm's armature instanced into a heap with every copy's action
+phase-shifted, so the pile writhes instead of pulsing as one drawing:
+
+```sh
+# 0. Build art_src/worm_pile_{clutch,knot,tide}.blend from art_src/worm_anims.blend.
+blender -b art_src/worm_anims.blend -P tools/build_worm_piles.py
+
+# 2. Each pile is one object to the renderer: the `WormPile` Empty its worms hang off.
+blender -b art_src/worm_pile_tide.blend -P tools/render_sprites.py -- \
+    --variant worm_tide --character WormPile --poses idle,walk
+```
+
+Re-run step 0 after any change to the worm itself — the piles are copies of it and will not
+pick the change up otherwise. `tools/build_worm_piles.py` seeds its own RNG, so rebuilding
+reproduces the same heap rather than reshuffling art that has already been judged on screen.
 
 The filename `[layer]_[variant]_[pose]_[dir]_[frame].png` is the whole contract between the two
 halves — step 2 writes those names and step 3 is the only thing that reads them.
@@ -115,6 +160,7 @@ godot --headless --path . --script res://tools/test_map_roundtrip.gd   # map for
 godot --headless --path . --script res://tools/test_edge_cover.gd      # cover direction, diagonals, degradation
 godot --headless --path . --script res://tools/test_movement.gd        # 8-way adjacency, diagonal cost, corner guard
 godot --headless --path . --script res://tools/test_sprite_direction.gd # direction buckets, mirror rule
+godot --headless --path . --script res://tools/test_sprite_layers.gd    # overlay layer registration, flash tint exemption
 godot --headless --path . --script res://tools/test_iso_picking.gd     # mouse picking at all four yaws
 godot --headless --path . --script res://tools/test_cerberus.gd        # security-robot faction rules
 godot --path . --script res://tools/test_room_visibility.gd            # render gating (needs a window)
