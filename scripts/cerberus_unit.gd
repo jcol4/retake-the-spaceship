@@ -169,6 +169,59 @@ func _can_see(unit: Unit) -> bool:
 	return GridManager.has_line_of_sight(self, unit)
 
 
+## Intruders are ranked by THREAT, not by species and not merely by distance
+## (GDD §11.0, CrossFactionRules.intruder_threat): has it fired on the network,
+## is it armed, is it moving, how close. One formula for a soldier, a merc and an
+## alien alike — the lockdown protocol does not care what an intruder is.
+func _target_rank(unit: Unit, distance: int) -> float:
+	return _threat_of(unit, distance)
+
+
+func _threat_of(unit: Unit, distance: int) -> float:
+	var moving := TurnManager.turn_number - unit.last_moved_turn <= MOTION_MEMORY_TURNS
+	return CrossFactionRules.intruder_threat(distance, unit.active_weapon() != null, moving,
+		SecurityNetwork.is_aggressor(security_zone, unit))
+
+
+## Unlike an alien, a robot already in a fight keeps re-ranking what its
+## sensors pick up: a machine triages, it does not fixate. It switches only for
+## a clearly bigger threat (CrossFactionRules.should_switch), so two similar
+## intruders do not have it swinging back and forth — but whoever opens fire on
+## the network jumps the queue. This is what stops a sentry plinking at a Fodder
+## while a gunman shoots it in the back.
+func _look_for_targets() -> void:
+	if alert_state != AlertState.COMBAT or not _still_a_target(target):
+		super()
+		return
+	var current := _threat_of(target, GridManager.chebyshev_dist(grid_pos, target.grid_pos))
+	var best: Unit = null
+	var best_score := current
+	for unit in engageable_hostiles():
+		if unit == target or not _can_see(unit):
+			continue
+		var score := _threat_of(unit, GridManager.chebyshev_dist(grid_pos, unit.grid_pos))
+		if score > best_score and CrossFactionRules.should_switch(current, score):
+			best_score = score
+			best = unit
+	if best == null:
+		return
+	target = best
+	last_known_pos = best.grid_pos
+	_has_last_known = true
+	_last_contact_turn = TurnManager.turn_number
+	action_logged.emit("%s re-prioritises: %s" % [stats.display_name, best.stats.display_name])
+
+
+## Being shot is a hostile act against the NETWORK, remembered zone-wide
+## (SecurityNetwork.report_aggression) so every robot on this zone ranks the
+## shooter as the top threat from now on — infrastructure has a memory, which
+## is the robots' version of the mercs' "confirmed hit" tally.
+func come_under_fire(shooter: Unit) -> void:
+	if shooter != null and is_hostile_to(shooter):
+		SecurityNetwork.report_aggression(security_zone, shooter)
+	super(shooter)
+
+
 ## A beam landing on a robot means nothing to it. Overridden to a no-op rather
 ## than left inherited, because the base version would otherwise have a torch
 ## sweep across a corridor waking every machine in it — the exact tactic the
@@ -253,7 +306,18 @@ func apply_emp(turns: int) -> void:
 	])
 
 
+## Extraction plan 3.1: the Salvage is now a real ITEM — one VALUABLE in the
+## wreck's own inventory, worth `salvage_value` points, which makes the wreck a
+## loot source on its tile like any corpse (Unit.loot_blocker). It only counts if
+## somebody takes it and extracts, like every other find.
+##
+## The bare SecurityNetwork counter is KEPT alongside it, because something still
+## reads it: tools/test_cerberus.gd asserts it, and the HUD-less signal is the
+## only "a robot paid out" event the network exposes. Nothing in the economy reads
+## it — Phase 4 prices MissionResult.loot, where the item lands (decisions log).
 func _on_destroyed(_unit: Unit) -> void:
+	if not multiplayer.has_multiplayer_peer() or multiplayer.is_server():
+		add_item(ItemPresets.make_salvage(salvage_value), true)
 	SecurityNetwork.add_salvage(salvage_value)
 	action_logged.emit("%s is DESTROYED — %d Salvage recovered" % [stats.display_name, salvage_value])
 

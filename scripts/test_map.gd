@@ -26,13 +26,45 @@ const DEFAULT_LAYOUT := "res://maps/test_deck.txt"
 
 @export var layout_path: String = DEFAULT_LAYOUT
 
+## The deployment deck `build_deck` last built ({} if the deck came from the
+## command line or `layout_path`), so main.gd can tell whether it still has to
+## build the one its deployment names.
+var built_deck: Dictionary = {}
+
 
 func _ready() -> void:
+	# A campaign mission (extraction plan 4.2) names its deck in the deployment:
+	# the contract's generated deck, or the host's command-line override. It comes
+	# first, and it is the SAME dictionary on every co-op peer (Campaign sends it),
+	# so a client builds the host's deck here without the rebuild the old
+	# `_rpc_use_layout` handshake needed.
+	if build_deck(Campaign.deployment.get("deck", {})):
+		return
 	var seed_arg: Variant = _cmdline_seed()
 	if seed_arg != null:
 		build(MapGenerator.generate(seed_arg))
+		# The same deck a deployment's command-line override names
+		# (Campaign._apply_cmdline_deck), so main.gd need not build it twice.
+		built_deck = {"kind": "generated", "seed": seed_arg, "size": CampaignEconomy.DeckSize.MEDIUM}
 	else:
 		build_layout(resolve_layout())
+		if resolve_layout() != layout_path:
+			built_deck = {"kind": "layout", "path": resolve_layout()}
+
+
+## Builds a deployment's deck: {"kind": "generated", "seed", "size"} (size a
+## CampaignEconomy.DeckSize) or {"kind": "layout", "path"}. False, building
+## nothing, for {} or anything it does not recognise.
+func build_deck(deck: Dictionary) -> bool:
+	built_deck = deck.duplicate()
+	match String(deck.get("kind", "")):
+		"generated":
+			build_generated(int(deck.get("seed", 0)), ContractOffer.config_for(int(deck.get("size", CampaignEconomy.DeckSize.MEDIUM))))
+			return true
+		"layout":
+			build_layout(String(deck.get("path", layout_path)))
+			return true
+	return false
 
 
 ## Split out from `_ready()` so main.gd can REBUILD from a different layout
@@ -62,8 +94,8 @@ func generated_seed() -> Variant:
 	return _cmdline_seed()
 
 
-func build_generated(map_seed: int) -> void:
-	build(MapGenerator.generate(map_seed))
+func build_generated(map_seed: int, cfg: MapGenerator.Config = null) -> void:
+	build(MapGenerator.generate(map_seed, cfg))
 
 
 ## `--seed=<n>` from the command line, or null if not passed. A generated deck

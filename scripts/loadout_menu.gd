@@ -19,11 +19,21 @@ var _ammo_pickers: Array[OptionButton] = []
 var _stat_labels: Array[Label] = []
 
 ## AttachmentPresets id -> copies owned. Set before `setup`; left empty, it
-## falls back to one of everything until progression hands out unlocks.
+## falls back to one of everything — unless `from_stash` is set.
 var inventory: Dictionary = {}
 ## AmmoPresets ids unlocked. Standard is offered regardless. Left empty, it
-## falls back to every type.
+## falls back to every type — unless `from_stash` is set.
 var unlocked_ammo: Array = []
+## Extraction plan 4.2: true when `inventory`/`unlocked_ammo` come from the
+## campaign stash (main.gd, via Campaign.loadout_inventory). An empty stash then
+## MEANS empty — a campaign that has lost every copy must not be handed one of
+## everything by the placeholder fallback.
+var from_stash := false
+## Per unit index: the attachment ids and ammo its weapon arrived with (the
+## soldier's saved loadout, SoldierRecord), consumed by the first slot refresh so
+## the screen opens on what the soldier last deployed with.
+var _initial_attachments: Array = []
+var _initial_ammo: Array[int] = []
 
 
 func setup(units: Array[PlayerUnit]) -> void:
@@ -31,9 +41,9 @@ func setup(units: Array[PlayerUnit]) -> void:
 	# weapon choice isn't this client's call. Solo play owns everything (see
 	# Unit.is_owned_by_local_player), so the filter is a no-op there.
 	_units = units.filter(func(u: PlayerUnit) -> bool: return u.is_owned_by_local_player())
-	if inventory.is_empty():
+	if inventory.is_empty() and not from_stash:
 		inventory = AttachmentPresets.placeholder_inventory()
-	if unlocked_ammo.is_empty():
+	if unlocked_ammo.is_empty() and not from_stash:
 		unlocked_ammo = AmmoPresets.placeholder_unlocks()
 	var root := Control.new()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -83,7 +93,20 @@ func _build_unit_row(unit: PlayerUnit) -> Control:
 	row.add_child(name_label)
 
 	var picker := OptionButton.new()
-	var default_id := WeaponPresets.default_for_class(unit.stats.unit_class)
+	# The gun the soldier arrived with — their saved campaign loadout, or the
+	# class default ClassPresets.roll fitted — is the preselection.
+	var current: WeaponData = unit.stats.weapon
+	var default_id: int = current.id if current != null and current.id in WeaponPresets.PRIMARY_IDS \
+		else WeaponPresets.default_for_class(unit.stats.unit_class)
+	var initial: Array[int] = []
+	if current != null and current.id == default_id:
+		for a in current.attachments():
+			initial.append(a.id)
+	_initial_attachments.append(initial)
+	var initial_ammo := AmmoPresets.AmmoId.STANDARD
+	if current != null and current.id == default_id and current.ammo != null:
+		initial_ammo = current.ammo.id
+	_initial_ammo.append(initial_ammo)
 	var selected_index := 0
 	for id in WeaponPresets.all_ids():
 		var d: Dictionary = WeaponPresets.DATA[id]
@@ -116,6 +139,29 @@ func _build_unit_row(unit: PlayerUnit) -> Control:
 	block.add_child(stats)
 	_stat_labels.append(stats)
 
+	# The sidearm (extraction plan 2.5): fixed gear every soldier deploys with, so
+	# a line rather than a picker — shown because it is what this soldier fights
+	# with while carrying a body, and the player should know what that is before
+	# it matters.
+	var sidearm := Label.new()
+	var s: Dictionary = WeaponPresets.DATA[WeaponPresets.SIDEARM_ID]
+	sidearm.text = "Sidearm: %s  (Acc %d / Dmg %d / Mag %d / %d total) — fixed, used while carrying" % [
+		s["display_name"], s["base_accuracy"], s["damage"], s["mag_size"],
+		s["mag_size"] + s["starting_reserve"]]
+	sidearm.modulate = Color(0.8, 0.8, 0.8)
+	block.add_child(sidearm)
+
+	# Campaign context (extraction plan 4.2): grenades are allotted from the stock
+	# in the hub, and an untreated injury rides into the mission — both shown so
+	# nothing about the soldier is a surprise once the shooting starts.
+	var extras := Label.new()
+	extras.text = "Grenades: %d" % unit.grenade_charges
+	var hurt := unit.injured_summary()
+	if hurt != "None":
+		extras.text += "   |   Injured: %s" % hurt
+	extras.modulate = Color(0.8, 0.8, 0.8)
+	block.add_child(extras)
+
 	picker.item_selected.connect(func(_i: int) -> void: _refresh_slots(index))
 	_refresh_slots(index)
 	return block
@@ -125,9 +171,15 @@ func _build_unit_row(unit: PlayerUnit) -> Control:
 ## current weapon, keeping each slot's pick where it still fits.
 func _refresh_slots(index: int) -> void:
 	var weapon_id: int = _pickers[index].get_selected_metadata()
+	var initial: Array = _initial_attachments[index]
 	for slot in AttachmentData.Slot.values():
 		var slot_picker: OptionButton = _slot_pickers[index][slot]
 		var previous: int = slot_picker.get_selected_metadata() if slot_picker.item_count > 0 else -1
+		# First fill: the saved loadout's pick for this slot, if it had one.
+		if slot_picker.item_count == 0:
+			for aid in initial:
+				if AttachmentPresets.DATA[aid]["slot"] == slot:
+					previous = aid
 		slot_picker.clear()
 		slot_picker.add_item("%s: None" % AttachmentData.Slot.keys()[slot].capitalize())
 		slot_picker.set_item_metadata(0, -1)
@@ -148,7 +200,7 @@ func _refresh_slots(index: int) -> void:
 ## the pick if it still fits, else back to Standard.
 func _refresh_ammo(index: int, weapon_id: int) -> void:
 	var ammo_picker := _ammo_pickers[index]
-	var previous: int = ammo_picker.get_selected_metadata() if ammo_picker.item_count > 0 else AmmoPresets.AmmoId.STANDARD
+	var previous: int = ammo_picker.get_selected_metadata() if ammo_picker.item_count > 0 else _initial_ammo[index]
 	ammo_picker.clear()
 	for ammo_id in AmmoPresets.ids_for(weapon_id):
 		if ammo_id != AmmoPresets.AmmoId.STANDARD and not (ammo_id in unlocked_ammo):

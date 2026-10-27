@@ -105,7 +105,9 @@ static func update_priority_target(board: SquadBlackboard, members: Array) -> Un
 		return is_instance_valid(u) and not u.is_downed)
 	var seen := {}
 	for member: Unit in live:
-		for hostile: Unit in member.hostiles():
+		# `engageable_hostiles`, not `hostiles` (Phase 7): a third party the squad
+		# is deliberately leaving alone is never its priority, however it scores.
+		for hostile: Unit in member.engageable_hostiles():
 			if hostile.is_downed or seen.has(hostile):
 				continue
 			if GridManager.has_line_of_sight(member, hostile):

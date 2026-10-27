@@ -81,6 +81,9 @@ class Cell:
 
 var size := Vector2i.ZERO  # width (x) by depth (z), in tiles
 var seed: int = 0  # 0 for hand-authored maps
+## Which of MapGenerator's rerolls produced this deck (0 = the seed itself). See
+## MapGenerator.generate. Always 0 for a hand-authored deck.
+var generation_attempt: int = 0
 var cells: Dictionary = {}  # Vector3i -> Cell
 var stair_links: Array = []  # [[Vector3i, Vector3i], ...], filled by resolve_stairs()
 
@@ -110,6 +113,14 @@ var room_of: Dictionary = {}  # Vector3i cell pos -> index into `rooms`
 ## crate — there is no separate cover concept for furniture.
 var obstacles: Array = []
 
+## Wrecked ships and heavy hangar machinery (GDD §7.2): `Rect2i` footprints, cells
+## Terrain.OBSTACLE like a cover block, but FULL HEIGHT and indestructible — they
+## block movement, line of sight AND light like a bulkhead, and give heavy cover
+## to whoever stands against them. The big set dressing that turns a hangar bay
+## into terrain worth fighting over. MapBuilder builds them (layer 1, like a
+## wall); MapAscii carries them as `[wrecks]`.
+var wrecks: Array = []
+
 ## How many worms stand on a `Spawn.WORM` tile: `Vector3i -> int`.
 ##
 ## A worm mass is not a second unit type — it is one `WormUnit` carrying more HP
@@ -123,6 +134,232 @@ var obstacles: Array = []
 ## `MapAscii.encode_worms` writes nothing for a count of 1, so a deck that never
 ## had a `[worms]` section does not grow one on the way out.
 var worm_counts: Dictionary = {}
+
+
+# --- Hangars (GDD §7.2) -------------------------------------------------------
+#
+# A hangar is a set-piece ROOM, not a tile feature: an open bay, a landing pad,
+# and a fixed 3x3 extraction square in front of where the ramp comes down. All of
+# that geometry is derived from two authored facts — where the pad's centre is,
+# and which way the ramp faces — so a hand-authored deck names only those (see
+# MapAscii's `[hangars]`) and the generator makes the same two choices. The bay
+# is whatever compartment the pad sits in, read off `room_of`, so it can never
+# disagree with the room graph that discovery (ExtractionManager) is keyed on.
+
+## Half-width of the landing pad, in tiles: the pad is (2r+1)^2 centred on
+## `pad_center`, i.e. 5x5 — the space RESERVED for the ship (Dropship.HULL_SIZE
+## is derived from it). Sized for the real dropship model rather than the box
+## placeholder, so the ship asset can grow into it without moving a single
+## hangar: 5 tiles = 7.5 m a side. While a ship is down the pad blocks movement,
+## line of sight and light (ExtractionManager._block_pad, Dropship collision).
+## Change it here and every hangar, the bay sizing (`hangar_landing_zone`), the
+## door-gun corner and the hull follow.
+const HANGAR_PAD_RADIUS := 2
+## Half-width of the extraction square: 3x3 per GDD §7.2.
+const HANGAR_SQUARE_RADIUS := 1
+## Pad centre to square centre, along the ramp side. Pad radius + square radius
+## + 1, so the square's first row sits directly against the pad's ramp edge —
+## the tiles the ramp actually comes down onto — with no gap a soldier could
+## mistake for "in front of the ship".
+const HANGAR_SQUARE_OFFSET := HANGAR_PAD_RADIUS + HANGAR_SQUARE_RADIUS + 1
+## Tiles of clear floor kept round the pad + square when the bay is SIZED (not
+## when cover is placed — that keeps its own one-tile walkway): the landing
+## zone a bay is measured against is the ship and the square grown by this.
+const HANGAR_LZ_APRON := 1
+## A generated bay is this many times the landing zone's area (GDD §7.2:
+## "3–4x the size of the hangar" — the ship's space plus the square). The rest
+## is the room the squad fights in while the ship comes in: cover, wrecks,
+## approaches.
+const HANGAR_BAY_AREA_MIN := 3.0
+const HANGAR_BAY_AREA_MAX := 4.0
+
+
+class Hangar:
+	## Index into MapData.rooms of the bay this hangar's pad sits in.
+	var room_index: int = -1
+	## Every walkable GRID position of the bay, sorted. "Anywhere in the bay" is
+	## where a call-in may be made from (GDD §7.3).
+	var bay_cells: Array[Vector3i] = []
+	## The 3x3 extraction square in front of the ramp, as grid positions. Who is
+	## standing here when the ship leaves is who extracts (GDD §7.4).
+	var square: Array[Vector3i] = []
+	var pad_center := Vector3i.ZERO
+	## Which way the ramp faces, as a MapData.Side: the square lies on this side
+	## of the pad.
+	var ramp_side: int = Side.SOUTH
+	## The hangar the squad inserts at. Starts discovered (GDD §7.2), and the
+	## generator keeps it free of enemy spawns.
+	var is_insertion: bool = false
+
+	func in_bay(grid_pos: Vector3i) -> bool:
+		return bay_cells.has(grid_pos)
+
+	func in_square(grid_pos: Vector3i) -> bool:
+		return square.has(grid_pos)
+
+
+var hangars: Array[Hangar] = []
+
+
+# --- Loot containers (GDD §7.5, extraction plan 3.2) --------------------------
+#
+# A crate or locker standing on one tile, with what is in it. The tile keeps its
+# own terrain (FLOOR) so the room graph, bays and every existing walkability
+# reader are unchanged; the container makes it impassable on top of that — at
+# build time (LootManager.build_from) and, engine-free, through `is_passable`,
+# which is what anything asking "can a unit walk here" of a MapData must use.
+# No glyph: contents are a list, and the one-glyph grid cannot carry one, so it is
+# MapAscii's `[loot]` section, like `[hangars]`.
+
+
+class LootSpot:
+	var pos := Vector3i.ZERO
+	## ItemPresets codes, in panel order.
+	var items := PackedStringArray()
+
+
+var containers: Array[LootSpot] = []
+
+
+func add_container(pos: Vector3i, items: PackedStringArray = PackedStringArray()) -> LootSpot:
+	var spot := LootSpot.new()
+	spot.pos = pos
+	spot.items = items
+	containers.append(spot)
+	return spot
+
+
+func container_at(pos: Vector3i) -> LootSpot:
+	for spot in containers:
+		if spot.pos == pos:
+			return spot
+	return null
+
+
+func has_container(pos: Vector3i) -> bool:
+	return container_at(pos) != null
+
+
+## Walkable AND not under a container: whether a unit can actually stand here.
+## `is_walkable` stays the terrain question (a crate does not change what the
+## floor IS), so the room graph and hangar bays are built the same with or
+## without loot on the deck.
+func is_passable(pos: Vector3i) -> bool:
+	return is_walkable(pos) and not has_container(pos)
+
+
+## Builds a Hangar from its two authored facts and appends it. The bay and the
+## square are derived, so this must run AFTER the room graph exists
+## (`compute_rooms` for a text deck, the generator's own `room_of` for a
+## generated one) — which is why neither MapAscii nor MapGenerator writes the
+## derived fields itself.
+func add_hangar(pad_center: Vector3i, ramp_side: int, is_insertion: bool) -> Hangar:
+	var h := Hangar.new()
+	h.pad_center = pad_center
+	h.ramp_side = ramp_side
+	h.is_insertion = is_insertion
+	h.room_index = room_index_at(pad_center)
+	h.square = hangar_square_cells(pad_center, ramp_side)
+	if h.room_index >= 0:
+		for pos: Vector3i in room_of:
+			if room_of[pos] == h.room_index and is_walkable(pos):
+				h.bay_cells.append(walkable_pos(pos))
+		h.bay_cells.sort()
+	hangars.append(h)
+	return h
+
+
+## The 3x3 square for a pad at `pad_center` with its ramp facing `ramp_side`.
+## Static so the generator can test a candidate placement before committing it.
+static func hangar_square_cells(pad_center: Vector3i, ramp_side: int) -> Array[Vector3i]:
+	var centre := pad_center + SIDE_STEP[ramp_side] * HANGAR_SQUARE_OFFSET
+	return _block(centre, HANGAR_SQUARE_RADIUS)
+
+
+static func hangar_pad_cells(pad_center: Vector3i) -> Array[Vector3i]:
+	return _block(pad_center, HANGAR_PAD_RADIUS)
+
+
+## The pad and the square together as one (x, z) rect: everything the ship and
+## the boarding squad need, which no cover, wreck, crate or spawn may touch.
+static func hangar_reserved_rect(pad_center: Vector3i, ramp_side: int) -> Rect2i:
+	var cells := hangar_pad_cells(pad_center)
+	cells.append_array(hangar_square_cells(pad_center, ramp_side))
+	var rect := Rect2i(cells[0].x, cells[0].z, 1, 1)
+	for c: Vector3i in cells:
+		rect = rect.expand(Vector2i(c.x, c.z)).expand(Vector2i(c.x + 1, c.z + 1))
+	return rect
+
+
+## The landing zone a bay is sized against: the reserved rect grown by
+## HANGAR_LZ_APRON on every side. Only its AREA matters to the generator, so
+## where it sits is irrelevant; (0,0) pad facing south is as good as any.
+static func hangar_landing_zone_area() -> int:
+	var rect := hangar_reserved_rect(Vector3i.ZERO, Side.SOUTH).grow(HANGAR_LZ_APRON)
+	return rect.size.x * rect.size.y
+
+
+## Why hangar `h` is not a usable extraction point on this deck, or "". Every
+## tile of the pad and the square must be open floor in the bay — no wall, no
+## cover block, no wreck, no crate — so there is always somewhere for the ship
+## to set down and nine tiles to board from. Generated decks are built to pass
+## (tools/test_hangar_gen.gd fuzzes it); hand-authored ones are checked by
+## MapAscii on load.
+func hangar_problem(h: Hangar) -> String:
+	for pos in hangar_pad_cells(h.pad_center):
+		if not is_passable(pos) or room_index_at(pos) != h.room_index:
+			return "pad tile %s is blocked or outside the bay" % pos
+	for pos in h.square:
+		if not is_passable(pos) or room_index_at(pos) != h.room_index:
+			return "square tile %s is blocked or outside the bay" % pos
+	return ""
+
+
+## The tile a landed ship's door gun stands on (extraction plan Phase 5): the
+## pad's ramp-side corner on the ship's own right hand, which is the cell
+## directly under `Dropship.door_gun_mount` (the mount sits on that corner of the
+## hull roof; tools/test_door_gun.gd checks the two agree).
+##
+## ON the pad on purpose. The pad is impassable while the ship is down
+## (ExtractionManager._block_pad), so the gunner takes no tile anybody could have
+## walked on — in particular none of the square's nine, which the squad needs
+## every one of — and it is still movement-adjacent to the square's corner, so a
+## clawing alien can reach it from the square like it reaches anything else (an
+## occupied goal may be pathed TO, GridManager._path_open). Static and
+## engine-free, so both co-op peers derive the same tile from their own MapData.
+##
+## "Right" of the ramp direction (x, z) is (z, -x): the Dropship is built facing
+## local +Z and turned by atan2(x, z), which carries local +X onto exactly that.
+static func hangar_gun_cell(pad_center: Vector3i, ramp_side: int) -> Vector3i:
+	var step: Vector3i = SIDE_STEP[ramp_side]
+	var right := Vector3i(step.z, 0, -step.x)
+	return pad_center + step * HANGAR_PAD_RADIUS + right * HANGAR_PAD_RADIUS
+
+
+static func _block(centre: Vector3i, radius: int) -> Array[Vector3i]:
+	var out: Array[Vector3i] = []
+	for dz in range(-radius, radius + 1):
+		for dx in range(-radius, radius + 1):
+			out.append(centre + Vector3i(dx, 0, dz))
+	return out
+
+
+## The hangar whose bay contains `grid_pos`, or -1.
+func hangar_index_at(grid_pos: Vector3i) -> int:
+	var room := room_index_at(grid_pos)
+	if room < 0:
+		return -1
+	for i in hangars.size():
+		if hangars[i].room_index == room:
+			return i
+	return -1
+
+
+func insertion_hangar() -> Hangar:
+	for h in hangars:
+		if h.is_insertion:
+			return h
+	return null
 
 
 ## Worms standing on `pos`. The single place the "absent means one" rule is

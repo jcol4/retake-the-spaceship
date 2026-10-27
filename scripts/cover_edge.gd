@@ -27,6 +27,10 @@ var node: Node3D = null  # the visual prop, told to restyle itself on a tier cha
 ## every [pos, side] this same edge was stored at, so destruction can find and
 ## clear all of them, not just the one that happened to land the killing shot.
 var is_block: bool = false
+## A hangar wreck (MapData.wrecks): heavy cover that shots never wear down. It is
+## a hull section, not a crate — and it is also what blocks line of sight across
+## the bay, which a wreck that could be shot away would quietly stop doing.
+var indestructible: bool = false
 var footprint: Rect2i = Rect2i()
 var deck: int = 0
 var registrations: Array = []

@@ -311,6 +311,71 @@ func find_path(from: Vector3i, to: Vector3i, max_tiles: int, allow_occupied_goal
 	return path
 
 
+## `find_path` with a per-tile surcharge: Dijkstra over cost 1 + `extra_cost(tile)`
+## per step, so a route can swing wide of ground the caller would rather not
+## cross without that ground being forbidden. Built for the rival mercs routing
+## around third-party hostiles (CrossFactionRules.avoid_penalty, extraction plan
+## Phase 7) and kept separate from `find_path` so the BFS every other mover uses
+## — and its straight-line tiebreak — is untouched.
+##
+## Same gate (`_path_open`) and same return shape as `find_path`. `max_tiles`
+## still caps the path's LENGTH in tiles, not its cost. No turn tiebreak: a
+## caller that wants a detour has already accepted a less tidy walk. Ties break
+## on discovery order, which is the fixed `neighbors` order, so the answer is
+## deterministic for a given board (co-op runs this host-side only anyway).
+func find_path_weighted(from: Vector3i, to: Vector3i, max_tiles: int,
+		extra_cost: Callable, allow_occupied_goal := false) -> Array[Vector3i]:
+	if from == to:
+		return []
+	var parent := {from: from}
+	var cost := {from: 0}
+	var depth := {from: 0}
+	# Bucket queue: step costs are small positive ints, so buckets indexed by
+	# total cost pop in order without a heap.
+	var buckets := {0: [from]}
+	var current := 0
+	var max_cost := 0
+	var done := {}
+	while current <= max_cost:
+		var bucket: Array = buckets.get(current, [])
+		var i := 0
+		while i < bucket.size():
+			var cur: Vector3i = bucket[i]
+			i += 1
+			if done.has(cur) or cost[cur] != current:
+				continue
+			done[cur] = true
+			if cur == to:
+				break
+			if depth[cur] >= max_tiles:
+				continue
+			for n in neighbors(cur):
+				if done.has(n) or not _path_open(n, to, allow_occupied_goal, null):
+					continue
+				var step := 1 + maxi(0, int(extra_cost.call(n)))
+				var c: int = current + step
+				if not cost.has(n) or c < cost[n]:
+					cost[n] = c
+					depth[n] = depth[cur] + 1
+					parent[n] = cur
+					if not buckets.has(c):
+						buckets[c] = []
+					buckets[c].append(n)
+					max_cost = maxi(max_cost, c)
+		if done.has(to):
+			break
+		buckets.erase(current)
+		current += 1
+	if not done.has(to):
+		return []
+	var path: Array[Vector3i] = []
+	var walk := to
+	while walk != from:
+		path.push_front(walk)
+		walk = parent[walk]
+	return path
+
+
 func chebyshev_dist(a: Vector3i, b: Vector3i) -> int:
 	# RANGE, not movement cost — and with eight-way movement at uniform cost the
 	# two agree again on open ground: a diagonal counts 1 here and costs 1 to
@@ -338,15 +403,25 @@ func has_line_of_sight(shooter: Node3D, target: Node3D) -> bool:
 	# (collision layer 1). Multi-sample LOS (Sec 10.6) deferred.
 	var from := shooter.global_position + Vector3(0, 1.4, 0)
 	var to := target.global_position + Vector3(0, 0.9, 0)
-	return has_clear_line(shooter, from, to)
+	# Either end may be standing ON a piece of geometry that must not block its
+	# own sightlines — a door gun on its landed ship's hull (extraction plan
+	# Phase 5, GDD §7.2): the hull blocks sight for everyone else in the bay, but
+	# the gun sits on top of it. `los_exclusions` is a Unit virtual, [] for almost
+	# everything.
+	var exclude: Array[RID] = []
+	if shooter.has_method("los_exclusions"):
+		exclude.append_array(shooter.los_exclusions())
+	if target.has_method("los_exclusions"):
+		exclude.append_array(target.los_exclusions())
+	return has_clear_line(shooter, from, to, exclude)
 
 
-func has_clear_line(from_node: Node3D, from: Vector3, to: Vector3) -> bool:
+func has_clear_line(from_node: Node3D, from: Vector3, to: Vector3, exclude: Array[RID] = []) -> bool:
 	# Generic raycast against map geometry (collision layer 1), given explicit
 	# world points rather than unit eye/chest heights. Used for LOS above and
 	# for lighting occlusion (Sec 5) — anything needing "can X see point Y".
 	var space := from_node.get_world_3d().direct_space_state
-	var query := PhysicsRayQueryParameters3D.create(from, to, 1)
+	var query := PhysicsRayQueryParameters3D.create(from, to, 1, exclude)
 	var hit := space.intersect_ray(query)
 	return hit.is_empty()
 
@@ -440,6 +515,8 @@ func damage_cover_edge(pos: Vector3i, side: int, amount: int) -> int:
 	var edge := cover_edge(pos, side)
 	if edge == null or not edge.is_intact():
 		return MapData.Cover.NONE
+	if edge.indestructible:
+		return edge.type
 	edge.hp -= amount
 	if edge.hp > 0:
 		return edge.type

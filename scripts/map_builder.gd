@@ -181,8 +181,16 @@ func build(map_data: MapData) -> void:
 		_add_cover_edge(entry[0], entry[1], entry[2])
 	for entry: Array in data.obstacles:
 		_add_cover_block(entry[0], entry[1])
+	for footprint: Rect2i in data.wrecks:
+		_add_wreck(footprint)
 	for link: Array in data.stair_links:
 		GridManager.add_stair_link(link[0], link[1])
+	for h: MapData.Hangar in data.hangars:
+		_add_hangar_markings(h)
+	# Loot crates (extraction plan 3.2), after the tiles exist: each one makes its
+	# own tile impassable, and the old deck's crates and piles were freed with
+	# the rest of this node's children above.
+	LootManager.build_from(self, data)
 	player_spawns = data.spawns(MapData.Spawn.PLAYER)
 	enemy_spawns = data.spawns(MapData.Spawn.ENEMY)
 	swarm_spawns = data.spawns(MapData.Spawn.SWARM)
@@ -665,6 +673,84 @@ func _add_cover_block(footprint: Rect2i, tier: int) -> void:
 	body.set_script(load("res://scripts/cover_block.gd"))
 	body.call("setup", footprint, 0, tier, _floor_mat, GridManager.TILE_SIZE, GridManager.FLOOR_HEIGHT)
 	GridManager.register_cover_block(footprint, 0, tier, body)
+
+
+## One hangar wreck (MapData.wrecks), placeholder art until the wrecked-ship
+## props on the art list exist: a dark box over the whole footprint. Unlike a
+## cover block it is collision LAYER 1 at full wall height, so it blocks line of
+## sight and light exactly as a bulkhead does (both raycast layer 1), and its
+## neighbours get HEAVY cover from it that never wears down
+## (CoverEdge.indestructible). Its cells get no GridManager tile — the OBSTACLE
+## branch of `_build_cell` — which is what makes it impassable.
+const WRECK_COLOR := Color(0.2, 0.19, 0.18)
+
+
+func _add_wreck(footprint: Rect2i) -> void:
+	var first := cell_to_world(Vector3i(footprint.position.x, 0, footprint.position.y))
+	var last := cell_to_world(Vector3i(footprint.position.x + footprint.size.x - 1, 0,
+		footprint.position.y + footprint.size.y - 1))
+	var size := Vector3(footprint.size.x * GridManager.TILE_SIZE, WALL_HEIGHT,
+		footprint.size.y * GridManager.TILE_SIZE)
+	var body := _add_box_body((first + last) / 2.0, size, _mat(WRECK_COLOR), 1)
+	body.name = "Wreck_%d_%d" % [footprint.position.x, footprint.position.y]
+	var edge := GridManager.register_cover_block(footprint, 0, MapData.Cover.HEAVY, body)
+	edge.indestructible = true
+
+
+## Hangar floor markings (GDD §7.2), placeholder art until the hangar room module
+## on the art list exists: a dark pad where the ship sets down with a lighter
+## inner ring, and a hazard-yellow decal on the 3x3 extraction square so the
+## tiles that decide who goes home are legible at a glance from the first round.
+##
+## Decals only — no tile, no collision, no occupancy — so a hangar plays exactly
+## like any other floor until a ship is involved. The square's brighter "ship is
+## here, get in" highlight is HighlightManager's, shown only while landed.
+const HANGAR_PAD_COLOR := Color(0.16, 0.17, 0.2)
+const HANGAR_PAD_RING_COLOR := Color(0.85, 0.55, 0.15)
+const HANGAR_SQUARE_COLOR := Color(0.95, 0.8, 0.15, 0.35)
+## Height of the decals above the floor quad, under HighlightManager's lowest
+## layer (RANGE_Y 0.05) so a move range still draws on top of them.
+const HANGAR_DECAL_Y := 0.02
+## The pad ring is the pad scaled down by this, drawn first so the darker
+## pad face on top leaves a coloured border — one quad cheaper than four edges.
+const HANGAR_RING_INSET := 0.92
+
+
+func _add_hangar_markings(h: MapData.Hangar) -> void:
+	var pad_size := float(MapData.HANGAR_PAD_RADIUS * 2 + 1) * GridManager.TILE_SIZE
+	var pad_world := cell_to_world(h.pad_center)
+	_add_decal(pad_world + Vector3(0, HANGAR_DECAL_Y, 0), pad_size, _decal_mat(HANGAR_PAD_RING_COLOR))
+	_add_decal(pad_world + Vector3(0, HANGAR_DECAL_Y + 0.005, 0), pad_size * HANGAR_RING_INSET,
+		_decal_mat(HANGAR_PAD_COLOR))
+	var square_size := float(MapData.HANGAR_SQUARE_RADIUS * 2 + 1) * GridManager.TILE_SIZE
+	var square_centre := h.pad_center + MapData.SIDE_STEP[h.ramp_side] * MapData.HANGAR_SQUARE_OFFSET
+	_add_decal(cell_to_world(square_centre) + Vector3(0, HANGAR_DECAL_Y, 0), square_size,
+		_decal_mat(HANGAR_SQUARE_COLOR))
+
+
+func _add_decal(world: Vector3, size: float, mat: StandardMaterial3D) -> void:
+	var mesh_instance := MeshInstance3D.new()
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(size, size)
+	mesh_instance.mesh = plane
+	mesh_instance.material_override = mat
+	mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mesh_instance)
+	mesh_instance.global_position = world
+
+
+func _decal_mat(color: Color) -> StandardMaterial3D:
+	var m := _mat(color)
+	if color.a < 1.0:
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	return m
+
+
+## Where a Dropship for hangar `h` sits once landed: the pad centre at floor
+## level, turned so its ramp faces `h.ramp_side`. ExtractionManager parents the
+## ship to this builder (it is level geometry, freed with the deck on a rebuild).
+func pad_world_position(h: MapData.Hangar) -> Vector3:
+	return cell_to_world(h.pad_center)
 
 
 func _add_light(world: Vector3, fixture: int) -> void:

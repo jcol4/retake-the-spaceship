@@ -136,9 +136,11 @@ func _check_posture() -> void:
 	unit.rotation.y = PI
 	unit.hunkered = false
 	# Being downed does suppress it — a body on the deck is its own read.
-	unit.is_downed = true
+	# `is_downed` is derived from `life_state` (and read-only), so set that.
+	var life = load("res://scripts/unit.gd").LifeState
+	unit.life_state = life.DOWNED
 	_check(unit.cover_pose() == &"", "a downed unit has no cover pose")
-	unit.is_downed = false
+	unit.life_state = life.ACTIVE
 
 	# An open tile leaves facing alone, so a unit that runs into the middle of a
 	# room keeps looking the way it was going.

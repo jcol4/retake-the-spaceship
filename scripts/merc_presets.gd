@@ -85,6 +85,23 @@ static func support(display_name: String, veteran: bool = false) -> UnitStats:
 	return stats
 
 
+## What a merc has in its pockets at spawn (extraction plan 3.2; GDD §11.10: they
+## "can be killed for their loot"). A small roll, poorer than a crate's
+## (ItemPresets.MERC_TIER_WEIGHTS): one valuable always, a second at
+## MERC_SECOND_ITEM_CHANCE. PLACEHOLDER (decisions log) until mercs pursue loot of
+## their own in Phase 8. Global RNG — main.gd seeds it identically on every peer
+## before spawning, so both peers roll the same pockets.
+const MERC_SECOND_ITEM_CHANCE := 0.3
+
+
+static func roll_inventory() -> Array[ItemData]:
+	var out: Array[ItemData] = []
+	out.append(ItemPresets.roll_valuable(null, ItemPresets.MERC_TIER_WEIGHTS))
+	if randf() < MERC_SECOND_ITEM_CHANCE:
+		out.append(ItemPresets.roll_valuable(null, ItemPresets.MERC_TIER_WEIGHTS))
+	return out
+
+
 ## The one lever a veteran pulls: a flat bump on every stat that already governs
 ## something a player would notice mid-fight — accuracy (perception), AP cost and
 ## initiative (reflexes), pool size (fitness), toughness (base_hp) and crit odds

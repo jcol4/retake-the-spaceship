@@ -31,18 +31,24 @@ func _combat_turn() -> void:
 		var quarry := acquire_target()
 		if quarry == null:
 			return
-		if GridManager.is_melee_adjacent(grid_pos, quarry.grid_pos):
+		# Or standing ON it: a body holds no tile, so a swarm can end a walk on top
+		# of one, and must still be able to reach it from there.
+		if GridManager.is_melee_adjacent(grid_pos, quarry.grid_pos) or grid_pos == quarry.grid_pos:
 			if ap < melee_cost:
 				ap = 0  # in contact but cannot pay for the swing — the turn is over
 				return
 			spend_ap(melee_cost)
+			# The quarry may already be DOWN — the aliens finish prey (GDD §4.4,
+			# Faction.DOWNED_POLICY), and a claw on a body comes off its downed
+			# bar. The loop needs nothing else for it: a body holds no tile, so
+			# closing on one walks up beside it exactly as closing on a soldier does.
+			var was := quarry.life_state
 			var result: Combat.ShotResult = await melee_at(quarry)
 			action_logged.emit("%s %s %s (%d%% acc): %s" % [
 				stats.display_name, _melee_verb(), quarry.stats.display_name, result.accuracy,
 				Combat.describe(result),
 			])
-			if quarry.is_downed:
-				action_logged.emit("%s is DOWN!" % quarry.stats.display_name)
+			_log_casualty(quarry, was)
 		else:
 			# Stops on the tile before the target's, so the NEXT activation opens
 			# already in contact — and walking in still trips any overwatch on the

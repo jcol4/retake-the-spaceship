@@ -196,6 +196,36 @@ text = "Face (0)"
 layout_mode = 2
 text = "Flashlight (0)"
 
+[node name="CallShip" type="Button" parent="Actions"]
+visible = false
+layout_mode = 2
+text = "Call ship (1)"
+
+[node name="DustOff" type="Button" parent="Actions"]
+visible = false
+layout_mode = 2
+text = "EXTRACT (0)"
+
+[node name="Revive" type="Button" parent="Actions"]
+visible = false
+layout_mode = 2
+text = "Revive (3)"
+
+[node name="PickUp" type="Button" parent="Actions"]
+visible = false
+layout_mode = 2
+text = "Pick up (2)"
+
+[node name="Drop" type="Button" parent="Actions"]
+visible = false
+layout_mode = 2
+text = "Drop (0)"
+
+[node name="Loot" type="Button" parent="Actions"]
+visible = false
+layout_mode = 2
+text = "Loot (1)"
+
 [node name="EndTurn" type="Button" parent="Actions"]
 layout_mode = 2
 text = "End Turn"
@@ -217,3 +247,50 @@ theme_override_font_sizes/font_size = 48
 horizontal_alignment = 1
 vertical_alignment = 1
 text = "MISSION WON"
+
+[node name="EndDetails" type="Label" parent="."]
+visible = false
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -300.0
+offset_top = 60.0
+offset_right = 300.0
+offset_bottom = 200.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_font_sizes/font_size = 20
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="RadioBanner" type="Label" parent="."]
+visible = false
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -300.0
+offset_top = 16.0
+offset_right = 300.0
+offset_bottom = 52.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(1, 0.85, 0.3, 1)
+theme_override_font_sizes/font_size = 22
+horizontal_alignment = 1
+text = "RADIO"
+
+[node name="ObjectiveLabel" type="Label" parent="."]
+visible = false
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -300.0
+offset_top = 56.0
+offset_right = 300.0
+offset_bottom = 84.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.75, 0.95, 0.85, 1)
+theme_override_font_sizes/font_size = 18
+horizontal_alignment = 1
+text = "OBJECTIVE"

@@ -76,6 +76,8 @@ func _initialize() -> void:
 	_check_cover(data)
 	_check_rooms(data)
 	_check_spawn_glyphs()
+	_check(data.hangars.is_empty(), "the legacy test deck has no hangars")
+	_check_hangars()
 
 	print("")
 	if _failures == 0:
@@ -204,6 +206,92 @@ func _check_spawn_glyphs() -> void:
 			print("  line %2d in : '%s'" % [z, rows[z]])
 			print("  line %2d out: '%s'" % [z, encoded[z]])
 	_check(identical, "every spawn glyph round-trips")
+
+
+## `[hangars]` (extraction plan 1.1), on the extraction test deck: the file
+## round-trips byte-identical, sections included, and the two authored facts per
+## hangar (pad, ramp side, insertion flag) expand into the right bay and square.
+func _check_hangars() -> void:
+	var path := "res://maps/extraction_test.txt"
+	var rows := MapAscii.read_rows(path)
+	var data := MapAscii.parse(rows)
+	var encoded := MapAscii.to_text(data).split("\n")
+	var identical := encoded.size() == rows.size()
+	for z in mini(encoded.size(), rows.size()):
+		if encoded[z] != rows[z]:
+			identical = false
+			print("  line %2d in : '%s'" % [z, rows[z]])
+			print("  line %2d out: '%s'" % [z, encoded[z]])
+	_check(identical, "extraction_test.txt round-trips byte-identical, [hangars] included")
+	_check(data.hangars.size() == 2, "2 hangars (got %d)" % data.hangars.size())
+	if data.hangars.size() != 2:
+		return
+	var a: MapData.Hangar = data.hangars[0]
+	var b: MapData.Hangar = data.hangars[1]
+	_check(a.pad_center == Vector3i(3, 0, 6) and a.ramp_side == MapData.Side.EAST and a.is_insertion,
+		"hangar A: pad (3,6), ramp east, insertion")
+	_check(b.pad_center == Vector3i(36, 0, 6) and b.ramp_side == MapData.Side.WEST and not b.is_insertion,
+		"hangar B: pad (36,6), ramp west")
+	_check(data.insertion_hangar() == a, "insertion_hangar() finds A")
+	# The square sits in front of the ramp, its first row against the pad's edge.
+	var square_a: Array[Vector3i] = []
+	for dz in [-1, 0, 1]:
+		for dx in [-1, 0, 1]:
+			square_a.append(Vector3i(7 + dx, 0, 6 + dz))
+	_check(a.square == square_a, "A's square is the 3x3 centred on (7,6) (got %s)" % [a.square])
+	_check(b.square.has(Vector3i(31, 0, 5)) and b.square.has(Vector3i(33, 0, 7)) and b.square.size() == 9,
+		"B's square is the 3x3 centred on (32,6)")
+	# The bay is the compartment the pad is in — derived, never authored.
+	_check(a.room_index == data.room_index_at(Vector3i(1, 0, 1)) and a.room_index != b.room_index,
+		"A's bay is the west compartment, distinct from B's")
+	_check(a.bay_cells.size() == 11 * 11 - 2, "A's bay is every walkable cell of its room (121 less 2 under cover)")
+	_check(a.in_bay(Vector3i(11, 0, 11)) and not a.in_bay(Vector3i(12, 0, 6)),
+		"the far corner is in the bay; the doorway is not")
+	_check(data.hangar_index_at(Vector3i(30, 0, 10)) == 1 and data.hangar_index_at(Vector3i(20, 0, 6)) == -1,
+		"hangar_index_at resolves bays and rejects the corridor")
+	var players := data.spawns(MapData.Spawn.PLAYER)
+	var on_square := not players.is_empty()
+	for pos in players:
+		on_square = on_square and a.in_square(pos)
+	_check(on_square, "the squad spawns on the insertion square")
+	_check_loot(data)
+
+
+## Extraction plan 3.2: `[loot]` crates. They round-trip with the file (checked by
+## the byte-identical line above, which now covers the section), keep their
+## contents in order, stand on floor that stays walkable TERRAIN but is not
+## passable, and a bad line is rejected rather than half-applied.
+func _check_loot(data: MapData) -> void:
+	_check(data.containers.size() == 3, "3 loot crates on extraction_test (got %d)" % data.containers.size())
+	var crate := data.container_at(Vector3i(10, 0, 1))
+	_check(crate != null and crate.items == PackedStringArray(["scrap_electronics", "crew_tags"]),
+		"the crate at (10,1) holds its two items in order")
+	var empty_ok := data.container_at(Vector3i(37, 0, 1)) != null \
+		and data.container_at(Vector3i(37, 0, 1)).items.size() == 1
+	_check(empty_ok, "the crate at (37,1) holds one item")
+	_check(data.is_walkable(Vector3i(10, 0, 1)) and not data.is_passable(Vector3i(10, 0, 1)),
+		"a crate's tile is still floor, but not passable")
+	_check(data.is_passable(Vector3i(9, 0, 1)), "its neighbour is untouched")
+	# An empty crate and a crate of gear round-trip too.
+	var rows := PackedStringArray([
+		"#####",
+		"#...#",
+		"#####",
+		"",
+		"[loot]",
+		"1,1",
+		"3,1 weapon:0:6.9:-1 grenade salvage:4",
+	])
+	var small := MapAscii.parse(rows)
+	_check(MapAscii.to_text(small).split("\n") == rows, "an empty crate and a gear crate round-trip")
+	_check(small.container_at(Vector3i(1, 0, 1)).items.is_empty(), "an empty crate parses empty")
+	# Rejected lines: a crate on a wall, and an unknown item (dropped, crate kept).
+	var bad := MapAscii.parse(PackedStringArray(["#####", "#...#", "#####", "", "[loot]",
+		"0,0 crew_tags", "2,1 crew_tags not_an_item"]))
+	_check(bad.container_at(Vector3i(0, 0, 0)) == null, "a crate on a wall is rejected")
+	_check(bad.container_at(Vector3i(2, 0, 1)) != null \
+		and bad.container_at(Vector3i(2, 0, 1)).items == PackedStringArray(["crew_tags"]),
+		"an unknown item code is dropped, the crate kept")
 
 
 func _check(ok: bool, label: String) -> void:

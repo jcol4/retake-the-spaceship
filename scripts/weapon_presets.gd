@@ -4,7 +4,23 @@ extends RefCounted
 ## Weapon choice is independent of class — `CLASS_DEFAULT` is only the
 ## loadout screen's preselected suggestion, not a restriction.
 
-enum WeaponId { ASSAULT_RIFLE, SHOTGUN, SMG, LMG, BATTLE_RIFLE }
+## APPEND-ONLY: ids cross the wire (PlayerUnit._rpc_sync_loadout) as ints.
+## PISTOL is the sidearm (GDD §4.3, extraction plan 2.5), not a primary — it is
+## in DATA so it is built the same way as everything else, and kept out of the
+## loadout picker by `all_ids` / PRIMARY_IDS.
+enum WeaponId { ASSAULT_RIFLE, SHOTGUN, SMG, LMG, BATTLE_RIFLE, PISTOL }
+
+## The sidearm every soldier deploys with (UnitStats.sidearm). Named rather than
+## hardcoded at the spawn site so there is one place to swap it when sidearms
+## become a loadout choice.
+const SIDEARM_ID := WeaponId.PISTOL
+
+## The weapons the loadout screen offers as a PRIMARY. Everything in DATA except
+## the sidearm; listed explicitly so a future sidearm added to DATA does not land
+## in the primary picker by default.
+const PRIMARY_IDS: Array[WeaponId] = [
+	WeaponId.ASSAULT_RIFLE, WeaponId.SHOTGUN, WeaponId.SMG, WeaponId.LMG, WeaponId.BATTLE_RIFLE,
+]
 
 # DAMAGE IS ~0.65x ITS OLD VALUE across the board, and that is the smaller half
 # of the lethality rework — max HP came down ~3.5x at the same time (see
@@ -56,6 +72,20 @@ const DATA := {
 		"optimal_range": 999, "falloff_rate": 0,
 		"fire_ap_modifier": 0, "reload_ap_modifier": 0, "noise_radius": 5,
 	},
+	# PLACEHOLDER numbers (extraction plan A5), gameplay-first: the pistol exists
+	# because carrying a body leaves one hand free (GDD §4.4), and what it has to
+	# be is clearly WORSE than any long gun without being useless. Damage 5 is
+	# four hits on a ~20 HP soldier where the SMG needs four at 6 — so it is the
+	# weakest gun in the game. It falls off past 6 tiles at 8%/tile, so it is a
+	# close-quarters answer, not a way to keep fighting the same firefight. Noise
+	# 4 is one tile quieter than the long guns: a short barrel, not a suppressor.
+	# 8 + 16 rounds: enough to cover one carry to the ship, not a second primary.
+	WeaponId.PISTOL: {
+		"display_name": "Pistol", "base_accuracy": 30, "damage": 5,
+		"mag_size": 8, "starting_reserve": 16,  # 3 mags total (24 shots)
+		"optimal_range": 6, "falloff_rate": 8,
+		"fire_ap_modifier": 0, "reload_ap_modifier": 0, "noise_radius": 4,
+	},
 }
 
 const CLASS_DEFAULT := {
@@ -96,8 +126,14 @@ static func default_for_class(unit_class: UnitStats.UnitClass) -> WeaponId:
 	return CLASS_DEFAULT[unit_class]
 
 
+## Every PRIMARY weapon, in roster order — what the loadout picker lists. The
+## sidearm is deliberately absent (it is fixed gear, shown as its own line).
 static func all_ids() -> Array[WeaponId]:
-	var ids: Array[WeaponId] = []
-	for id in DATA:
-		ids.append(id)
-	return ids
+	return PRIMARY_IDS.duplicate()
+
+
+## A fresh sidearm. No attachments and Standard ammo: the sidearm is not fitted
+## on the loadout screen (yet), and the attachment/ammo tables are written
+## against long guns.
+static func make_sidearm() -> WeaponData:
+	return make(SIDEARM_ID)

@@ -357,7 +357,36 @@ func _build_model() -> void:
 		_authored = _build_single(sidecar)
 	if not _authored:
 		_build_placeholder()
+	if _dead_tinted:
+		_tint_materials(DEAD_TINT)  # a rebuilt corpse is still a corpse
 	_apply_floor()
+
+
+## PLACEHOLDER for a distinct corpse pose (extraction plan art list): a dead unit
+## lies in the DOWNED pose like a downed one, and this greyed-out tint is the
+## whole difference — enough to tell "can still be revived" from "can't" across
+## the room. Multiplied into albedo, so it darkens whatever faction tint is there.
+const DEAD_TINT := Color(0.42, 0.42, 0.46)
+var _dead_tinted := false
+
+
+## Tints the model as a corpse (or, with false, restores it — nothing does yet:
+## death is permanent). Safe to call repeatedly and on a headless build, which
+## has no model to tint.
+func set_dead_tint(on: bool) -> void:
+	if on == _dead_tinted:
+		return
+	_dead_tinted = on
+	if on:
+		_tint_materials(DEAD_TINT)
+	else:
+		_tint_materials(Color(1.0 / DEAD_TINT.r, 1.0 / DEAD_TINT.g, 1.0 / DEAD_TINT.b))
+
+
+func _tint_materials(tint: Color) -> void:
+	for mat in _floor_materials:
+		mat.albedo_color *= tint
+		mat.emission = mat.albedo_color
 
 
 ## One .glb. Returns false when the variant has none.
@@ -936,6 +965,10 @@ const PLACEHOLDER_MACHINE_SPEC := {
 	&"sagittarii": {"width": 28, "height": 30, "hover": 0, "head": 8, "shoulder": 8},
 	&"proctor": {"width": 14, "height": 14, "hover": 20, "head": 6, "shoulder": 0},
 	&"securus": {"width": 24, "height": 42, "hover": 0, "head": 12, "shoulder": 7},
+	# The landed ship's door gun (DoorGunUnit, extraction plan Phase 5): a low
+	# turret base with a sensor/gunner head, sat on the Dropship's roof. Squat on
+	# purpose so it reads as part of the hull rather than as a figure up there.
+	&"door_gun": {"width": 16, "height": 12, "hover": 0, "head": 8, "shoulder": 0},
 }
 const PLACEHOLDER_MACHINE_DEFAULT := {"width": 20, "height": 28, "hover": 0, "head": 9, "shoulder": 5}
 ## Poses the placeholder holds crouched, so overwatch is visibly different.

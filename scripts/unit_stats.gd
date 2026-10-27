@@ -26,7 +26,19 @@ enum UnitClass { ASSAULT, SNIPER, SUPPORT, HEAVY }
 ##
 ## Aimed Shot is deliberately absent too: its price depends on the zone picked,
 ## so it goes through `aimed_shot_cost` rather than this table.
-enum Action { SHOOT, MELEE, GRENADE, RELOAD, HUNKER, SUPPRESS, OVERWATCH }
+##
+## The entries from REVIVE on are the extraction actions (GDD §4.2, §4.4, §7.3,
+## §7.4), priced off FLAT_AP_COST rather than BASE_AP_COST — see there.
+##
+## APPEND-ONLY. Several --script test tools name these by number (a --script tool
+## is compiled before the class registry exists, see test_suppression.gd), so
+## inserting an entry mid-list would silently re-price every one of them.
+enum Action {
+	SHOOT, MELEE, GRENADE, RELOAD, HUNKER, SUPPRESS, OVERWATCH,
+	REVIVE, PICK_UP, LOOT, CALL_SHIP, DUST_OFF,
+	OPERATE_TERMINAL,
+	BOARD_SHIP, SWITCH_WEAPON, EXTRACT,
+}
 
 # --- AP pool (Sec 4.2 of the rework doc) -------------------------------------
 
@@ -104,6 +116,44 @@ const K_REFLEXES := {
 ## 99 unit shoots at 0 AP and the activation never ends.
 const MIN_AP_COST := 1
 
+## The extraction actions (GDD §4.2): FLAT prices, no Reflexes discount, no
+## weapon modifier, no MIN_AP_COST floor. `action_cost` checks this table FIRST,
+## so an action listed here never reaches BASE_AP_COST / K_REFLEXES at all — and
+## an action must be in exactly one of the two tables.
+##
+## Flat because none of them is a thing a quick soldier does faster in any way
+## that matters to the economy: hauling a body, patching someone up, or keying a
+## comm are paced by the job, not the hands. And flat keeps them legible — a
+## player reads "revive is 3" off the GDD and that is what every soldier pays.
+## "For now", per the GDD; giving one a discount later is moving its row to the
+## two tables above.
+##
+## Dust-off is 0 (plan assumption A1): the ship is already on the pad and the
+## signal is a word on the radio. It is still an Action, not just a button, so
+## the planner and the HUD price it through the same `action_cost` call as
+## everything else and the 0 is stated here rather than implied by an absence.
+## It is the one entry the MIN_AP_COST floor would break, which is why flat
+## costs bypass the floor.
+##
+## Operate terminal is 2 (extraction plan Phase 6, the Hold objective: "decide the
+## AP cost then"): priced like a pick-up — a deliberate job at a console, but one
+## that leaves a 10–12 AP soldier a Shoot to cover the door with. Paid again to
+## restart a console that was left and paused (TerminalRules).
+##
+## Board ship is 1: walking up the ramp out of the fight, the same price as the
+## call — cheap enough that a soldier who reaches the square with a point left
+## can always get in. It ends the activation: the soldier is off the board.
+## Switch weapon is 1 (GDD §4.3): primary to pistol or back. Picking up a body
+## still draws the pistol as part of its own 2 AP — the switch is never charged
+## on top. Extract is 0, like dust-off before it: the word to the pilot, given
+## from anywhere on any of the crew's activations (ExtractionRules.extract_blocker).
+const FLAT_AP_COST := {
+	Action.REVIVE: 3, Action.PICK_UP: 2, Action.LOOT: 1,
+	Action.CALL_SHIP: 1, Action.DUST_OFF: 0,
+	Action.OPERATE_TERMINAL: 2,
+	Action.BOARD_SHIP: 1, Action.SWITCH_WEAPON: 1, Action.EXTRACT: 0,
+}
+
 # Aimed Shot is priced per ZONE, so its table lives in `Combat` next to the
 # per-zone accuracy modifiers it tracks — see Combat.aimed_shot_ap_cost, which
 # comes back through `discounted_cost` below for the rounding.
@@ -151,6 +201,31 @@ const LEVEL_BONUS_INITIATIVE := 0
 # the class. `null` means unarmed at range (e.g. the Fodder swarm, Sec 11.4).
 @export var weapon: WeaponData = null
 
+## The sidearm (GDD §4.3/§4.4, extraction plan 2.5). Equipped gear, not an
+## inventory item: every soldier deploys with one (PlayerUnit._ready). It comes
+## out when the soldier's hands are full carrying a body, or when they switch to
+## it (1 AP, Unit.switch_weapon). Null for every non-player type, which never
+## carries anything.
+@export var sidearm: WeaponData = null
+
+## Whether the sidearm is the weapon in hand right now. Written ONLY by
+## Unit._apply_drawn (true while carrying, or when the soldier switched to it —
+## Unit.sidearm_selected), on every peer, because this
+## Resource has no idea what its unit is doing and every weapon getter below has
+## to answer for the gun actually being fired. Not exported: it is state, not
+## authoring, and a stat block saved mid-carry must not load with a pistol drawn.
+var sidearm_drawn: bool = false
+
+
+## THE weapon in hand: the sidearm while one is drawn, otherwise the primary.
+## Every getter below, and every Combat read of a shooter's gun, goes through
+## here — which is what makes a carrier's Shoot, Aimed Shot and Overwatch pistol
+## shots with no change to the shot code itself.
+func active_weapon() -> WeaponData:
+	if sidearm_drawn and sidearm != null:
+		return sidearm
+	return weapon
+
 ## Whether ammo counts this unit as ARMORED (Penetrator, Hollow Point, Slugs
 ## read it). A classification, deliberately separate from how much armor the
 ## unit has: the presets set it per faction (contractors, mercs and robots yes,
@@ -188,14 +263,22 @@ const LEVEL_BONUS_INITIATIVE := 0
 ## the board. Magnitude is still formally open (rework doc Sec 6 item 2).
 @export var equipment_initiative: int = 5
 
+# All three read the weapon IN HAND (`active_weapon`), so a carrier's numbers are
+# the pistol's without any caller having to know a body is being carried.
 var weapon_base_accuracy: int:
-	get: return weapon.effective_accuracy() if weapon else 0
+	get:
+		var w := active_weapon()
+		return w.effective_accuracy() if w else 0
 
 var weapon_damage: int:
-	get: return weapon.effective_damage() if weapon else 0
+	get:
+		var w := active_weapon()
+		return w.effective_damage() if w else 0
 
 var mag_size: int:
-	get: return weapon.effective_mag_size() if weapon else 0
+	get:
+		var w := active_weapon()
+		return w.effective_mag_size() if w else 0
 
 # Contact-range attack (Sec 11.4). Separate from the weapon numbers above so a
 # unit can be dangerous in melee and harmless at range, or the reverse — the
@@ -210,8 +293,20 @@ func ap_pool() -> int:
 	return floori(AP_POOL_BASE + AP_POOL_PER_FITNESS * fitness)
 
 
+## THE price of `action` for this stat block. Flat-cost actions (FLAT_AP_COST)
+## short-circuit here, before Reflexes or the weapon get a say; everything else
+## takes the discounted base. `Unit.action_cost` delegates here, so a flat action
+## is priced the same for the planner, the HUD and the command that spends it.
 func action_cost(action: Action) -> int:
+	if is_flat_cost(action):
+		return FLAT_AP_COST[action]
 	return discounted_cost(BASE_AP_COST[action] + weapon_ap_modifier(action), K_REFLEXES[action], reflexes)
+
+
+## Whether `action` is one of the undiscounted extraction actions. Static so a
+## caller that has no stat block in hand (a tooltip, a test) can still ask.
+static func is_flat_cost(action: Action) -> bool:
+	return FLAT_AP_COST.has(action)
 
 
 ## What the carried weapon (base stat plus attachments) adds to `action`'s base
@@ -219,19 +314,21 @@ func action_cost(action: Action) -> int:
 ## AP off rather than one the round-up can swallow. Melee, Grenade and Hunker
 ## don't touch the gun. Aimed Shot isn't in `Action` — see `aimed_ap_modifier`.
 func weapon_ap_modifier(action: Action) -> int:
-	if weapon == null:
+	var w := active_weapon()
+	if w == null:
 		return 0
 	match action:
-		Action.SHOOT: return weapon.ap_modifier(WeaponData.ApAction.SHOOT)
-		Action.OVERWATCH: return weapon.ap_modifier(WeaponData.ApAction.OVERWATCH)
-		Action.SUPPRESS: return weapon.ap_modifier(WeaponData.ApAction.SUPPRESS)
-		Action.RELOAD: return weapon.ap_modifier(WeaponData.ApAction.RELOAD)
+		Action.SHOOT: return w.ap_modifier(WeaponData.ApAction.SHOOT)
+		Action.OVERWATCH: return w.ap_modifier(WeaponData.ApAction.OVERWATCH)
+		Action.SUPPRESS: return w.ap_modifier(WeaponData.ApAction.SUPPRESS)
+		Action.RELOAD: return w.ap_modifier(WeaponData.ApAction.RELOAD)
 	return 0
 
 
 ## The weapon's Aimed Shot modifier, read by Unit.aimed_shot_cost.
 func aimed_ap_modifier() -> int:
-	return weapon.ap_modifier(WeaponData.ApAction.AIMED) if weapon else 0
+	var w := active_weapon()
+	return w.ap_modifier(WeaponData.ApAction.AIMED) if w else 0
 
 
 ## Sec 4.3b, the cost half of the rounding convention: costs round UP, and never

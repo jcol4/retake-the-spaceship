@@ -191,6 +191,35 @@ func clear_highlights() -> void:
 	clear_targets()
 
 
+## The extraction square of a hangar whose ship is down (GDD §7.4): the tiles
+## that decide who goes home, lit for as long as the ship waits.
+##
+## Its own per-hangar quads, NOT a pool `clear_highlights` empties. Every mode
+## change clears the move/target overlays; this must survive all of them, since
+## it is state about the deck rather than about the active soldier's order. Keyed
+## by hangar index so two landed ships (a merc crew's, Phase 8) are independent.
+const SQUARE_COLOR := Color(1.0, 0.85, 0.2, 0.45)
+const SQUARE_Y := 0.04  # under the move range (RANGE_Y), over the floor decal
+var _square_quads: Dictionary = {}  # hangar index -> Array[MeshInstance3D]
+
+
+func show_extraction_square(hangar_index: int, tiles: Array) -> void:
+	clear_extraction_square(hangar_index)
+	var quads: Array[MeshInstance3D] = []
+	for tile: Vector3i in tiles:
+		var quad := _make_quad(SQUARE_COLOR, RANGE_SIZE)
+		quad.global_position = GridManager.grid_to_world(tile) + Vector3(0, SQUARE_Y, 0)
+		quad.visible = true
+		quads.append(quad)
+	_square_quads[hangar_index] = quads
+
+
+func clear_extraction_square(hangar_index: int) -> void:
+	for quad: MeshInstance3D in _square_quads.get(hangar_index, []):
+		quad.queue_free()
+	_square_quads.erase(hangar_index)
+
+
 func _at(pool: Array[MeshInstance3D], index: int, color: Color, size_factor: float) -> MeshInstance3D:
 	while pool.size() <= index:
 		pool.append(_make_quad(color, size_factor))

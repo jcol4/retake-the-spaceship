@@ -1,6 +1,18 @@
 extends Node3D
 ## Root scene script: spawns squads onto the test map, wires signals, starts
 ## the mission.
+##
+## Since the campaign (extraction plan 4.2) this is the MISSION step of the loop
+## Title -> Hub -> mission -> Debrief -> Hub. It is entered with
+## `Campaign.deployment` already set — the squad's SoldierRecords, the contract
+## offer, the deck, the spawn seed — by the hub (or, on a co-op client, by the
+## host's `Campaign._rpc_deployment`), and it leaves through the HUD's Continue
+## to the front end's Debrief. The squad comes from those records rather than a
+## hardcoded list; the deck and the objective come from the contract.
+##
+## Run on its own (the editor's Play Scene, tools/screenshot.gd) it makes a
+## throwaway campaign and deploys its first soldiers, so a bare main.tscn still
+## plays a mission.
 
 const PLAYER_SCENE := preload("res://scenes/player_unit.tscn")
 const ENEMY_SCENE := preload("res://scenes/enemy_unit.tscn")
@@ -21,88 +33,236 @@ const MERC_VETERAN_CHANCE := 0.25
 @onready var camera_rig: Node3D = $CameraRig
 @onready var hud: CanvasLayer = $HUD
 
-const SQUAD := [
-	[UnitStats.UnitClass.ASSAULT, "Reyes"],
-	[UnitStats.UnitClass.SNIPER, "Okafor"],
-	[UnitStats.UnitClass.SUPPORT, "Lindqvist"],
-]
+## How many soldiers a deployment with no hub in front of it takes (`--auto`, a
+## bare main.tscn): three, the size of the hardcoded squad this replaced, so a
+## smoke run's fight is the size it always was.
+const AUTO_SQUAD_SIZE := 3
 
+## `--auto-campaign=N`: the smoke run chained through the debrief N times on one
+## throwaway campaign, so the economy (payouts, sales, losses, hiring, game over)
+## gets exercised end to end. Saved to its OWN file — never the player's slot —
+## because the chain has to survive the scene reload between missions and that is
+## also the save path worth exercising; the file is deleted when the chain ends.
+const AUTO_CAMPAIGN_SAVE := "user://auto_campaign_test.json"
+## The harness hub's spending floor: it keeps this much back for a recruit when
+## buying medkits and grenades.
+const AUTO_CREDIT_RESERVE := 300
 
 var _auto := false
-
-## Fired once a joining client learns which layout the HOST actually resolved
-## (see `_rpc_use_layout`) — this client's own `map` already auto-built from
-## its OWN `--map=` guess in TestMap._ready() by this point (which runs before
-## anything here), and that guess is only trustworthy for the host. Every
-## other peer rebuilds once this arrives; see `TestMap.build_layout`.
-signal layout_chosen(path: String, map_seed: Variant, spawn_seed: int)
+var _auto_campaign := 0
 
 ## Host-side: set once the host's own loadout screen is done. The mission
 ## starts only once this AND every connected client's `_rpc_client_ready` are
 ## in — see `_try_start_mission`.
 var _host_deployed := false
 var _mission_started := false
+## Every soldier this mission spawned — what the debrief books.
+var _player_units: Array[PlayerUnit] = []
 
 
 func _ready() -> void:
-	TurnManager.log_message.connect(func(text: String) -> void: print(text))
-	_auto = "--auto" in OS.get_cmdline_user_args()
+	TurnManager.log_message.connect(_print_line)
+	ExtractionManager.notice.connect(_on_notice)
+	TurnManager.mission_ended.connect(_on_mission_ended)
+	hud.continue_pressed.connect(_on_continue)
+	_auto_campaign = _cmdline_int("--auto-campaign=")
+	_auto = "--auto" in OS.get_cmdline_user_args() or _auto_campaign > 0
 	if _auto:
 		TurnManager.unit_activated.connect(_auto_play)
-		TurnManager.mission_ended.connect(func(_won: bool) -> void: get_tree().quit.call_deferred())
+		_prepare_auto_deployment()
+		_sync_deck()
+		seed(int(Campaign.deployment.get("spawn_seed", randi())))
 		_spawn_and_start()
 		return
 
-	# Host/join is a separate screen shown before anything spawns: co-op needs
-	# both peers' MultiplayerPeer connected before squad ownership can be
-	# assigned below, and single-player just clicks through it as "Solo".
-	var net_menu := HostJoinMenu.new()
-	add_child(net_menu)
-	net_menu.setup()
-	await net_menu.resolved
+	# No deployment means nothing went through the hub: main.tscn launched on its
+	# own. Play a throwaway squad rather than refuse to start.
+	if Campaign.deployment.is_empty():
+		if Campaign.state == null:
+			Campaign.use_throwaway()
+		Campaign.adhoc_deployment(AUTO_SQUAD_SIZE)
+	_sync_deck()
 
 	if SteamLobby.is_networked():
 		print("[NET] proceeding to spawn: is_host=%s local_id=%d peers=%s" % [
 			SteamLobby.is_host(), multiplayer.get_unique_id(), multiplayer.get_peers()])
 		multiplayer.server_disconnected.connect(_on_host_left)
 		multiplayer.peer_disconnected.connect(_on_squadmate_left)
-		# Spawning rolls stats off the global RNG (ClassPresets.roll, the
-		# alien/merc presets, the veteran roll below), and every peer spawns
-		# its own copy of the board. Without a shared seed each peer rolls a
-		# different squad — different max HP, AP pools and initiative on the
-		# client than the host is actually simulating.
-		var spawn_seed: int
+		# Who has built THIS mission's board is a per-mission fact: last
+		# mission's ready list would let the host start (and stream units at) a
+		# client that is still in its debrief.
 		if SteamLobby.is_host():
-			var path: String = map.resolve_layout()
-			var map_seed: Variant = map.generated_seed()
-			spawn_seed = randi()
-			print("[NET] host sending layout '%s' map_seed=%s spawn_seed=%d" % [path, map_seed, spawn_seed])
-			_rpc_use_layout.rpc(path, map_seed, spawn_seed)
-		else:
-			var chosen: Array = await layout_chosen
-			var path: String = chosen[0]
-			var map_seed: Variant = chosen[1]
-			spawn_seed = chosen[2]
-			print("[NET] client received layout '%s' map_seed=%s, rebuilding" % [path, map_seed])
-			if map_seed != null:
-				map.build_generated(map_seed)
-			else:
-				map.build_layout(path)
-		seed(spawn_seed)
+			SteamLobby.ready_peers.clear()
+	# Spawning rolls stats off the global RNG (the alien/merc presets, the
+	# veteran roll below, a contract with no offer), and every co-op peer spawns
+	# its own copy of the board — so every peer seeds it with the deployment's
+	# shared seed first. The squad itself no longer rolls anything: it is built
+	# from the records the deployment carries.
+	seed(int(Campaign.deployment.get("spawn_seed", randi())))
+	Campaign.deployment_fresh = false
 	_spawn_and_start()
 
 
-@rpc("authority", "call_remote", "reliable")
-func _rpc_use_layout(path: String, map_seed: Variant, spawn_seed: int) -> void:
-	print("[NET] client's _rpc_use_layout fired with '%s'" % path)
-	layout_chosen.emit(path, map_seed, spawn_seed)
+## Makes sure the map is the deployment's deck. TestMap builds it itself when the
+## deployment existed before the scene loaded (the normal path); a deployment made
+## in `_ready` above (auto, a bare main.tscn) arrives after TestMap built its own
+## choice, so it is rebuilt here — `MapBuilder.build` clears what it replaces.
+func _sync_deck() -> void:
+	var deck: Dictionary = Campaign.deployment.get("deck", {})
+	if not deck.is_empty() and deck != map.built_deck:
+		map.build_deck(deck)
+
+
+func _print_line(text: String) -> void:
+	print(text)
+
+
+func _on_notice(text: String, _radio: bool) -> void:
+	print(text)
+
+
+static func _cmdline_int(prefix: String) -> int:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with(prefix):
+			return int(arg.trim_prefix(prefix))
+	return 0
+
+
+static func _names(units: Array[Unit]) -> String:
+	var out := PackedStringArray()
+	for unit in units:
+		out.append(unit.stats.display_name)
+	return ", ".join(out) if not out.is_empty() else "nobody"
+
+
+## The mission is over on this peer. The host (or solo) books it into the
+## campaign NOW, before anyone clicks anything — ironman: the result is in the
+## save the moment it exists — and sends the client its summary
+## (Campaign.book_result). The HUD's Continue then goes to the Debrief.
+func _on_mission_ended(result: MissionResult) -> void:
+	var summary := {}
+	if not SteamLobby.is_networked() or SteamLobby.is_host():
+		summary = Campaign.book_result(result, _player_units)
+	if not _auto:
+		return
+	# The smoke run's verdict line: who made it out and who did not.
+	print("AUTO RESULT: %s after %d rounds | extracted: %s | lost: %s" % [
+		result.describe(), TurnManager.turn_number,
+		_names(result.extracted_units), _names(result.lost_units)])
+	# Extraction plan 3.3: the contract and what came out with the squad.
+	var title := Contract.from_dict(result.contract).title() if not result.contract.is_empty() else "none"
+	var codes := result.loot_codes()
+	var credits := 0
+	for code in codes:
+		credits += ItemPresets.value_of(code)
+	print("AUTO OBJECTIVE: %s | complete: %s | loot: %d item(s), %d cr %s" % [
+		title, result.objective_complete, codes.size(), credits, codes])
+	# Extraction plan Phase 8: rival crews on the deck, and what became of them.
+	for crew in ExtractionManager.merc_crews():
+		var job := ExtractionManager.merc_job(crew)
+		print("AUTO RIVAL: crew %d (%s) | %s | %d container(s) looted" % [
+			crew, job.squad_id, job.describe(), job.looted.size()])
+	for line in result.rival_lines():
+		print("AUTO RIVAL: %s" % line)
+	# Extraction plan 4.2: what the campaign made of it.
+	if not summary.is_empty():
+		var fates := PackedStringArray()
+		for s: Dictionary in summary["soldiers"]:
+			fates.append("%s=%s" % [s["name"], s["fate"]])
+		print("AUTO DEBRIEF: mission %d | %s | sold %d cr, payout %d cr | credits %d -> %d | roster %d | grenades %d, medkits %d%s" % [
+			summary["mission"], ", ".join(fates), summary["sale_total"], summary["payout"],
+			summary["credits_before"], summary["credits_after"], Campaign.state.roster.size(),
+			Campaign.state.grenades, Campaign.state.medical,
+			" | GAME OVER" if summary["game_over"] else ""])
+		# Phase 6: gear carried out lands in the stash (attachments, unlocks, grenades).
+		if not (summary.get("gear", []) as Array).is_empty():
+			print("AUTO GEAR: %s" % "; ".join(PackedStringArray(summary["gear"])))
+	_auto_continue.call_deferred(summary)
+
+
+## After an auto mission: the next one of an `--auto-campaign` chain (through the
+## harness hub and a scene reload, as a player would go), or quit.
+func _auto_continue(summary: Dictionary) -> void:
+	var state: CampaignState = Campaign.state
+	if _auto_campaign > 0 and state != null and not summary.get("game_over", false) \
+			and state.missions_played < _auto_campaign:
+		if _auto_hub_step():
+			get_tree().change_scene_to_file(Campaign.MISSION_SCENE)
+			return
+	if _auto_campaign > 0:
+		print("AUTO CAMPAIGN: %d mission(s) played%s" % [
+			state.missions_played if state != null else 0,
+			" — campaign over" if summary.get("game_over", false) else ""])
+		Campaign.wipe()  # the chain's own temp file, never the player's slot
+	get_tree().quit()
+
+
+## The deployment an auto run plays. Plain `--auto`: a throwaway campaign with no
+## file, its first AUTO_SQUAD_SIZE soldiers, and no contract offer — main.gd picks
+## one for whatever deck the command line built, exactly as before the campaign.
+## `--auto-campaign`: a throwaway saved to AUTO_CAMPAIGN_SAVE, deployed through
+## the harness hub on its first contract.
+func _prepare_auto_deployment() -> void:
+	if not Campaign.deployment.is_empty():
+		return  # the previous auto-campaign mission already launched this one
+	if _auto_campaign > 0:
+		Campaign.use_throwaway(AUTO_CAMPAIGN_SAVE)
+		_auto_hub_step()
+		return
+	Campaign.use_throwaway()
+	Campaign.adhoc_deployment(AUTO_SQUAD_SIZE)
+
+
+## The harness's stand-in for a player in the hub: treat injuries (buying medkits
+## above the reserve), hire up to a full squad while it can, restock a grenade per
+## soldier above the reserve, then launch the first contract with the healthiest
+## soldiers. False if it could not launch.
+func _auto_hub_step() -> bool:
+	var s: CampaignState = Campaign.state
+	for r in s.roster:
+		for part in r.injuries.duplicate():
+			if s.medical < CampaignEconomy.MEDICAL_PER_INJURY \
+					and s.credits >= CampaignEconomy.MEDICAL_PRICE + AUTO_CREDIT_RESERVE:
+				Campaign.buy_medical()
+			Campaign.treat(r.id, part)
+	while s.roster.size() < CampaignEconomy.MAX_SQUAD:
+		var cheapest := -1
+		for i in s.recruits.size():
+			if int(s.recruits[i]["price"]) <= s.credits and (cheapest < 0 \
+					or int(s.recruits[i]["price"]) < int(s.recruits[cheapest]["price"])):
+				cheapest = i
+		if cheapest < 0 or Campaign.hire(cheapest) != "":
+			break
+	while s.grenades < CampaignEconomy.MAX_SQUAD \
+			and s.credits >= CampaignEconomy.GRENADE_PRICE + AUTO_CREDIT_RESERVE:
+		Campaign.buy_grenade()
+	var squad := s.roster.duplicate()
+	squad.sort_custom(func(a: SoldierRecord, b: SoldierRecord) -> bool:
+		return a.injuries.size() < b.injuries.size())
+	var ids: Array = []
+	for r: SoldierRecord in squad:
+		if ids.size() < CampaignEconomy.MAX_SQUAD:
+			ids.append(r.id)
+	var offer_text: String = s.contracts[0].describe() if not s.contracts.is_empty() else "no contract"
+	var err := Campaign.launch(ids, 0)
+	print("AUTO HUB: mission %d | %s | roster %d, credits %d, grenades %d, medkits %d, stash %s | %s" % [
+		s.missions_played + 1, offer_text, s.roster.size(), s.credits, s.grenades, s.medical,
+		s.attachments, "launched %d" % ids.size() if err == "" else "cannot launch: " + err])
+	return err == ""
+
+
+## HUD Continue: on to the Debrief (the front end shows it, then the hub — or, on
+## a co-op client, the host's summary and then the wait for the next deployment).
+func _on_continue() -> void:
+	get_tree().change_scene_to_file(Campaign.FRONT_END_SCENE)
+
 
 
 ## Everything that used to be unconditional in `_ready` — spawning is
-## deterministic (fixed SQUAD, fixed map spawn points, stat rolls off the
-## host's shared `spawn_seed`) so every peer builds an identical node tree
-## independently rather than one peer spawning and replicating nodes to the
-## other. See the co-op plan's Sec 3.
+## deterministic (the deployment's records, fixed map spawn points, alien and
+## merc rolls off the deployment's shared `spawn_seed`) so every peer builds an
+## identical node tree independently rather than one peer spawning and
+## replicating nodes to the other. See the co-op plan's Sec 3.
 ##
 ## Every unit is NAMED here, before add_child, and that is load-bearing: RPCs
 ## and MultiplayerSynchronizers address a unit by node path. Left unnamed, the
@@ -110,6 +270,10 @@ func _rpc_use_layout(path: String, map_seed: Variant, spawn_seed: int) -> void:
 ## `@PlayerUnit@<n>` off a process-wide counter — which the client, having
 ## built its map twice, has advanced further than the host has.
 func _spawn_and_start() -> void:
+	# The squad (extraction plan 4.2): the deployment's SoldierRecords, in the
+	# order the hub listed them, each with its grenade allotment.
+	var records: Array = Campaign.deployment.get("records", [])
+	var grenade_counts: Array = Campaign.deployment.get("grenades", [])
 	# Which peer owns which merc. Computed identically on every peer — sorted
 	# by peer id rather than "whoever's local" — so a block split lands on the
 	# same mercs everywhere despite each peer building this tree independently.
@@ -120,25 +284,66 @@ func _spawn_and_start() -> void:
 		owning_peers = [multiplayer.get_unique_id()]
 		owning_peers.append_array(Array(multiplayer.get_peers()))
 		owning_peers.sort()
-	var mercs_per_peer := ceili(float(SQUAD.size()) / owning_peers.size())
+	var mercs_per_peer := maxi(1, ceili(float(records.size()) / owning_peers.size()))
 	print("[NET] owning_peers=%s mercs_per_peer=%d" % [owning_peers, mercs_per_peer])
+
+	# The mission's contract (extraction plans 3.3, 4.2). Extraction decks only: a
+	# legacy clear-out deck's objective is the clear-out itself, and planting a
+	# nest on one would change every test and smoke run built on it.
+	#   - A campaign deployment's contract offer places itself with its own seeded
+	#     RNG (ContractOffer.build_contract) — the same placement on every peer.
+	#   - With no offer (`--auto`, a bare main.tscn) one is picked at random among
+	#     the types the deck supports, off the global RNG every peer has seeded
+	#     identically, and priced for the deck's size.
+	# Either way it is settled FIRST, so a Destroy contract can add its nest to
+	# the spawn list below before anything is spawned.
+	var deck_hangars: Array = map.data.hangars if map.data != null else []
+	var contract: Contract = null
+	if not deck_hangars.is_empty():
+		var offer := Campaign.deployed_offer()
+		if offer != null:
+			contract = offer.build_contract(map.data)
+		else:
+			contract = Contract.choose(map.data)
+			if contract != null:
+				var deck: Dictionary = Campaign.deployment.get("deck", {})
+				contract.payout = CampaignEconomy.payout_for(contract.type,
+					int(deck.get("size", CampaignEconomy.DeckSize.MEDIUM)))
+	var nest_spawns: Array[Vector3i] = map.nest_spawns.duplicate()
+	if contract != null and contract.place_nest:
+		nest_spawns.append(contract.target_tile)
 
 	var player_units: Array[PlayerUnit] = []
 	var spawn_index := 0
-	for entry in SQUAD:
+	for i in records.size():
 		if spawn_index >= map.player_spawns.size():
+			# More soldiers than the deck has spawn tiles (a hand-authored deck):
+			# the rest stay aboard. The debrief books them as benched, untouched.
+			print("Deck has %d spawn tiles; %d soldier(s) stay aboard" % [
+				map.player_spawns.size(), records.size() - spawn_index])
 			break
+		var record := SoldierRecord.from_dict(records[i])
 		var unit: PlayerUnit = PLAYER_SCENE.instantiate()
-		unit.stats = ClassPresets.roll(entry[0], entry[1])
+		unit.stats = record.to_stats()
+		unit.record_id = record.id
+		# Grenades are stocked gear (CampaignEconomy): the hub allotted these out
+		# of the stash, and what is not thrown goes back at the debrief.
+		var grenades: int = int(grenade_counts[i]) if i < grenade_counts.size() else 0
+		unit.deployed_grenades = grenades
+		unit.grenade_charges = grenades
+		# Untreated injuries ride in (GDD §4.2.1) — on every peer, from the same
+		# record, so a client's movement preview prices the same bad leg.
+		unit.apply_injuries(record.injuries)
 		var peer_slot := mini(spawn_index / mercs_per_peer, owning_peers.size() - 1)
 		unit.owner_peer_id = owning_peers[peer_slot]
-		print("[NET] spawning %s -> owner_peer_id=%d" % [entry[1], unit.owner_peer_id])
+		print("[NET] spawning %s -> owner_peer_id=%d" % [record.display_name, unit.owner_peer_id])
 		unit.name = "Player_%d" % spawn_index
 		unit.position = GridManager.grid_to_world(map.player_spawns[spawn_index])
 		add_child(unit)  # Unit._ready snaps to grid + registers occupancy
 		unit.action_logged.connect(_on_unit_log)
 		player_units.append(unit)
 		spawn_index += 1
+	_player_units = player_units
 
 	var enemy_index := 1
 	for spawn in map.enemy_spawns:
@@ -206,7 +411,7 @@ func _spawn_and_start() -> void:
 	# but they are the mission objective rather than a threat — see NestUnit for
 	# why an objective is a Unit here, and for what is still missing from it.
 	var nest_index := 1
-	for spawn in map.nest_spawns:
+	for spawn in nest_spawns:
 		var nest: NestUnit = NEST_SCENE.instantiate()
 		nest.stats = AlienPresets.nest("Nest_%d" % nest_index)
 		nest.name = "Nest_%d" % nest_index
@@ -214,6 +419,14 @@ func _spawn_and_start() -> void:
 		add_child(nest)
 		nest.action_logged.connect(_on_unit_log)
 		nest_index += 1
+
+	# Recover (extraction plan Phase 6): the VIP, lying DOWNED where the contract
+	# placed them. On every peer, like the nests — name, tile and stats are all
+	# fixed by the contract, nothing rolls — so both copies sit at the same path and
+	# the host's state streams onto the client's. ObjectiveManager finds it by tile.
+	if contract != null and contract.type == Contract.Type.RECOVER:
+		var vip := VipUnit.make(contract.target_tile, contract.vip_name)
+		add_child(vip)
 
 	var merc_index := 1
 	# One LMG per squad, handed to whichever member is placed first in a room.
@@ -239,6 +452,9 @@ func _spawn_and_start() -> void:
 		# without the map needing a second glyph or the spawner a second list —
 		# and it means a level author draws squads by drawing walls.
 		merc.squad_id = "mercs_room_%d" % room
+		# A few valuables in their pockets, lootable off the corpse (plan 3.2).
+		# Before add_child, so Unit._ready syncs the replicated codes from it.
+		merc.inventory = MercPresets.roll_inventory()
 		merc.name = "Merc_%d" % merc_index
 		merc.position = GridManager.grid_to_world(spawn)
 		add_child(merc)
@@ -250,6 +466,24 @@ func _spawn_and_start() -> void:
 	# without this needing to know that.
 	_spawn_security_robots()
 
+	# A deck with a hangar is an extraction deck (GDD §7): the mission ends when
+	# the ship leaves with someone aboard, or on a wipe — never by "every hostile
+	# down", so `clear_out_mode` goes off. A deck without one (every legacy test
+	# deck) has no way out but the old one and keeps it on. Set on every peer, but
+	# only the host's copy is ever checked.
+	TurnManager.clear_out_mode = deck_hangars.is_empty()
+	# Every peer, after the squad exists (discovery listens to their moves) and
+	# before the mission starts. Inert on a deck with no hangar.
+	ExtractionManager.begin_mission(map.data)
+	# Every peer, after the nest exists: plants the Retrieve item in its crate or
+	# finds the Destroy target. Deterministic, so nothing is sent (see
+	# ObjectiveManager). A null contract clears the last mission's.
+	ObjectiveManager.begin_mission(contract)
+	if contract != null:
+		var line := "Contract: %s (payout %d cr)" % [contract.title(), contract.payout]
+		print(line)
+		hud.append_log(line)  # local on every peer — each one chose the same contract
+
 	if not map.player_spawns.is_empty():
 		camera_rig.focus_on(GridManager.grid_to_world(map.player_spawns[0]))
 
@@ -259,14 +493,26 @@ func _spawn_and_start() -> void:
 
 	if _auto:
 		# Headless smoke test skips the loadout screen entirely — every unit
-		# just deploys with its class's suggested-default weapon.
+		# just deploys with its record's saved loadout (clamped to the stash).
 		TurnManager.start_mission.call_deferred()
 		return
 
-	var loadout: CanvasLayer = LoadoutMenu.new()
+	var loadout: LoadoutMenu = LoadoutMenu.new()
+	# Fed from the campaign stash (extraction plan 4.2). In co-op each peer gets
+	# the copies NOT fitted to the other player's soldiers, so the two loadout
+	# screens can never hand out the same copy twice.
+	loadout.from_stash = true
+	loadout.inventory = Campaign.loadout_inventory(player_units.filter(
+		func(u: PlayerUnit) -> bool: return not u.is_owned_by_local_player()))
+	loadout.unlocked_ammo = Campaign.loadout_ammo()
 	add_child(loadout)
 	loadout.setup(player_units)
+	_squad = player_units
 	loadout.deployed.connect(_on_local_deployed)
+
+
+## The squad as spawned, for the insertion cinematic to hide and reveal.
+var _squad: Array[PlayerUnit] = []
 
 
 ## The ready handshake, the equivalent of a join handshake for a game that
@@ -274,9 +520,17 @@ func _spawn_and_start() -> void:
 ## first RPCs name units by path — until every client has built those units.
 ## A client's Deploy is that signal: it only reaches its loadout screen after
 ## spawning, and deploying last means its weapon picks are already in.
+##
+## The insertion (GDD §7.1 step 2) plays first, on each peer locally: it is
+## outside the pool, so no round passes, and a peer only reports ready once its
+## own squad is off the ramp. `--auto` never gets here (it starts directly).
 func _on_local_deployed() -> void:
+	var insertion: MapData.Hangar = map.data.insertion_hangar() if map.data != null else null
+	if ExtractionManager.is_active() and insertion != null:
+		camera_rig.focus_on(GridManager.grid_to_world(insertion.pad_center))
+		await ExtractionManager.play_insertion(_squad)
 	if not SteamLobby.is_networked():
-		TurnManager.start_mission.call_deferred()
+		_begin_mission()
 	elif SteamLobby.is_host():
 		_host_deployed = true
 		_try_start_mission()
@@ -309,6 +563,15 @@ func _try_start_mission() -> void:
 			hud.append_log("Waiting for your squadmate to deploy...")
 			return
 	_mission_started = true
+	_begin_mission()
+
+
+## Host/solo, once every loadout is in: records what each soldier really took (so
+## a mission quit midway loses the copies actually fitted — ironman, see
+## Campaign.note_loadouts) and starts the turn loop. A client's picks reach the
+## host before its ready report (both reliable, in order), so they are counted.
+func _begin_mission() -> void:
+	Campaign.note_loadouts(_player_units)
 	TurnManager.start_mission.call_deferred()
 
 
@@ -326,9 +589,12 @@ func _on_host_left() -> void:
 	dialog.popup_centered()
 
 
+## Back to the title: the client owns no campaign (A7), so nothing is booked —
+## the host's debrief, if it ever happens, is the host's.
 func _return_to_menu() -> void:
 	SteamLobby.leave()
-	get_tree().reload_current_scene()
+	Campaign.close()
+	get_tree().change_scene_to_file(Campaign.FRONT_END_SCENE)
 
 
 ## Host-side: a squadmate dropping doesn't end the mission — their mercs are
@@ -396,7 +662,40 @@ func _auto_play(unit: Unit) -> void:
 		return
 	await get_tree().process_frame
 	var target := _nearest_hostile(player)
-	if target != null:
+	# Loot is grabbed when it is cheap (plan 3.2 harness): anything in reach, with
+	# nothing hostile in sight to spend the AP on instead.
+	_auto_loot_in_reach(player)
+	# Hold (Phase 6): the soldier at the console stays there until the count is
+	# done — leaving pauses it — and fights from where it stands.
+	if _auto_holding(player):
+		await _auto_work_terminal(player)
+		await _auto_shoot(player)
+		if not TurnManager.mission_over:
+			player.end_activation()
+		return
+	var extracting := _auto_wants_extraction(target)
+	# While the hunt is on, the squad's fetcher spends quiet activations (nothing
+	# hostile in sight) walking to the Retrieve item instead.
+	var fetched := false
+	var destroy_nest: Unit = null
+	if not extracting and target != null and not _auto_hostile_in_sight(player):
+		fetched = await _auto_fetch_objective(player)
+		# Destroy: with nothing in sight, hunt the contract's nest rather than the
+		# nearest hostile, so the objective gets done before the round cap.
+		destroy_nest = _auto_destroy_target(player)
+	if extracting:
+		await _auto_extract(player)
+	elif fetched:
+		pass  # this activation went to the Retrieve item
+	elif destroy_nest != null:
+		# The planner's doctrine is built for things that shoot back and treats a
+		# nest it cannot see as nothing to plan against; the greedy loop just walks
+		# up to it and empties the magazine, which is what a nest calls for.
+		await _greedy_fallback(player, destroy_nest)
+	elif target != null:
+		# A squadmate down within reach is revived before the fight resumes —
+		# cheap, and it exercises revive in every run that has a casualty.
+		await _auto_tend_downed(player, false)
 		if not _auto_brains.has(player):
 			_auto_brains[player] = Doctrines.merc_brain(Doctrines.blackboard_for("contractors"))
 		var brain: GoapBrain = _auto_brains[player]
@@ -413,6 +712,499 @@ func _auto_play(unit: Unit) -> void:
 		player.end_activation()
 
 
+## Round from which the auto squad stops hunting and heads for the ship however
+## many hostiles are left. The hunt is what an auto run did before hangars
+## existed and still exercises the AI; the cap is what guarantees an extraction
+## deck terminates even when some hostile can never be cornered.
+const AUTO_EXTRACT_ROUND := 20
+
+
+## On an extraction deck (a hangar exists), the auto squad leaves when there is
+## nothing left it can fight, when the round cap passes, or once a ship is
+## already called — from then on everyone heads for it rather than splitting
+## between the hunt and the square. On a legacy deck it never does: clear-out is
+## the only ending there.
+func _auto_wants_extraction(target: Unit) -> bool:
+	if not ExtractionManager.is_active():
+		return false
+	return target == null or TurnManager.turn_number >= AUTO_EXTRACT_ROUND \
+		or ExtractionManager.claim_of(ExtractionRules.PLAYER_CREW) >= 0 \
+		or _auto_vip_in_hand()
+
+
+## Recover (Phase 6): a soldier has the VIP over their shoulder — time to go home
+## rather than hunt one-handed.
+func _auto_vip_in_hand() -> bool:
+	var vip := ObjectiveManager.vip()
+	return vip != null and vip.life_state == Unit.LifeState.DOWNED and vip.carried_by is PlayerUnit
+
+
+## Hold (Phase 6): `player` is the fetcher, beside a console whose count is not
+## done, before the give-up round.
+func _auto_holding(player: PlayerUnit) -> bool:
+	var t := ObjectiveManager.terminal()
+	var rules: TerminalRules = ObjectiveManager.terminal_rules
+	return t != null and rules != null and not rules.is_complete() and player == _auto_fetcher() \
+		and player.within_reach(t.tile) and TurnManager.turn_number < AUTO_FETCH_GIVE_UP_ROUND
+
+
+## One auto-played soldier's extraction activation (GDD §7.1 steps 4–5): call the
+## ship if standing in a callable bay, walk into the square, signal dust-off once
+## every soldier still on their feet is in it, then shoot whatever is in sight
+## with what AP is left. Downed soldiers can't be carried until extraction plan
+## Phase 2, so anyone downed outside the square is left behind — which is the
+## left-behind case of the result screen, exercised for free.
+##
+## Calls UnitStats/ExtractionManager directly rather than `try_call_ship`, the
+## way `_greedy_fallback` calls `fire_at`: the `try_` commands end the
+## activation when AP runs out, and this function still has steps to run.
+func _auto_extract(player: PlayerUnit) -> void:
+	# The squad's fetcher keeps after the Retrieve item until the ship is down —
+	# then everyone, fetcher included, goes for the square.
+	var fetched: bool = await _auto_fetch_objective(player)
+	if fetched:
+		await _auto_shoot(player)
+		return
+	var crew := ExtractionRules.PLAYER_CREW
+	var index := ExtractionManager.claim_of(crew)
+	if index < 0:
+		index = _auto_pick_hangar(player)
+	if index < 0:
+		await _auto_shoot(player)  # nowhere to go yet (every pad cooling down)
+		return
+	_auto_try_call(player)
+	var h := ExtractionManager.hangar(index)
+	# Nobody left behind if it can be helped: revive or lift a body in reach, or
+	# detour a few tiles to one, before heading for the ship (GDD §4.4).
+	await _auto_tend_downed(player, true, h)
+	if TurnManager.mission_over or player.is_downed:
+		return
+	if not h.in_square(player.grid_pos):
+		await _auto_walk_to_square(player, h)
+	if TurnManager.mission_over or player.is_downed:
+		return
+	_auto_try_call(player)
+	# GDD §7.4: in the square of our landed ship. The last one in gives the word
+	# (everyone else still standing is aboard or beside them); anyone earlier
+	# boards — with any body they carry — and is safe until then.
+	if ExtractionManager.board_hangar_for(player) >= 0:
+		if _auto_squad_in_square(h) and ExtractionManager.extract(player):
+			_on_unit_log("%s auto-extracted" % player.stats.display_name)
+			return
+		var board_cost := player.action_cost(UnitStats.Action.BOARD_SHIP)
+		if player.ap >= board_cost:
+			player.spend_ap(board_cost)
+			if ExtractionManager.board(player):
+				_on_unit_log("%s auto-boarded" % player.stats.display_name)
+				return
+	await _auto_shoot(player)
+
+
+## Round after which the fetcher gives up on the Retrieve item and goes home with
+## everyone else, so a contract it cannot reach never keeps a run from ending.
+const AUTO_FETCH_GIVE_UP_ROUND := 28
+
+
+## Whether anything hostile is within shooting distance and in sight.
+func _auto_hostile_in_sight(player: PlayerUnit) -> bool:
+	for enemy in player.hostiles():
+		if GridManager.chebyshev_dist(player.grid_pos, enemy.grid_pos) <= 8 \
+				and GridManager.has_line_of_sight(player, enemy):
+			return true
+	return false
+
+
+## Takes whatever is in reach while it is cheap: nothing hostile in sight, AP to
+## spare, a free slot. The objective item first, then the most valuable. Calls the
+## Unit/LootManager operations directly (not `try_loot`, which ends the activation
+## at 0 AP while this soldier still has a turn to play).
+func _auto_loot_in_reach(player: PlayerUnit) -> void:
+	var cost := player.action_cost(UnitStats.Action.LOOT)
+	while player.ap >= cost and player.has_free_slot() and not _auto_hostile_in_sight(player):
+		var best_source: Object = null
+		var best_index := -1
+		var best_score := -1
+		for source in player.loot_sources():
+			var items: Array = source.loot_items()
+			for i in items.size():
+				var item: ItemData = items[i]
+				var score := 1000000 if item.is_objective() else item.value
+				if score > best_score:
+					best_score = score
+					best_source = source
+					best_index = i
+		if best_source == null:
+			return
+		player.spend_ap(cost)
+		var item: ItemData = LootManager.take(best_source, best_index)
+		player.add_item(item)
+		_on_unit_log("%s auto-looted %s from %s (pack %d/%d)" % [player.stats.display_name,
+			item.display_name, best_source.loot_name(), player.inventory.size(), Unit.INVENTORY_SLOTS])
+
+
+## What the Retrieve item is sitting in if a soldier has to go and get it — a
+## crate, a pile, or an uncarried corpse — else null: no Retrieve contract, or the
+## item is already on a living soldier (or a body somebody is carrying).
+func _auto_objective_source() -> Object:
+	var holder: Object = ObjectiveManager.item_holder()
+	if holder is LootContainer:
+		return holder
+	var unit := holder as Unit
+	if unit != null and unit.life_state == Unit.LifeState.DEAD and unit.carried_by == null:
+		return unit
+	return null
+
+
+## The one soldier who goes for the objective: the first on their feet, by name,
+## so the rest keep fighting and the squad does not all wander off together.
+func _auto_fetcher() -> PlayerUnit:
+	var best: PlayerUnit = null
+	for node in get_tree().get_nodes_in_group("player_units"):
+		var member := node as PlayerUnit
+		if member == null or member.life_state != Unit.LifeState.ACTIVE:
+			continue
+		if best == null or String(member.name) < String(best.name):
+			best = member
+	return best
+
+
+## Whether the fetcher is still working the objective, before the give-up round:
+## going for a Retrieve item it can reach, holding (or going to hold) the Hold
+## console until its count finishes, or going for the Recover VIP (Phase 6).
+## While it is, nobody calls the ship.
+func _auto_fetch_pending() -> bool:
+	var fetcher := _auto_fetcher()
+	if fetcher == null or TurnManager.turn_number >= AUTO_FETCH_GIVE_UP_ROUND:
+		return false
+	var tile := NO_AUTO_TILE
+	var c: Contract = ObjectiveManager.contract
+	if c != null and c.type == Contract.Type.HOLD:
+		var t := ObjectiveManager.terminal()
+		if t != null and not ObjectiveManager.terminal_rules.is_complete():
+			tile = t.tile
+	elif c != null and c.type == Contract.Type.RECOVER:
+		var vip := ObjectiveManager.vip()
+		if vip != null and vip.life_state == Unit.LifeState.DOWNED and vip.carried_by == null:
+			tile = vip.grid_pos
+	else:
+		var source := _auto_objective_source()
+		if source != null:
+			tile = source.loot_tile()
+	if tile == NO_AUTO_TILE:
+		return false
+	return fetcher.within_reach(tile) or not GridManager.find_path(fetcher.grid_pos, tile, 999, true).is_empty()
+
+
+const NO_AUTO_TILE := Vector3i(-99999, -99999, -99999)
+
+
+## The objective's share of the fetcher's activation, by contract type. True if it
+## acted (and the rest of the activation should stay put / shoot from where it is).
+func _auto_fetch_objective(player: PlayerUnit) -> bool:
+	var c: Contract = ObjectiveManager.contract
+	if c != null and c.type == Contract.Type.HOLD:
+		return await _auto_work_terminal(player)
+	if c != null and c.type == Contract.Type.RECOVER:
+		return await _auto_fetch_vip(player)
+	return await _auto_fetch_item(player)
+
+
+## The Hold fetcher (Phase 6): walk to the console, operate it, and stand there —
+## an activation spent beside a running console is spent holding it (the caller
+## shoots from where it stands). Restarts it if it was left and paused.
+func _auto_work_terminal(player: PlayerUnit) -> bool:
+	var t := ObjectiveManager.terminal()
+	var rules: TerminalRules = ObjectiveManager.terminal_rules
+	if t == null or rules == null or rules.is_complete() or player != _auto_fetcher() \
+			or TurnManager.turn_number >= AUTO_FETCH_GIVE_UP_ROUND:
+		return false
+	var cost := player.action_cost(UnitStats.Action.OPERATE_TERMINAL)
+	if not player.within_reach(t.tile):
+		if not await _auto_walk_toward(player, t.tile, 0 if rules.is_running() else cost, "the terminal"):
+			return false
+		if player.is_downed or TurnManager.mission_over or not player.within_reach(t.tile):
+			return true
+	if not rules.is_running() and player.ap >= cost:
+		player.spend_ap(cost)
+		if ObjectiveManager.operate_terminal(player):
+			_on_unit_log("%s auto-operated the terminal" % player.stats.display_name)
+	return true
+
+
+## The Recover fetcher (Phase 6): walk to the VIP, keeping the pick-up's AP back,
+## and lift them. From then on the carrier is part of the extraction (see
+## `_auto_wants_extraction`).
+func _auto_fetch_vip(player: PlayerUnit) -> bool:
+	var vip := ObjectiveManager.vip()
+	if vip == null or vip.life_state != Unit.LifeState.DOWNED or vip.carried_by != null \
+			or player != _auto_fetcher() or player.carrying != null \
+			or TurnManager.turn_number >= AUTO_FETCH_GIVE_UP_ROUND:
+		return false
+	var cost := player.action_cost(UnitStats.Action.PICK_UP)
+	if not player.within_reach(vip.grid_pos):
+		if not await _auto_walk_toward(player, vip.grid_pos, cost, "the VIP"):
+			return false
+		if player.is_downed or TurnManager.mission_over or not player.within_reach(vip.grid_pos):
+			return true
+	if player.ap >= cost and player.pick_up_blocker(vip) == "":
+		player.spend_ap(cost)
+		player.pick_up(vip)
+		_on_unit_log("%s auto-lifted the VIP %s" % [player.stats.display_name, vip.stats.display_name])
+	return true
+
+
+## Walks toward `tile` (a body, a console, a crate — it may be unstandable) with
+## this activation's AP less `keep_ap`. True if it moved.
+func _auto_walk_toward(player: PlayerUnit, tile: Vector3i, keep_ap: int, what: String) -> bool:
+	var path := GridManager.find_path(player.grid_pos, tile, 999, true)
+	if path.is_empty():
+		return false
+	if not GridManager.is_free(path[-1]):
+		path.resize(path.size() - 1)
+	var steps := mini(path.size(), (player.ap - keep_ap) / player.move_ap_per_tile())
+	if steps < 1:
+		return false
+	var walk := path.slice(0, steps)
+	player.spend_ap(player.move_cost_for(walk.size()))
+	await player.move_along(walk)
+	_on_unit_log("%s auto-moved to %s heading for %s" % [player.stats.display_name, walk[-1], what])
+	return true
+
+
+## The Destroy contract's nest, if it is alive and this soldier could walk to it.
+func _auto_destroy_target(player: PlayerUnit) -> Unit:
+	var c: Contract = ObjectiveManager.contract
+	if c == null or c.type != Contract.Type.DESTROY or ObjectiveManager.nest_destroyed():
+		return null
+	var nest := ObjectiveManager.target_nest()
+	if nest == null or not is_instance_valid(nest) or not _can_act_on(player, nest):
+		return null
+	return nest
+
+
+## The fetcher's activation spent on the Retrieve item: loot it if in reach (first
+## dropping the least valuable thing in a full pack — dropping is free), else
+## walk toward it, keeping the loot's AP back, and loot on arrival. True if it
+## acted. Stops once the ship is down or the give-up round passes.
+func _auto_fetch_item(player: PlayerUnit) -> bool:
+	var source := _auto_objective_source()
+	if source == null or player != _auto_fetcher() or TurnManager.turn_number >= AUTO_FETCH_GIVE_UP_ROUND:
+		return false
+	var claim := ExtractionManager.claim_of(ExtractionRules.PLAYER_CREW)
+	if claim >= 0 and ExtractionManager.rules.state_of(claim) == ExtractionRules.State.LANDED:
+		return false
+	var cost := player.action_cost(UnitStats.Action.LOOT)
+	var tile: Vector3i = source.loot_tile()
+	if not player.within_reach(tile):
+		var path := GridManager.find_path(player.grid_pos, tile, 999, true)
+		if path.is_empty():
+			return false
+		if not GridManager.is_free(path[-1]):
+			path.resize(path.size() - 1)
+		var steps := mini(path.size(), (player.ap - cost) / player.move_ap_per_tile())
+		if steps < 1:
+			return false  # no AP to close the distance this activation
+		var walk := path.slice(0, steps)
+		player.spend_ap(player.move_cost_for(walk.size()))
+		await player.move_along(walk)
+		_on_unit_log("%s auto-moved to %s to fetch the objective" % [player.stats.display_name, walk[-1]])
+		if player.is_downed or TurnManager.mission_over or not player.within_reach(tile):
+			return true
+	if player.ap < cost:
+		return true
+	if not player.has_free_slot():
+		var cheapest := 0
+		for i in player.inventory.size():
+			if player.inventory[i].value < player.inventory[cheapest].value:
+				cheapest = i
+		var dropped := player.remove_item(cheapest)
+		LootManager.drop_to_pile(player.grid_pos, dropped)
+		_on_unit_log("%s auto-dropped %s to make room" % [player.stats.display_name, dropped.display_name])
+	var items: Array = source.loot_items()
+	for i in items.size():
+		if (items[i] as ItemData).is_objective():
+			player.spend_ap(cost)
+			var item: ItemData = LootManager.take(source, i)
+			player.add_item(item)
+			_on_unit_log("%s auto-took the objective: %s" % [player.stats.display_name, item.display_name])
+			break
+	return true
+
+
+## How far (in path tiles) an extracting auto soldier will detour to reach a
+## downed or dead squadmate. Far enough to go back for someone in the same
+## firefight, short enough that the run still gets to the ship.
+const AUTO_RESCUE_RANGE := 8
+
+
+## The auto squad's half of GDD §4.4, kept deliberately simple: revive a downed
+## squadmate in reach if the AP is there; otherwise, when `go_get` (the extraction
+## branch), lift a body in reach — downed before dead — or walk toward the nearest
+## one within AUTO_RESCUE_RANGE and lift it on arrival. Bodies already lying in
+## `h`'s square are left where they are: they extract anyway. Calls the Unit-level
+## operations directly rather than the `try_` commands, which end the activation
+## at 0 AP while this branch still has steps to run (see `_auto_extract`).
+func _auto_tend_downed(player: PlayerUnit, go_get: bool, h: MapData.Hangar = null) -> void:
+	if player.carrying != null or player.is_downed or TurnManager.mission_over:
+		return
+	var revive_cost := player.action_cost(UnitStats.Action.REVIVE)
+	var lift_cost := player.action_cost(UnitStats.Action.PICK_UP)
+	var revivable := player.body_targets(PlayerUnit.Mode.REVIVE)
+	if not revivable.is_empty() and player.ap >= revive_cost:
+		var body: Unit = revivable[0]
+		player.spend_ap(revive_cost)
+		body.revive_at(player.revive_tile_for(body))
+		_on_unit_log("%s auto-revived %s (%d HP)" % [player.stats.display_name,
+			body.stats.display_name, body.current_hp])
+		return
+	if not go_get:
+		return
+	if _auto_try_lift(player, h, lift_cost):
+		return
+	# Walk toward the nearest body worth fetching, keeping the lift's AP back.
+	var best: Array[Vector3i] = []
+	for node in get_tree().get_nodes_in_group("player_units"):
+		var body := node as Unit
+		if body == null or not body.is_carriable() or (h != null and h.in_square(body.grid_pos)):
+			continue
+		var path := GridManager.find_path(player.grid_pos, body.grid_pos, AUTO_RESCUE_RANGE, true)
+		if path.is_empty() or path.size() > AUTO_RESCUE_RANGE:
+			continue
+		if best.is_empty() or path.size() < best.size():
+			best = path
+	if best.is_empty():
+		return
+	# The body's own tile may be stood on by somebody; stop short of it if so.
+	if not GridManager.is_free(best[-1]):
+		best.resize(best.size() - 1)
+	var steps := mini(best.size(), (player.ap - lift_cost) / player.move_ap_per_tile())
+	if steps < 1:
+		return
+	var walk := best.slice(0, steps)
+	player.spend_ap(player.move_cost_for(walk.size()))
+	await player.move_along(walk)
+	_on_unit_log("%s auto-moved to %s to fetch a body" % [player.stats.display_name, walk[-1]])
+	if not player.is_downed and not TurnManager.mission_over:
+		_auto_try_lift(player, h, lift_cost)
+
+
+## Lifts the best body in reach (a downed squadmate before a corpse), if the AP
+## is there. True if it did.
+func _auto_try_lift(player: PlayerUnit, h: MapData.Hangar, lift_cost: int) -> bool:
+	if player.ap < lift_cost or player.carrying != null:
+		return false
+	var pick: Unit = null
+	for body in player.body_targets(PlayerUnit.Mode.PICK_UP):
+		if h != null and h.in_square(body.grid_pos):
+			continue
+		if pick == null or (body.life_state == Unit.LifeState.DOWNED and pick.life_state == Unit.LifeState.DEAD):
+			pick = body
+	if pick == null:
+		return false
+	player.spend_ap(lift_cost)
+	player.pick_up(pick)
+	_on_unit_log("%s auto-lifted %s%s" % [player.stats.display_name, pick.stats.display_name,
+		"'s body" if pick.life_state == Unit.LifeState.DEAD else ""])
+	return true
+
+
+func _auto_try_call(player: PlayerUnit) -> void:
+	var cost := player.action_cost(UnitStats.Action.CALL_SHIP)
+	if player.ap < cost or ExtractionManager.callable_hangar_for(player) < 0:
+		return
+	# The ship is not called while the fetcher is still on its way to a reachable
+	# Retrieve item: a ship that lands first sends the fetcher home empty-handed.
+	if _auto_fetch_pending():
+		return
+	player.spend_ap(cost)
+	if ExtractionManager.call_ship(player):
+		_on_unit_log("%s auto-called the ship (%d AP)" % [player.stats.display_name, cost])
+
+
+## The hangar to extract from: the squad's claimed one if any, else the nearest
+## (by path) discovered hangar that can be called right now. The insertion
+## hangar is always a candidate, so a run that never found another still has
+## a way out — the "safe run" GDD §7.2 says is legal and pays poorly.
+func _auto_pick_hangar(player: PlayerUnit) -> int:
+	var best := -1
+	var best_len := 999999
+	var rules: ExtractionRules = ExtractionManager.rules
+	for i in rules.hangar_count():
+		if rules.call_blocker(i, ExtractionRules.PLAYER_CREW) != "":
+			continue
+		var h := ExtractionManager.hangar(i)
+		var length := 0
+		if not h.in_bay(player.grid_pos):
+			var path := GridManager.find_path(player.grid_pos, h.square[4], 999, true)
+			if path.is_empty():
+				continue
+			length = path.size()
+		if length < best_len:
+			best_len = length
+			best = i
+	return best
+
+
+## Walks toward the nearest free square tile this activation's AP can afford,
+## all of it if need be — getting in matters more than a shot does now.
+func _auto_walk_to_square(player: PlayerUnit, h: MapData.Hangar) -> void:
+	var best: Array[Vector3i] = []
+	for tile: Vector3i in h.square:
+		if not GridManager.is_free(tile):
+			continue
+		var path := GridManager.find_path(player.grid_pos, tile, 999)
+		if path.is_empty():
+			continue
+		if best.is_empty() or path.size() < best.size():
+			best = path
+	if best.is_empty():
+		return
+	var steps := mini(player.move_tiles_affordable(), best.size())
+	if steps < 1:
+		return
+	var path := best.slice(0, steps)
+	player.spend_ap(player.move_cost_for(path.size()))
+	await player.move_along(path)
+	_on_unit_log("%s auto-moved to %s heading for the ship" % [player.stats.display_name, path[-1]])
+
+
+## Every soldier still on their feet is in `h`'s square. Downed ones don't count:
+## they cannot get in on their own, and waiting on them would only run the
+## window out with the rest of the squad standing in the open.
+func _auto_squad_in_square(h: MapData.Hangar) -> bool:
+	for node in get_tree().get_nodes_in_group("player_units"):
+		var member := node as Unit
+		if member != null and member.life_state == Unit.LifeState.ACTIVE and not h.in_square(member.grid_pos):
+			return false
+	return true
+
+
+## Shoots (or reloads) at the nearest hostile in sight with whatever AP is left,
+## without moving — the extraction branch's covering fire.
+func _auto_shoot(player: PlayerUnit) -> void:
+	var shoot_cost := player.action_cost(UnitStats.Action.SHOOT)
+	var reload_cost := player.action_cost(UnitStats.Action.RELOAD)
+	while player.ap > 0 and not player.is_downed and not TurnManager.mission_over:
+		var target: Unit = null
+		for enemy in player.hostiles():
+			if GridManager.chebyshev_dist(player.grid_pos, enemy.grid_pos) <= 8 \
+					and GridManager.has_line_of_sight(player, enemy):
+				target = enemy
+				break
+		if target == null:
+			return
+		if player.can_shoot() and player.ap >= shoot_cost:
+			player.spend_ap(shoot_cost)
+			var result: Combat.ShotResult = await player.fire_at(target, Combat.ShotAction.SHOOT)
+			_on_unit_log("%s auto-fired at %s (%d%%): %s" % [player.stats.display_name,
+				target.stats.display_name, result.accuracy, Combat.describe(result)])
+		elif not player.can_shoot() and player.can_reload() and player.ap >= reload_cost:
+			player.spend_ap(reload_cost)
+			await player.do_reload()
+		else:
+			return
+
+
 func _living_squad() -> Array:
 	var out: Array = []
 	for node in get_tree().get_nodes_in_group("player_units"):
@@ -425,12 +1217,16 @@ func _living_squad() -> Array:
 ## The original greedy loop, kept as the harness's floor: shoot, reload, close,
 ## swing. Crude on purpose — it exists to guarantee the run terminates, not to
 ## play well.
-func _greedy_fallback(player: PlayerUnit) -> void:
+##
+## `fixed_target`, when given and still standing, is attacked instead of the
+## nearest hostile — the Destroy contract's nest (extraction plan 3.3).
+func _greedy_fallback(player: PlayerUnit, fixed_target: Unit = null) -> void:
 	var shoot_cost := player.action_cost(UnitStats.Action.SHOOT)
 	var reload_cost := player.action_cost(UnitStats.Action.RELOAD)
 	var melee_cost := player.action_cost(UnitStats.Action.MELEE)
 	while player.ap > 0 and not player.is_downed and not TurnManager.mission_over:
-		var target := _nearest_hostile(player)
+		var target := fixed_target if fixed_target != null and is_instance_valid(fixed_target) \
+			and not fixed_target.is_downed else _nearest_hostile(player)
 		if target == null:
 			break
 		var in_range := GridManager.chebyshev_dist(player.grid_pos, target.grid_pos) <= 8

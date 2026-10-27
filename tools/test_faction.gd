@@ -10,10 +10,11 @@ extends SceneTree
 ## paragraph: the old rule was "hostile if the two booleans differ", so every
 ## pair below is checked against what that rule would have said.
 ##
-## This is also the file that will FAIL, loudly and on purpose, on the day
-## cross-faction hostility is switched on. That failure is the reminder to come
-## back and decide what the new expected answers are, rather than letting a
-## balance change land unannounced.
+## That day came: extraction plan Phase 7 switched cross-faction hostility on
+## (GDD §11.0), and this file failed on purpose as it promised to. The expected
+## answers are now "every faction against every other". The old-boolean check
+## is kept as a record of exactly which pairs flipped (the three non-player
+## pairs), so a future edit to HOSTILE_TO still cannot land unannounced.
 ##
 ## `Faction` touches no autoload, so it is safe to name directly in a --script
 ## tool — see test_cerberus.gd for what happens with classes that aren't.
@@ -35,11 +36,12 @@ func _initialize() -> void:
 	root.add_child(map)
 	await process_frame
 
-	_check_matrix_matches_the_old_boolean()
+	_check_matrix_is_all_against_all()
 	_check_nobody_fights_itself()
 	await _check_units_carry_the_right_faction()
 	await _check_hostiles_only_returns_enemies()
 	await _check_mercs_do_not_fight_themselves()
+	await _check_player_controlled_means_player_unit()
 
 	print("")
 	if _failures == 0:
@@ -50,21 +52,29 @@ func _initialize() -> void:
 		quit(1)
 
 
-## THE CLAIM OF THE WHOLE REFACTOR. Old rule: hostile iff exactly one side was
-## the player. Asserted over every ordered pair, so a stray edit to HOSTILE_TO
-## cannot change the fight without this saying so.
-func _check_matrix_matches_the_old_boolean() -> void:
+## GDD §11.0: every faction is hostile to every other, asserted over every
+## ordered pair, so a stray edit to HOSTILE_TO cannot change the fight without
+## this saying so. Where the answer differs from the pre-Phase-7 boolean ("hostile
+## iff exactly one side is the player"), the label says so — those are exactly
+## the pairs Phase 7 turned on.
+func _check_matrix_is_all_against_all() -> void:
+	var flipped := 0
 	for a: int in Faction.Id.values():
 		for b: int in Faction.Id.values():
 			var a_is_player: bool = a == Faction.Id.CONTRACTORS
 			var b_is_player: bool = b == Faction.Id.CONTRACTORS
 			var old_rule: bool = a_is_player != b_is_player
+			var want: bool = a != b
 			var now: bool = Faction.is_hostile(a, b)
-			_check(now == old_rule, "%s vs %s: %s (old boolean said %s)" % [
+			if now != old_rule:
+				flipped += 1
+			_check(now == want, "%s vs %s: %s%s" % [
 				Faction.display_name(a), Faction.display_name(b),
 				"hostile" if now else "not hostile",
-				"hostile" if old_rule else "not hostile",
+				" (new in Phase 7)" if now != old_rule else "",
 			])
+	# Aliens/Security/Mercs against each other, both directions: 3 pairs x 2.
+	_check(flipped == 6, "exactly the six third-party relationships changed (%d)" % flipped)
 
 
 ## Hardcoded in `is_hostile` rather than trusted to the table, because a faction
@@ -98,10 +108,9 @@ func _check_units_carry_the_right_faction() -> void:
 		"the squad engages both hostile factions")
 	_check(swarm.is_hostile_to(player) and robot.is_hostile_to(player),
 		"and both engage the squad")
-	# The gap this model exists to make statable. Expected to flip one day; when
-	# it does, this line is the one to come back and rewrite.
-	_check(not swarm.is_hostile_to(robot) and not robot.is_hostile_to(swarm),
-		"aliens and robots still ignore each other (unchanged, for now)")
+	# The gap this model existed to make statable, closed in Phase 7.
+	_check(swarm.is_hostile_to(robot) and robot.is_hostile_to(swarm),
+		"aliens and robots engage each other (Phase 7, GDD §11.0)")
 
 	_free([player, swarm, robot])
 
@@ -123,11 +132,13 @@ func _check_hostiles_only_returns_enemies() -> void:
 	var alien_seen: Array = swarm.hostiles()
 	_check(player in alien_seen and mate in alien_seen,
 		"a swarm sees the whole squad (%d)" % alien_seen.size())
-	_check(not (robot in alien_seen), "and not the robot beside it")
+	_check(robot in alien_seen, "and, since Phase 7, the robot beside it")
+	_check(not (swarm in alien_seen), "but never itself")
 
 	# A downed unit is not a target. `hostiles()` filters it, which is what the
 	# old per-call `is_downed` checks at each call site were doing.
-	swarm.is_downed = true
+	# `is_downed` is derived from `life_state` (and read-only), so set that.
+	swarm.life_state = load("res://scripts/unit.gd").LifeState.DOWNED
 	_check(not (swarm in player.hostiles()), "a downed hostile drops out of the set")
 
 	_free([player, mate, swarm, robot])
@@ -167,6 +178,25 @@ func _check_mercs_do_not_fight_themselves() -> void:
 		"while the squad and the mercs do engage each other")
 
 	_free([merc, mate, player])
+
+
+## Extraction plan 0.4: `is_player_controlled` means "is a PlayerUnit", not "is a
+## Contractor". The two used to coincide; the door gun (Phase 5) and an escorted
+## VIP (Phase 6) are Contractor-side units no human drives, and must neither be
+## handed the mouse nor keep a wiped squad's mission alive. A merc re-badged as a
+## Contractor stands in for them here — any non-PlayerUnit on the squad's side.
+func _check_player_controlled_means_player_unit() -> void:
+	var player = await _spawn(PLAYER, ANCHOR)
+	var friend = await _spawn(MERC, ANCHOR + Vector3i(2, 0, 0))
+	friend.faction = Faction.Id.CONTRACTORS
+
+	_check(player.is_player_controlled, "a PlayerUnit is player-controlled")
+	_check(not friend.is_player_controlled,
+		"a Contractor-side unit that is not a PlayerUnit is not")
+	_check(not player.is_hostile_to(friend) and not friend.is_hostile_to(player),
+		"yet it is on the squad's side — sides are still the faction's question")
+
+	_free([player, friend])
 
 
 func _spawn(scene_path: String, at: Vector3i):

@@ -147,11 +147,11 @@ func _combat_turn() -> void:
 			# nothing is affordable, which the old flat 1/2 AP costs never needed:
 			# a snap shot can now cost more than a whole small pool, and without the
 			# bail an alien that cannot pay for anything spins here forever.
+			var was := quarry.life_state
 			if not await _take_best_shot(quarry, shoot_cost):
 				ap = 0
 				return
-			if quarry.is_downed:
-				action_logged.emit("%s is DOWN!" % quarry.stats.display_name)
+			_log_casualty(quarry, was)
 		elif not can_shoot():
 			if ap < reload_cost:
 				ap = 0
@@ -181,9 +181,11 @@ const SUPPRESS_CHANCE := 0.2
 func _take_best_shot(quarry: Unit, shoot_cost: int) -> bool:
 	var suppress_cost := action_cost(UnitStats.Action.SUPPRESS)
 	# Never re-pins a unit already pinned by somebody: the accuracy and AP
-	# penalties do not stack, so the second burst buys nothing at all.
-	if ap >= suppress_cost and can_suppress() and not quarry.is_suppressed() \
-			and randf() < SUPPRESS_CHANCE:
+	# penalties do not stack, so the second burst buys nothing at all. Never pins a
+	# body either (an alien finishing downed prey): there is nothing to hold down,
+	# and do_suppress refuses one without spending AP, which would spin this loop.
+	if ap >= suppress_cost and can_suppress() and not quarry.is_downed \
+			and not quarry.is_suppressed() and randf() < SUPPRESS_CHANCE:
 		await do_suppress(quarry)
 		action_logged.emit("%s lays down suppressing fire on %s" % [
 			stats.display_name, quarry.stats.display_name])
@@ -205,6 +207,29 @@ func _take_best_shot(quarry: Unit, shoot_cost: int) -> bool:
 	var result: Combat.ShotResult = await fire_at(quarry, Combat.ShotAction.SHOOT)
 	action_logged.emit("%s fired at %s (%d%% acc): %s" % [stats.display_name, quarry.stats.display_name, result.accuracy, Combat.describe(result)])
 	return true
+
+
+## Closes on a downed `quarry` and claws it until it is dead, the body is lifted,
+## or the AP runs out. For a melee alien whose own combat loop cannot express
+## "finish it" (the Agile Hunter's planner). Coroutine.
+func _finish_downed_in_melee(quarry: Unit) -> void:
+	var melee_cost := action_cost(UnitStats.Action.MELEE)
+	while ap > 0 and not is_downed and _still_a_target(quarry) and quarry.is_downed:
+		if GridManager.is_melee_adjacent(grid_pos, quarry.grid_pos) or grid_pos == quarry.grid_pos:
+			if ap < melee_cost:
+				ap = 0
+				return
+			spend_ap(melee_cost)
+			var was := quarry.life_state
+			var result: Combat.ShotResult = await melee_at(quarry)
+			action_logged.emit("%s strikes %s on the deck (%d%% acc): %s" % [
+				stats.display_name, quarry.stats.display_name, result.accuracy, Combat.describe(result)])
+			_log_casualty(quarry, was)
+		else:
+			var before := ap
+			await _move_toward(quarry, melee_cost)
+			if ap == before:
+				return
 
 
 func _take_aimed_shot(quarry: Unit, part: int) -> void:
@@ -247,7 +272,7 @@ func _investigate() -> void:
 		if not _has_last_known or grid_pos == last_known_pos:
 			_give_up()
 			return
-		var path := GridManager.find_path(grid_pos, last_known_pos, 999)
+		var path := _route_path(last_known_pos, false)
 		if path.is_empty():
 			_give_up()  # blocked, or something is standing on the spot
 			return
@@ -271,19 +296,91 @@ func acquire_target() -> Unit:
 	## activation — which is what an Unaware alien idling at its nest should do.
 	if alert_state != AlertState.COMBAT:
 		return null
-	if target == null or target.is_downed:
+	if target == null or not _still_a_target(target):
 		_lose_target()
 		return null
+	if target.is_downed:
+		# Finishing prey (DOWNED_POLICY ALWAYS) is LOW-RISK prey, and ranks below
+		# a live threat: a soldier still on their feet in sight takes the target
+		# back. The squad standing over its downed is therefore what protects them
+		# — leave a body alone in an alien's sight and it is finished.
+		var threat := _visible_live_hostile()
+		if threat != null:
+			target = threat
+			_last_contact_turn = TurnManager.turn_number
 	last_known_pos = target.grid_pos
 	_has_last_known = true
 	return target
 
 
+## Whether this unit goes after DOWNED enemies at all (Faction.DOWNED_POLICY
+## ALWAYS — the aliens). OPPORTUNISTIC is not "yes" here: mercs finish a body
+## only from where they already stand (MercUnit), never by locking onto it.
+## Overridden off by the worm, whose attack is trampling OCCUPIED tiles — and a
+## body holds none.
+func finishes_downed() -> bool:
+	return Faction.downed_policy(faction) == Faction.DownedPolicy.ALWAYS
+
+
+## Whether `unit` is still something this unit fights: anyone ACTIVE, or a
+## downed body it finishes (see `finishes_downed`). Never a corpse, and never a
+## carried body — that one is shot through its carrier, not aimed at.
+func _still_a_target(unit: Unit) -> bool:
+	if unit == null or unit.life_state == LifeState.DEAD:
+		return false
+	if not unit.is_downed:
+		return true
+	return finishes_downed() and unit.carried_by == null
+
+
+## The nearest live hostile this unit can see right now and would fight
+## (`will_engage`), or null.
+func _visible_live_hostile() -> Unit:
+	var best: Unit = null
+	var best_dist := 999999
+	for unit in engageable_hostiles():
+		var d := GridManager.chebyshev_dist(grid_pos, unit.grid_pos)
+		if d < best_dist and _can_see(unit):
+			best_dist = d
+			best = unit
+	return best
+
+
+## "X is DOWN!" / "X is DEAD!" for whatever this unit's attack just did to
+## `quarry`, given its life state before. Silent when nothing changed, so an
+## alien chewing on a body does not announce it went down on every swing.
+func _log_casualty(quarry: Unit, was: LifeState) -> void:
+	if quarry.life_state == was:
+		return
+	if quarry.life_state == LifeState.DEAD:
+		action_logged.emit("%s is DEAD!" % quarry.stats.display_name)
+	elif quarry.life_state == LifeState.DOWNED:
+		action_logged.emit("%s is DOWN!" % quarry.stats.display_name)
+
+
+## Whether this unit is aware of `unit` this activation: sight (`_can_see`) for a
+## live one, and the same sight test with the downed gate lifted for a body it
+## finishes. Read by `_check_contact`, so a lock on downed prey is kept — or lost
+## — by exactly the rules a lock on a live one is.
+func _detects(unit: Unit) -> bool:
+	if unit != null and unit.is_downed:
+		return _still_a_target(unit) and _sight_check(unit)
+	return _can_see(unit)
+
+
 func _can_see(unit: Unit) -> bool:
+	if unit == null or unit.is_downed:
+		return false
+	return _sight_check(unit)
+
+
+## The geometry-and-light half of sight, with no opinion on life state — split
+## out of `_can_see` so a body on the deck (`_detects`) is seen by the same rule.
+func _sight_check(unit: Unit) -> bool:
 	# Sight is gated on light, not just geometry (Sec 5.1). Total light_value is
 	# the right reading here — being lit by an overhead fixture gives you away
 	# exactly as much as being lit by your own flashlight does.
-	if unit == null or unit.is_downed:
+	if unit == null:
 		return false
 	if GridManager.chebyshev_dist(grid_pos, unit.grid_pos) > roundi(detection_range * unit.visibility_multiplier()):
 		return false
@@ -295,29 +392,62 @@ func _can_see(unit: Unit) -> bool:
 
 func _look_for_targets() -> void:
 	# Skipped while already locked on — an alien in a fight doesn't shop around.
-	if alert_state == AlertState.COMBAT and target != null and not target.is_downed:
+	# (Downed prey it is finishing counts as locked on; `acquire_target` is what
+	# trades it for a live threat.)
+	if alert_state == AlertState.COMBAT and _still_a_target(target):
 		return
 	var best: Unit = null
-	var best_dist := 999999
-	# Everything this unit would engage, rather than the `player_units` group it
-	# used to scan. Identical today — aliens and robots are hostile only to the
-	# contractors — but it is now a question about sides instead of an assumption
-	# that the player is the only other side there is.
-	for unit in hostiles():
+	var best_score := -INF
+	# Everything this unit would engage — since Phase 7 that is every other
+	# faction (Faction.HOSTILE_TO), narrowed by `will_engage` for the mercs — and
+	# ranked by `_target_rank`: nearest first for the aliens, threat for the
+	# robots. Ties keep the first found, i.e. group order, as before.
+	for unit in engageable_hostiles():
 		var d := GridManager.chebyshev_dist(grid_pos, unit.grid_pos)
-		if d >= best_dist or not _can_see(unit):
+		var score := _target_rank(unit, d)
+		if score <= best_score or not _can_see(unit):
 			continue
-		best_dist = d
+		best_score = score
 		best = unit
 	if best:
 		_enter_combat(best, "%s spotted %s!" % [stats.display_name, best.stats.display_name])
+		return
+	var best_dist := 999999
+	# Nothing alive in sight: a downed body it can see is prey (GDD §4.4, the
+	# aliens' DOWNED_POLICY). Seen by the same light-and-LOS rule as anything else,
+	# so a body lying in the dark is safer than one lying in a pool of light.
+	if not finishes_downed():
+		return
+	for body in downed_targets():
+		var d := GridManager.chebyshev_dist(grid_pos, body.grid_pos)
+		if d >= best_dist or not _sight_check(body):
+			continue
+		best_dist = d
+		best = body
+	if best:
+		_enter_combat(best, "%s finds %s on the deck" % [stats.display_name, best.stats.display_name])
+
+
+## How much this unit wants `unit` (at Chebyshev `distance`) as its target —
+## higher wins. The default is the aliens' rule, "prey is prey, nearest first"
+## (GDD §11.0), and it was the only rule before Phase 7. CerberusUnit ranks by
+## threat and MercUnit puts the player crew first.
+func _target_rank(_unit: Unit, distance: int) -> float:
+	return -float(distance)
+
+
+## The route this unit walks from where it stands to `dest` when it is not
+## chasing a target (`_investigate`, `_move_to_tile`). A plain shortest path by
+## default; MercUnit swings it wide of third-party hostiles (Phase 7).
+func _route_path(dest: Vector3i, allow_occupied_goal: bool) -> Array[Vector3i]:
+	return GridManager.find_path(grid_pos, dest, 999, allow_occupied_goal)
 
 
 func _check_contact() -> void:
 	# Run once per activation while in COMBAT. Losing sight — by breaking LOS or
 	# by the target going dark — eventually breaks the lock, which is the other
 	# half of making the flashlight a decision rather than a free upgrade.
-	if _can_see(target):
+	if _detects(target):
 		_last_contact_turn = TurnManager.turn_number
 		return
 	if TurnManager.turn_number - _last_contact_turn >= lose_contact_turns:
@@ -543,7 +673,7 @@ func _move_to_tile(dest: Vector3i, stop_short: bool, reserve_ap: int = 0) -> voi
 	# _move_budget() steps of it — routes around walls instead of greedy
 	# straight-line chasing. `stop_short` drops the final tile, for closing on a
 	# unit rather than onto it.
-	var full_path := GridManager.find_path(grid_pos, dest, 999, true)
+	var full_path := _route_path(dest, true)
 	if stop_short and not full_path.is_empty():
 		full_path.resize(full_path.size() - 1)  # never step onto the target itself
 	var budget := _move_budget(reserve_ap)

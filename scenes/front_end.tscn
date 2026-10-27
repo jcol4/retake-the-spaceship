@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://cfrontend0001"]
+
+[ext_resource type="Script" path="res://scripts/campaign/front_end.gd" id="1_script"]
+
+[node name="FrontEnd" type="Node"]
+script = ExtResource("1_script")
