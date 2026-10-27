@@ -292,6 +292,16 @@ func _melee_verb() -> String:
 	return "bit"
 
 
+## The one alien that does NOT finish downed prey (Faction.DOWNED_POLICY says
+## the aliens do). A mass attacks by trampling OCCUPIED tiles on its way through
+## (`_trample_along`), and a body holds no tile, so a mass locked onto one would
+## march back and forth over it without ever striking. Rather than teach the pile
+## a second attack, worms simply leave bodies alone — the rest of the alien roster
+## is plenty to make a downed soldier urgent.
+func finishes_downed() -> bool:
+	return false
+
+
 # ------------------------------------------------------------------- the rally
 
 
@@ -542,8 +552,8 @@ func absorb(other: WormUnit) -> void:
 
 ## Leaves the board WITHOUT dying.
 ##
-## `is_downed` is set because every scan on the board reads it — the draw pool,
-## `hostiles()`, `allies()`, the mission end check — and this unit is genuinely
+## `life_state` goes to DEAD (so the derived `is_downed` reads true) because
+## every scan on the board reads `is_downed` — the draw pool, `hostiles()`, `allies()`, the mission end check — and this unit is genuinely
 ## no longer one of them. What is deliberately skipped is the rest of
 ## `take_damage`'s death path: no `downed` signal, no collapse animation, and
 ## above all no `SecurityNetwork.report_evidence(CORPSE)`. Nothing died here, and
@@ -557,7 +567,9 @@ func dissolve() -> void:
 	# would otherwise stay on the board — visible, and holding its tile.
 	if multiplayer.has_multiplayer_peer() and multiplayer.is_server():
 		_rpc_dissolve.rpc()
-	is_downed = true
+	# DEAD rather than DOWNED: there is no body here to revive or carry — the
+	# node is freed below, and nothing should ever offer a revive on it.
+	life_state = LifeState.DEAD
 	ap = 0
 	GridManager.set_occupant(grid_pos, null)
 	if _name_label:

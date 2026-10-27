@@ -32,16 +32,19 @@ const RANGES := {
 }
 
 
-static func roll(unit_class: UnitStats.UnitClass, display_name: String) -> UnitStats:
+## `rng` is optional: null rolls off the global RNG (what every existing caller
+## and test relies on); the campaign passes its own saved generator so a recruit
+## pool is a pure function of the save and cannot be rerolled by reloading.
+static func roll(unit_class: UnitStats.UnitClass, display_name: String, rng: RandomNumberGenerator = null) -> UnitStats:
 	var r: Dictionary = RANGES[unit_class]
 	var stats := UnitStats.new()
 	stats.armored = true  # see UnitStats.armored
 	stats.display_name = display_name
 	stats.unit_class = unit_class
-	stats.perception = randi_range(r["perception"][0], r["perception"][1])
-	stats.reflexes = randi_range(r["reflexes"][0], r["reflexes"][1])
-	stats.fitness = randi_range(r["fitness"][0], r["fitness"][1])
-	stats.luck = randi_range(r["luck"][0], r["luck"][1])
+	stats.perception = _roll_in(r["perception"], rng)
+	stats.reflexes = _roll_in(r["reflexes"], rng)
+	stats.fitness = _roll_in(r["fitness"], rng)
+	stats.luck = _roll_in(r["luck"], rng)
 	# base_hp / base_initiative / equipment_initiative are left at UnitStats'
 	# defaults: 15/50/5, which ARE the player faction's baseline (rework doc Sec
 	# 5.1/5.2). Only non-player types hand-set them (Sec 4.5/5.5).
@@ -55,3 +58,7 @@ static func roll(unit_class: UnitStats.UnitClass, display_name: String) -> UnitS
 	# player override this per soldier before the mission starts.
 	stats.weapon = WeaponPresets.make(WeaponPresets.default_for_class(unit_class))
 	return stats
+
+
+static func _roll_in(band: Array, rng: RandomNumberGenerator) -> int:
+	return rng.randi_range(band[0], band[1]) if rng != null else randi_range(band[0], band[1])

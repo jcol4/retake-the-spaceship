@@ -79,14 +79,12 @@ func escalate(at: Vector3i, reason: String) -> int:
 	return woken
 
 
-## Called by a destroyed nest (Sec 6 trigger 1). Kept as its own entry point
-## rather than a bare `escalate` call so the Nest node, when it exists, has an
-## obvious thing to invoke and this file documents the relationship.
-##
-## NOT YET WIRED TO ANYTHING: `Nest` (Sec 11.7) does not exist in code. This is
-## the seam it plugs into, and the trigger the design ranks first — destroying a
-## nest stops the bleeding but risks waking the deck, which is a real tradeoff
-## laid over an objective the player already has a reason to pursue.
+## Called by a destroyed nest (Sec 6 trigger 1) — `NestUnit._on_nest_died`, since
+## extraction plan 3.3 finished the nest. Kept as its own entry point rather than
+## a bare `escalate` call so the relationship is documented here. The trigger the
+## design ranks first: destroying a nest stops the bleeding but risks waking the
+## deck, which is a real tradeoff laid over an objective the player already has
+## a reason to pursue (the Destroy contract).
 func report_nest_destroyed(at: Vector3i) -> int:
 	return escalate(at, "A nest is destroyed")
 

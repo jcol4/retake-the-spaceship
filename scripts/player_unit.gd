@@ -3,7 +3,10 @@ extends Unit
 ## Input handling while this unit is the active (pool-drawn) unit.
 ## The HUD sets `pending_action`; clicks in the world resolve it.
 
-enum Mode { NONE, MOVE, SHOOT, AIMED_SHOT, SUPPRESS, FACE, GRENADE }
+## REVIVE and PICK_UP (extraction plan 2.6) are target modes over BODIES: the
+## next click picks a downed or dead squadmate within reach, rather than a hostile
+## or a tile. Appended, so no existing value moves.
+enum Mode { NONE, MOVE, SHOOT, AIMED_SHOT, SUPPRESS, FACE, GRENADE, REVIVE, PICK_UP }
 
 ## The payloads Throw Grenade (Sec 4.2) can pick between, chosen from the popup
 ## `grenade_target_picked` opens — same shape as Aimed Shot's zone menu, just
@@ -58,6 +61,16 @@ var mode: Mode = Mode.NONE
 ## plan and the grenade the thing that rescues it. One throw, EMP or Frag —
 ## see GrenadeType.
 var grenade_charges: int = 1
+## Campaign (extraction plan 4.2): the SoldierRecord this soldier was spawned from
+## ("" for a soldier spawned outside a campaign — tests, the screenshot tool). Set
+## by main.gd before add_child on every peer; the debrief maps units back to the
+## roster through it.
+var record_id: String = ""
+## The grenades drawn from the campaign stock for this mission (CampaignEconomy:
+## grenades are stocked gear, allotted per soldier in the hub). Kept apart from
+## `grenade_charges`, which counts down as they are thrown, so the debrief can tell
+## "thrown" from "brought home".
+var deployed_grenades: int = 1
 ## Destination tile -> tiles walked to reach it. Move is priced per tile now
 ## (rework doc Sec 4.1), so this doubles as the AP cost of every candidate
 ## destination once multiplied by `move_ap_per_tile()` — there is no Run band and
@@ -78,6 +91,14 @@ var _loadout_ammo_id: int = -1  # ...and the ammo loaded in it
 
 func _init() -> void:
 	faction = Faction.Id.CONTRACTORS
+	# GDD §4.4: the squad's soldiers are the only units with a downed state —
+	# everything else dies outright at 0 HP.
+	can_be_downed = true
+
+
+## The one override of Unit._is_player_unit — what `is_player_controlled` means.
+func _is_player_unit() -> bool:
+	return true
 
 
 ## Routes GOAP's narration into this unit's own log signal.
@@ -92,6 +113,14 @@ func report_action(text: String) -> void:
 func _ready() -> void:
 	super()
 	set_process(false)  # only polled while a move mode is armed
+	# Every soldier deploys with the sidearm (extraction plan 2.5): equipped gear,
+	# no inventory slot, holstered — its rounds sit in `stowed_ammo`/`_reserve`
+	# until a carry draws it. Built on every peer: it is fixed gear, so nothing
+	# about it needs to cross the wire beyond the replicated round counts.
+	if stats.sidearm == null:
+		stats.sidearm = WeaponPresets.make_sidearm()
+	stowed_ammo = stats.sidearm.effective_mag_size()
+	stowed_reserve = stats.sidearm.effective_reserve()
 
 
 func set_mode(new_mode: Mode) -> void:
@@ -122,7 +151,35 @@ func set_mode(new_mode: Mode) -> void:
 			_throw_tiles = _throwable_tiles()
 			if highlights:
 				highlights.show_throw_range(_throw_tiles)
+		Mode.REVIVE, Mode.PICK_UP:
+			# The bodies the click could land on, marked like targets. No hover
+			# label: there is no hit chance to show, and the button already says
+			# the price.
+			if highlights:
+				var tiles: Array[Vector3i] = []
+				var blanks: Array[int] = []
+				for body in body_targets(mode):
+					if not tiles.has(body.grid_pos):
+						tiles.append(body.grid_pos)
+						blanks.append(0)
+				highlights.show_targets(tiles, blanks)
 	set_process(mode != Mode.NONE)
+
+
+## The bodies a REVIVE or PICK_UP click could pick right now: every unit the
+## matching rule (`revive_blocker` / `pick_up_blocker`) accepts. Any owner's —
+## cross-player rescue is the rule (GDD §7.6). The HUD also uses this to decide
+## whether the two buttons are worth showing.
+func body_targets(for_mode: Mode) -> Array[Unit]:
+	var out: Array[Unit] = []
+	for node in get_tree().get_nodes_in_group("units"):
+		var body := node as Unit
+		if body == null or body.life_state == LifeState.ACTIVE:
+			continue
+		var why := revive_blocker(body) if for_mode == Mode.REVIVE else pick_up_blocker(body)
+		if why == "":
+			out.append(body)
+	return out
 
 
 func _cost_for(tile: Vector3i) -> int:
@@ -375,6 +432,7 @@ func _resolve_emp_throw(target: Vector3i) -> void:
 func _resolve_frag_throw(target: Vector3i) -> void:
 	action_logged.emit("%s throws a frag grenade at %s" % [stats.display_name, target])
 	var caught := 0
+	var downed_by_blast: Array[Unit] = []
 	for tile in _blast_tiles(target):
 		var t: GridTileData = GridManager.get_tile(tile)
 		if t == null:
@@ -392,7 +450,22 @@ func _resolve_frag_throw(target: Vector3i) -> void:
 			GridManager.damage_cover_edge(victim.grid_pos, defence[1], FRAG_DAMAGE)
 		caught += 1
 		if victim.is_downed:
+			downed_by_blast.append(victim)
 			action_logged.emit("%s is DOWN!" % victim.stats.display_name)
+	# GDD §4.4: "Stray area damage (grenades) hits downed soldiers regardless." A
+	# body holds no tile, so `occupant` above never finds one — they are looked up
+	# per tile instead, carried ones included (a blast does not care whose
+	# shoulder they are on). Snapshotted first so a soldier who went down to THIS
+	# blast above is not hit a second time as a body. Corpses take nothing.
+	for tile in _blast_tiles(target):
+		for body in bodies_on(tile, true):
+			if body.life_state != LifeState.DOWNED or body in downed_by_blast:
+				continue
+			var dealt := body.take_damage(FRAG_DAMAGE)
+			caught += 1
+			action_logged.emit("%s takes %d to the downed bar from the blast%s" % [
+				body.stats.display_name, dealt,
+				" — and is DEAD" if body.life_state == LifeState.DEAD else ""])
 	if caught == 0:
 		action_logged.emit("The frag grenade catches nothing")
 
@@ -429,6 +502,15 @@ func _unhandled_input(event: InputEvent) -> void:
 			# requests — see `_try_shoot`/`_try_suppress` below.
 			_try_shoot(unit)
 		return
+	if mode in [Mode.REVIVE, Mode.PICK_UP]:
+		# Ahead of the general raycast, which needs SOMETHING under the cursor:
+		# a body's own collider (layer 2, units only, like Shoot's pick), else
+		# whatever body is on the tile the cursor projects to — bodies hold no
+		# tile, so a soldier standing over one would otherwise hide it.
+		var body := _body_under_mouse()
+		if body != null:
+			_issue(&"try_revive" if mode == Mode.REVIVE else &"try_pick_up", [body])
+		return
 	var hit := _raycast_mouse()
 	if hit.is_empty():
 		return
@@ -450,6 +532,10 @@ func _unhandled_input(event: InputEvent) -> void:
 const _COMMANDS := [
 	"_try_move", "_do_shoot", "_try_suppress", "_try_throw_grenade", "_try_face",
 	"try_hunker", "try_overwatch", "try_reload", "try_toggle_flashlight", "fire_aimed_shot",
+	"try_call_ship", "try_board_ship", "try_extract", "try_switch_weapon",
+	"try_revive", "try_pick_up", "try_drop",
+	"try_loot", "try_drop_item",
+	"try_operate_terminal",
 ]
 
 
@@ -780,6 +866,302 @@ func try_reload() -> void:
 	set_mode(Mode.NONE)
 	await do_reload()
 	action_logged.emit("%s reloaded" % stats.display_name)
+	_check_activation_end()
+
+
+## Calls the ship to the hangar this soldier is standing in (GDD §7.3): 1 AP
+## flat (UnitStats.FLAT_AP_COST), from anywhere in a discovered bay. Every rule —
+## discovered, unclaimed, not cooling down, no other ship of ours inbound — is
+## ExtractionManager's / ExtractionRules', asked here before anything is spent,
+## so a refused call costs nothing. Either co-op player may make it: the crew is
+## the whole squad (GDD §7.6), and `_rpc_command` only checks that the sender owns
+## THIS soldier.
+func try_call_ship() -> void:
+	var cost := action_cost(UnitStats.Action.CALL_SHIP)
+	if ap < cost or is_busy or is_downed:
+		return
+	if ExtractionManager.callable_hangar_for(self) < 0:
+		action_logged.emit("%s: no hangar here to call the ship to" % stats.display_name)
+		return
+	spend_ap(cost)
+	set_mode(Mode.NONE)
+	ExtractionManager.call_ship(self)
+	action_logged.emit("%s calls in the ship (%d AP)" % [stats.display_name, cost])
+	_check_activation_end()
+
+
+## Walks up the ramp of our landed ship from its square (GDD §7.4), with whatever
+## body this soldier carries: 1 AP flat, and the soldier is OFF THE BOARD — safe,
+## certain to leave with the ship — so the activation ends here. Does not end the
+## mission (that is `try_extract`). Either co-op player's soldier may board.
+func try_board_ship() -> void:
+	var cost := action_cost(UnitStats.Action.BOARD_SHIP)
+	if ap < cost or is_busy or is_downed:
+		return
+	if ExtractionManager.board_hangar_for(self) < 0:
+		action_logged.emit("%s: no ship of ours to board from here" % stats.display_name)
+		return
+	spend_ap(cost)
+	set_mode(Mode.NONE)
+	ExtractionManager.board(self)
+	action_logged.emit("%s boards the ship (%d AP)" % [stats.display_name, cost])
+	end_activation()
+
+
+## The word to the pilot (GDD §7.4): our ship leaves NOW with everyone aboard and
+## everyone alive in its square, and the mission ends. 0 AP, from ANYWHERE — this
+## soldier need not be in the square, so the one still holding the door can call
+## it once the rest are in. Valid only with our own ship down and at least one of
+## ours aboard or in the square (ExtractionRules.extract_blocker), so a squad can
+## never leave on a rival's ship. Whoever is outside is left behind; the HUD asks
+## first.
+func try_extract() -> void:
+	if is_busy or is_downed:
+		return
+	var why := ExtractionManager.extract_blocker(self)
+	if why != "":
+		action_logged.emit("%s: can't extract — %s" % [stats.display_name, why])
+		return
+	set_mode(Mode.NONE)
+	action_logged.emit("%s gives the word: extract!" % stats.display_name)
+	ExtractionManager.extract(self)
+
+
+## Primary to pistol or back (GDD §4.3): 1 AP flat. Refused while carrying — the
+## carrier's hands already decide (pistol) — and for anyone without a sidearm.
+## Does not end the activation unless it spends the last point.
+func try_switch_weapon() -> void:
+	var cost := action_cost(UnitStats.Action.SWITCH_WEAPON)
+	if ap < cost or is_busy or is_downed:
+		return
+	var why := switch_weapon_blocker()
+	if why != "":
+		action_logged.emit("%s: can't switch weapons — %s" % [stats.display_name, why])
+		return
+	spend_ap(cost)
+	set_mode(Mode.NONE)
+	switch_weapon()
+	action_logged.emit("%s switches to the %s (%d AP)" % [
+		stats.display_name, stats.active_weapon().display_name if stats.active_weapon() else "weapon", cost])
+	_check_activation_end()
+
+
+## The body a REVIVE / PICK_UP click means: the one whose collider the cursor is
+## on, if it is a body this soldier could act on in the armed mode; else the
+## first such body on the tile the cursor projects to. Null if neither.
+func _body_under_mouse() -> Unit:
+	var candidates := body_targets(mode)
+	if candidates.is_empty():
+		return null
+	var hit := _raycast_mouse(2)
+	if not hit.is_empty():
+		var unit := _unit_from_collider(hit["collider"])
+		if unit and unit in candidates:
+			return unit
+	var tile := _tile_under_mouse()
+	for body in candidates:
+		if body.grid_pos == tile:
+			return body
+	return null
+
+
+# --- Downed squadmates (GDD §4.4, extraction plan 2.2–2.3) --------------------
+#
+# All three validate only THIS soldier — `_rpc_command` checks the sender owns
+# it — and accept any contractor's body, whichever player owns it (GDD §7.6
+# cross-player rescue). A revived soldier goes back to its own owner's control
+# with nothing to do here: `owner_peer_id` was never touched.
+
+
+## Revives `target` (3 AP flat). Every rule is `Unit.revive_blocker`'s, asked
+## before anything is spent, so a refused revive costs nothing.
+func try_revive(target: Unit) -> void:
+	var cost := action_cost(UnitStats.Action.REVIVE)
+	if ap < cost or is_busy or is_downed:
+		return
+	var why := revive_blocker(target)
+	if why != "":
+		action_logged.emit("%s: can't revive %s — %s" % [
+			stats.display_name, target.stats.display_name if target else "that", why])
+		return
+	var tile := revive_tile_for(target)
+	spend_ap(cost)
+	set_mode(Mode.NONE)
+	await _kneel_over(target)
+	target.revive_at(tile)
+	action_logged.emit("%s revives %s (%d AP) — back up at %d HP, %d of %d downs used" % [
+		stats.display_name, target.stats.display_name, cost, target.current_hp,
+		target.down_count, MAX_DOWNS - 1])
+	_check_activation_end()
+
+
+## Lifts `target` (2 AP flat): a downed squadmate or a corpse.
+func try_pick_up(target: Unit) -> void:
+	var cost := action_cost(UnitStats.Action.PICK_UP)
+	if ap < cost or is_busy or is_downed:
+		return
+	var why := pick_up_blocker(target)
+	if why != "":
+		action_logged.emit("%s: can't pick up %s — %s" % [
+			stats.display_name, target.stats.display_name if target else "that", why])
+		return
+	spend_ap(cost)
+	set_mode(Mode.NONE)
+	await _kneel_over(target)
+	pick_up(target)
+	action_logged.emit("%s picks up %s%s (%d AP) — pistol drawn" % [
+		stats.display_name, target.stats.display_name,
+		"'s body" if target.life_state == LifeState.DEAD else "", cost])
+	_check_activation_end()
+
+
+## Puts the carried body down on this tile. Free (GDD §4.4), and like the
+## flashlight and dust-off it does not end the activation.
+func try_drop() -> void:
+	if is_busy or carrying == null:
+		return
+	set_mode(Mode.NONE)
+	var body := drop_carried()
+	if body:
+		action_logged.emit("%s puts %s down" % [stats.display_name, body.stats.display_name])
+
+
+## Turns to the body and plays the interact one-shot (placeholder for revive and
+## lift animations, extraction plan art list). Coroutine.
+func _kneel_over(target: Unit) -> void:
+	await _interact_at(target.grid_pos)
+
+
+## The same one-shot aimed at a tile rather than a body: a crate, a pile.
+func _interact_at(tile: Vector3i) -> void:
+	if tile != grid_pos:
+		await face_toward(GridManager.grid_to_world(tile))
+	is_busy = true
+	await visual.play_action(UnitVisual.INTERACT)
+	is_busy = false
+
+
+# --- Loot (GDD §7.5, extraction plan 3.2) ---------------------------------------
+#
+# Like revive and pick up, both validate only THIS soldier (`_rpc_command` checks
+# the sender owns it) and accept any source whoever it belonged to — the other
+# player's dead soldier included (GDD §7.6).
+
+
+## A soldier's grenades are equipped gear (GDD §7.5): no slot while they fight,
+## one GEAR item each once they are a corpse. They go to the corpse's pack, so the
+## soldier has none left to throw — moot, but it keeps the gear in one place.
+func _equipped_gear_items() -> Array[ItemData]:
+	var out := super()
+	for _i in grenade_charges:
+		out.append(ItemPresets.make_grenade())
+	grenade_charges = 0
+	return out
+
+
+## Every loot source THIS soldier could take from right now: containers and piles
+## in reach (LootManager), and corpses in reach that have anything on them. In a
+## stable order — containers by tile, then corpses by node name — so a panel index
+## means the same thing on the clicking peer and on the host.
+func loot_sources() -> Array:
+	var out: Array = []
+	if life_state != LifeState.ACTIVE:
+		return out
+	out.append_array(LootManager.sources_in_reach(self))
+	var bodies: Array[Unit] = []
+	for node in get_tree().get_nodes_in_group("units"):
+		var body := node as Unit
+		if body == null or body == self or body.loot_items().is_empty():
+			continue
+		if body.loot_blocker(self) == "":
+			bodies.append(body)
+	bodies.sort_custom(func(a: Unit, b: Unit) -> bool: return String(a.name) < String(b.name))
+	out.append_array(bodies)
+	return out
+
+
+## Why THIS soldier cannot take item `index` from `source`, or "". Rules only; AP
+## is the caller's.
+func take_blocker(source: Object, index: int = 0) -> String:
+	if source is Unit and source == self:
+		return "that's your own pack"
+	if life_state != LifeState.ACTIVE:
+		return "not able"
+	if source == null or not is_instance_valid(source) or not source.has_method("loot_take"):
+		return "nothing to loot there"
+	if source is Unit:
+		var why: String = (source as Unit).loot_blocker(self)
+		if why != "":
+			return why
+	elif not LootManager.in_reach(self, source):
+		return "out of reach"
+	var items: Array = source.loot_items()
+	if index < 0 or index >= items.size():
+		return "nothing there"
+	if not has_free_slot():
+		return "pack full (%d/%d)" % [inventory.size(), INVENTORY_SLOTS]
+	return ""
+
+
+## Takes item `index` from `source` (1 AP flat per item, extraction plan 3.2): a
+## corpse, a container or a pile in reach, into a free slot. `expect_code`, when
+## given, must match the item at `index` — a co-op client's panel names the item
+## it saw, so a source that changed under the click takes nothing rather than the
+## wrong thing. Every rule is asked before anything is spent.
+func try_loot(source: Object, index: int, expect_code: String = "") -> void:
+	var cost := action_cost(UnitStats.Action.LOOT)
+	if ap < cost or is_busy or is_downed:
+		return
+	var why := take_blocker(source, index)
+	if why == "" and expect_code != "" and source.loot_items()[index].code != expect_code:
+		why = "it isn't there any more"
+	if why != "":
+		action_logged.emit("%s: can't loot — %s" % [stats.display_name, why])
+		return
+	spend_ap(cost)
+	set_mode(Mode.NONE)
+	await _interact_at(source.loot_tile())
+	var item: ItemData = LootManager.take(source, index)
+	if item == null:
+		return
+	add_item(item)
+	action_logged.emit("%s takes %s from %s (%d AP) — pack %d/%d" % [
+		stats.display_name, item.display_name, source.loot_name(), cost,
+		inventory.size(), INVENTORY_SLOTS])
+	_check_activation_end()
+
+
+## Drops item `index` from the pack onto this tile, where it forms a lootable pile
+## (plan A6). Free and does not end the activation, like putting down a body.
+func try_drop_item(index: int) -> void:
+	if is_busy or is_downed or index < 0 or index >= inventory.size():
+		return
+	var item := remove_item(index)
+	LootManager.drop_to_pile(grid_pos, item)
+	action_logged.emit("%s drops %s" % [stats.display_name, item.display_name])
+
+
+# --- Hold the terminal (GDD §7.5, extraction plan Phase 6) -------------------------
+
+
+## Starts — or restarts, after it was left and paused — the Hold contract's console
+## from beside it (OPERATE_TERMINAL, flat AP). Every rule is
+## `ObjectiveManager.operate_blocker`'s, asked before anything is spent. Like the
+## other interactions it validates only THIS soldier (`_rpc_command`), so either
+## co-op player's soldier can start it, and holding it is anyone's (any soldier
+## beside it at a round start counts — TerminalRules).
+func try_operate_terminal() -> void:
+	var cost := action_cost(UnitStats.Action.OPERATE_TERMINAL)
+	if ap < cost or is_busy or is_downed:
+		return
+	var why := ObjectiveManager.operate_blocker(self)
+	if why != "":
+		action_logged.emit("%s: can't operate the terminal — %s" % [stats.display_name, why])
+		return
+	spend_ap(cost)
+	set_mode(Mode.NONE)
+	await _interact_at(ObjectiveManager.terminal().tile)
+	ObjectiveManager.operate_terminal(self)
 	_check_activation_end()
 
 

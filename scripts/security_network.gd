@@ -112,6 +112,37 @@ func report_noise(at: Vector3i, source: Node = null, radius: int = NOISE_RADIUS)
 			node.hear_noise(at)
 
 
+# --- Aggression memory (extraction plan Phase 7) ------------------------------
+
+
+## zone -> {unit instance id: true}: who has fired on a robot in that zone this
+## mission. Read by CerberusUnit's threat ranking (CrossFactionRules). Keyed by
+## instance id so a freed unit leaves nothing dangling, and per ZONE because
+## that is the network's unit of shared knowledge — the same group a broadcast
+## reaches. Host-only AI state; nothing replicates it.
+var _aggressors: Dictionary = {}
+
+
+func report_aggression(zone: int, shooter: Node) -> void:
+	if zone == NO_ZONE or shooter == null:
+		return
+	if not _aggressors.has(zone):
+		_aggressors[zone] = {}
+	_aggressors[zone][shooter.get_instance_id()] = true
+
+
+func is_aggressor(zone: int, unit: Node) -> bool:
+	return unit != null and zone != NO_ZONE and _aggressors.has(zone) \
+		and _aggressors[zone].has(unit.get_instance_id())
+
+
+## Mission-scoped, like the hivemind's escalation: TurnManager.start_mission
+## clears it. Kept apart from `reset` because that also zeroes the Salvage
+## counter, which tools read across a run.
+func clear_aggression() -> void:
+	_aggressors.clear()
+
+
 # --- Evidence ----------------------------------------------------------------
 
 

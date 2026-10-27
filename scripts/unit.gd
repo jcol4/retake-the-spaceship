@@ -4,8 +4,25 @@ extends Node3D
 
 signal hp_changed(unit: Unit)
 signal ap_changed(unit: Unit)
+## The unit left the fight: ACTIVE -> DOWNED, or ACTIVE -> DEAD for a type that
+## dies outright (GDD §4.4). Kept meaning "out of action" rather than "downed
+## specifically", because every listener (a squad blackboard releasing claims, a
+## robot paying out salvage) cares that the unit stopped fighting, not how.
 signal downed(unit: Unit)
+## The unit became a corpse: from ACTIVE (killed outright) or from DOWNED (bled
+## out, finished off, third down). Fires after `downed` on an outright kill.
+signal died(unit: Unit)
+## A DOWNED unit was brought back up (Unit.revive_at).
+signal revived(unit: Unit)
+## What this unit is carrying, or who is carrying it, changed (pick up / drop /
+## auto-drop). Fired on every peer, for the HUD.
+signal carry_changed(unit: Unit)
 signal moved(unit: Unit)
+## Fired once per TILE of a walk, after `grid_pos` has been updated to it — where
+## `moved` fires once, when the whole walk has settled. For the things that care
+## about where a unit has BEEN rather than where it stopped: hangar discovery
+## (ExtractionManager) is the first.
+signal stepped(unit: Unit)
 
 ## AP per tile of movement (rework doc Sec 4.1). FLAT, for every unit regardless
 ## of stats: Fitness buys a bigger pool, not cheaper steps, and a diagonal costs
@@ -38,16 +55,30 @@ const BURST_STRAY_MAX := 2
 ## `is_hostile_to`, and `Faction` for why this replaced a boolean.
 @export var faction: Faction.Id = Faction.Id.ALIENS
 
-## Kept as a derived, READ-ONLY convenience for the paths that genuinely mean
-## "the player's own unit" rather than "not an enemy" — input handling, the HUD,
-## the win/loss tally, room rendering. Those are about who is holding the mouse,
-## not about who shoots whom, and rewriting them in terms of factions would say
-## less rather than more.
+## "This is a PlayerUnit" — a soldier a human drives. Derived and READ-ONLY, for
+## the paths that genuinely mean "the player's own unit" rather than "on the
+## player's side": the squad-wipe tally, input handling, the HUD. Those are about
+## who is holding the mouse, not about who shoots whom.
+##
+## It used to be `faction == CONTRACTORS`, and the two stop coinciding with the
+## extraction work: the door gun (EXTRACTION_PLAN Phase 5) and an escorted VIP
+## (Phase 6) are Contractor-side units nobody controls. A question that means
+## "is this on the squad's side" asks `faction` (or `is_hostile_to`) instead —
+## see the audit note in turn_manager.gd's `_check_end_conditions`.
+##
+## Answered by a virtual (`_is_player_unit`) rather than `self is PlayerUnit`:
+## naming the subclass from its own base would make unit.gd and player_unit.gd a
+## compile-time cycle for no benefit.
 ##
 ## Read-only on purpose: it used to be the field that got assigned, so making it
 ## unassignable is what guarantees no path still sets sides the old way.
 var is_player_controlled: bool:
-	get: return faction == Faction.Id.CONTRACTORS
+	get: return _is_player_unit()
+
+
+## Overridden to true by PlayerUnit, and nowhere else. See `is_player_controlled`.
+func _is_player_unit() -> bool:
+	return false
 
 ## Which human peer this unit belongs to in co-op — orthogonal to `faction`,
 ## which is still just "whose side." 0 means host/unowned: every AlienUnit,
@@ -97,7 +128,142 @@ var ammo: int
 # Spare rounds beyond the loaded magazine. -1 means unlimited (never
 # decremented by do_reload) — see WeaponData.starting_reserve.
 var reserve: int = -1
-var is_downed: bool = false
+
+## Where a unit stands between fighting and gone (GDD §4.4).
+##   ACTIVE  in the fight: in the pool, a target, a body that blocks a tile.
+##   DOWNED  out of the fight but not dead — revivable, carriable, bleeding out.
+##           Only a unit that `can_be_downed` (PlayerUnit) ever gets here.
+##   DEAD    a corpse, or (WormUnit.dissolve) a unit that left the board. A
+##           corpse stays on the map, holds no tile, takes no damage, and can be
+##           carried (and, extraction plan Phase 3, looted).
+##
+## Transitions, and the only functions that make them (all host-side):
+##   ACTIVE -> DOWNED  take_damage, at 0 HP, when can_be_downed and this is not
+##                     the third down (`MAX_DOWNS`)
+##   ACTIVE -> DEAD    take_damage at 0 HP otherwise, via die()
+##   DOWNED -> DEAD    take_damage / bleed_out_tick emptying `downed_hp`, via die()
+##   DOWNED -> ACTIVE  revive_at
+enum LifeState { ACTIVE, DOWNED, DEAD }
+
+## THE life-state field, and the one that replicates. Written only through
+## `_set_life_state` (and WormUnit.dissolve), so every change also runs the
+## presentation for it — see `_present_life_state`.
+var life_state: LifeState = LifeState.ACTIVE
+
+# --- Downed bar, death and carrying (GDD §4.4, extraction plan 2.1–2.3) -------
+
+## Whether this unit goes DOWNED at 0 HP rather than dying. True on PlayerUnit
+## only (set in its `_init`): GDD §4.4 "Downed applies to player contractors
+## only" — mercs, aliens and robots die outright, with no bleed-out. A plain var
+## rather than a virtual so a future escorted VIP (Phase 6) can opt in or out per
+## spawn without a subclass.
+var can_be_downed: bool = false
+
+## The downed bar's size as a fraction of max HP: "the same size as their max HP,
+## for now" (GDD §4.4). Named so a medical upgrade or a tougher class has one
+## number to move.
+const DOWNED_BAR_FRACTION := 1.0
+## What the downed bar loses at the start of every round: 1/5 of max HP, so a full
+## bar is five rounds to live (GDD §4.4 default). Rounded UP (`bleed_amount`), so
+## a small soldier never bleeds slower than the fraction says.
+const DOWNED_DRAIN_FRACTION := 0.2
+## The down that kills: the THIRD time a soldier goes down in one mission they die
+## on the spot instead (GDD §4.4). Counted from 1, so 3 means two survivable downs.
+const MAX_DOWNS := 3
+## The HP a revive brings a soldier back up at, as a fraction of max HP, rounded
+## UP (GDD §4.4 default 25%). Low on purpose: revived is "back on their feet",
+## not "back in the fight at full strength".
+const REVIVE_HP_FRACTION := 0.25
+## The chance a LANDED hit on a carrier who is not in cover from it goes into the
+## carried body instead (GDD §4.4). A carrier in cover from the shot never has
+## the body hit; a carried corpse is never hit (see `redirects_hit_to_carried`).
+const CARRY_REDIRECT_CHANCE := 0.25
+
+## The downed bar (GDD §4.4). Starts full at deployment and is NOT refilled by a
+## revive: whatever it lost stays lost, so a second down starts from what the
+## first left. Drains each round start (`bleed_out_tick`) and takes damage dealt
+## to a downed unit; empty -> DEAD. Mission-scoped for free: a unit is spawned
+## fresh per mission, which is when this is initialised.
+var downed_hp: int = 0
+## Times this unit has gone down this mission. Survives a revive (GDD §4.4
+## "Revived soldiers keep their down count"); the MAX_DOWNS-th down kills.
+var down_count: int = 0
+
+## The body this unit is carrying, and the unit carrying THIS one. Always set as a
+## pair (`_link_carry`), host-side; clients rebuild them from the two replicated
+## node paths below (`_sync_carry_from_paths`). A carried body shares its carrier's
+## tile (`grid_pos` follows every step of a walk), holds no occupancy, and is
+## hidden as a placeholder for carry art (extraction plan art list).
+var carrying: Unit = null
+var carried_by: Unit = null
+## Replicated stand-ins for the two links above: a Node cannot cross the wire,
+## its path can. Empty NodePath means none.
+var carrying_path: NodePath = NodePath()
+var carried_by_path: NodePath = NodePath()
+
+## The rounds in the weapon NOT in hand. `ammo`/`reserve` always describe the
+## weapon being fired (UnitStats.active_weapon), so drawing the sidearm swaps
+## these two pairs rather than teaching every ammo read about two guns — the
+## HUD, can_shoot, reload and the replication list all keep working unchanged,
+## and each gun keeps its own magazine and reserve (extraction plan 2.5).
+var stowed_ammo: int = 0
+var stowed_reserve: int = 0
+
+## The soldier's own choice of gun (GDD §4.3 "Switch weapon", 1 AP): true = the
+## pistol. Carrying a body forces the pistol whatever this says
+## (`_apply_carry`); putting the body down hands back whichever gun this names,
+## so a soldier who chose the pistol keeps it. Replicated.
+var sidearm_selected: bool = false
+
+## Boarded a landed ship (GDD §7.4) and left the board: safe, out of every group
+## anything targets or counts, waiting to fly. Set on every peer by
+## ExtractionManager._take_aboard; nothing ever clears it in a mission.
+var aboard: bool = false
+
+## GDD §7.5: four inventory slots, every item one slot. EQUIPPED gear is not
+## inventory and takes none — the primary, the pistol, fitted attachments and
+## grenades live on `stats` / PlayerUnit, not here. The cap binds what a LIVING
+## unit can take (`has_free_slot`); a corpse can hold more, since dying turns
+## its equipped gear into items on top of what it carried (`_stow_gear_as_items`).
+const INVENTORY_SLOTS := 4
+
+## What this unit carries. Host-authoritative: changed only through `add_item`,
+## `remove_item` and the death conversion, each of which refreshes
+## `inventory_codes`, the replicated stand-in (an Object cannot cross the wire,
+## its ItemPresets code can). Clients rebuild this from the codes in
+## `_after_replication`.
+var inventory: Array[ItemData] = []
+var inventory_codes: PackedStringArray = PackedStringArray()
+## Fired on every peer when `inventory` changes (host: as it changes; client: as
+## the codes land). The HUD's pack line and loot panel listen.
+signal inventory_changed(unit: Unit)
+## Set once a corpse's equipped gear has been converted to items, so it happens
+## exactly once however `die` is reached.
+var _gear_stowed := false
+
+## Client-side: the life state this peer last PRESENTED. Lets `_after_replication`
+## see a transition arrive and play it (collapse, tint, stand up) — the host plays
+## its own as it makes them, through the same `_present_life_state`.
+var _shown_life_state: LifeState = LifeState.ACTIVE
+## Collision layer the click/LOS body had before it was hidden by being carried.
+var _body_layer: int = -1
+## Placeholder "carrying a body" marker on the carrier — see `_show_carry_marker`.
+var _carry_marker: MeshInstance3D = null
+
+## "Out of action", for the ~115 call sites that only ever needed to know that:
+## the draw pool, `hostiles()`, `allies()`, every AI loop guard, the mission
+## tally. Derived from `life_state` so none of them had to change when downed
+## and dead became two states — a downed soldier and a corpse are equally not
+## going to act, not a target, and not in the pool. Only code that must tell the
+## two apart (revive, pick up, loot) reads `life_state` itself.
+##
+## READ-ONLY. It used to be the assigned field, and an assignment that silently
+## wrote nothing (a getter with no setter stores to a shadow the getter ignores)
+## would be a bug nobody saw — so the setter refuses loudly instead.
+var is_downed: bool:
+	get: return life_state != LifeState.ACTIVE
+	set(_value):
+		push_error("Unit.is_downed is derived from life_state and read-only — assign life_state instead")
 var hunkered: bool = false
 var on_overwatch: bool = false
 ## AP the unit committed to its reserved shot (rework doc Sec 4.4). Recorded but
@@ -219,8 +385,12 @@ func _ready() -> void:
 	if stats == null:
 		stats = UnitStats.new()
 	current_hp = stats.max_hp()
+	downed_hp = downed_bar_max()
 	ammo = stats.mag_size
 	reserve = stats.weapon.effective_reserve() if stats.weapon else 0
+	# A spawner may hand a unit its starting inventory before it enters the tree
+	# (main.gd gives mercs theirs); the wire form has to match from the outset.
+	inventory_codes = ItemPresets.codes_of(inventory)
 	grid_pos = GridManager.world_to_grid(global_position)
 	global_position = GridManager.grid_to_world(grid_pos)
 	GridManager.set_occupant(grid_pos, self)
@@ -263,8 +433,16 @@ func _ready() -> void:
 func _setup_replication() -> void:
 	var sync := MultiplayerSynchronizer.new()
 	var config := SceneReplicationConfig.new()
-	for prop in ["global_position", "rotation:y", "current_hp", "ap", "is_downed",
-			"ammo", "reserve", "hunkered", "on_overwatch", "flashlight_on"]:
+	# `life_state`, not `is_downed`: the latter is derived from it (and refuses
+	# assignment), so the synchronizer writing it would do nothing.
+	# The downed bar, the down count, both carry links (as paths — see
+	# `carrying_path`) and the stowed weapon's rounds are the extraction plan 2.1–2.5
+	# additions; `_after_replication` turns the links and life-state changes back
+	# into visuals on the client.
+	for prop in ["global_position", "rotation:y", "current_hp", "ap", "life_state",
+			"ammo", "reserve", "hunkered", "on_overwatch", "flashlight_on",
+			"downed_hp", "down_count", "carrying_path", "carried_by_path",
+			"stowed_ammo", "stowed_reserve", "inventory_codes", "sidearm_selected"]:
 		var path := NodePath(".:%s" % prop)
 		config.add_property(path)
 		config.property_set_replication_mode(path, SceneReplicationConfig.REPLICATION_MODE_ALWAYS)
@@ -274,8 +452,34 @@ func _setup_replication() -> void:
 		for peer_id in SteamLobby.ready_peers:
 			sync.set_visibility_for(peer_id, true)
 	_sync = sync
-	sync.synchronized.connect(_on_replicated)
+	sync.synchronized.connect(_after_replication)
 	add_child(sync)
+
+
+## Client-side, after each synchronized batch: the base class's own derived state
+## first (life-state presentation, carry links), then the subclass hook.
+func _after_replication() -> void:
+	if life_state != LifeState.ACTIVE or _shown_life_state != LifeState.ACTIVE:
+		# A body holds no tile, so its grid_pos is free to simply follow the
+		# streamed position — which is how a carried body's tile, and a dropped
+		# one's, reach this peer with no RPC of their own. Also on the batch that
+		# REVIVES it: a revive may stand it up on a neighbouring tile, and
+		# `_present_life_state` below claims occupancy at `grid_pos`.
+		grid_pos = GridManager.world_to_grid(global_position)
+	if life_state != _shown_life_state:
+		var old := _shown_life_state
+		_shown_life_state = life_state
+		_present_life_state(old)
+	_sync_carry_from_paths()
+	# The gun in hand also follows the soldier's own pick, which arrives on its
+	# own (a switch changes no carry link).
+	_apply_drawn()
+	# The pack (extraction plan 3.1) arrives as codes; rebuilt only when they
+	# differ, since REPLICATION_MODE_ALWAYS re-sends them every batch.
+	if inventory_codes != ItemPresets.codes_of(inventory):
+		inventory = ItemPresets.items_from(inventory_codes)
+		inventory_changed.emit(self)
+	_on_replicated()
 
 
 ## Client-side: runs after each batch of synchronized properties lands. For
@@ -379,6 +583,10 @@ func move_along(path: Array[Vector3i]) -> void:
 		was_hidden = hidden
 		await _step_to(GridManager.grid_to_world(step), speed)
 		grid_pos = step
+		# The carried body shares the tile, every tile of the way (GDD §4.4), so
+		# a carrier dropped mid-walk drops it exactly where they fell.
+		_carry_follow()
+		stepped.emit(self)
 		if is_downed:
 			break
 		_trip_alarm_here()
@@ -688,32 +896,37 @@ func _on_cover_destroyed(pos: Vector3i, side: int, _tier: int) -> void:
 ## Returns the damage that actually landed, after `damage_taken` — callers use it
 ## to report what happened rather than what was rolled, so an armored target's
 ## log line does not claim 12 damage when 4 got through.
+##
+## The three life states take damage three ways (GDD §4.4):
+##   ACTIVE  off `current_hp`; at 0 the unit goes DOWNED or, for a type that
+##           cannot be downed or on its MAX_DOWNS-th down, DEAD.
+##   DOWNED  off `downed_hp` (armor still applies — it is the same body); at 0,
+##           DEAD. This is what an alien finishing prey, a stray grenade, a
+##           redirected round and the bleed all come off.
+##   DEAD    nothing. A corpse cannot be damaged, so the return is 0 and no log
+##           line can claim otherwise.
 func take_damage(amount: int) -> int:
+	if life_state == LifeState.DEAD:
+		return 0
 	amount = damage_taken(amount)
+	if life_state == LifeState.DOWNED:
+		downed_hp = maxi(downed_hp - amount, 0)
+		hp_changed.emit(self)
+		if downed_hp == 0:
+			die()
+		return amount
 	current_hp = maxi(current_hp - amount, 0)
 	hp_changed.emit(self)
-	if current_hp == 0 and not is_downed:
-		is_downed = true
-		on_overwatch = false
-		stunned = false
-		# A corpse holds nobody down. `is_suppressed` also guards against a dead
-		# suppressor, so this is belt-and-braces — but it clears the back-link too,
-		# which that guard cannot.
-		release_suppression()
-		GridManager.set_occupant(grid_pos, null)
-		if _name_label:
-			_name_label.visible = false
-		# Deliberately not awaited: the unit is out of the fight the moment its
-		# HP hits zero, and the shooter's own activation shouldn't stall on the
-		# collapse playing out. (ActiveMarker self-hides off is_downed.)
-		visual.play_action(UnitVisual.DOWNED)
-		# A body is evidence a Proctor can find long after the fight that made it
-		# (security-robots/design-choices/detection-and-network-alert.md). Reported
-		# for every unit, robots included: a wrecked machine is as much a sign
-		# something came through here as a corpse is.
-		SecurityNetwork.report_evidence(grid_pos, SecurityNetwork.Evidence.CORPSE)
-		downed.emit(self)
-	elif not is_downed and not is_busy:
+	if current_hp == 0:
+		if can_be_downed:
+			down_count += 1
+		if can_be_downed and down_count < MAX_DOWNS:
+			_go_down()
+		else:
+			# Killed outright: a type with no downed state (mercs, aliens, robots —
+			# GDD §4.4/§11.10), or a soldier's third down.
+			die()
+	elif not is_busy:
 		# Flinch, then hand back to idle. Settled FIRST so the cover family is
 		# current: a soldier hit behind a crate resolves `hit_react_low` and
 		# flinches without standing up to do it.
@@ -730,6 +943,612 @@ func take_damage(amount: int) -> int:
 		settle_idle()
 		visual.play_hit_react()
 	return amount
+
+
+## The downed bar's full size: max HP, scaled by DOWNED_BAR_FRACTION.
+func downed_bar_max() -> int:
+	return maxi(1, roundi(stats.max_hp() * DOWNED_BAR_FRACTION))
+
+
+## What one round's bleed takes off the downed bar: ceil(max HP / 5) by default.
+func bleed_amount() -> int:
+	return maxi(1, ceili(stats.max_hp() * DOWNED_DRAIN_FRACTION))
+
+
+## The round-start bleed (GDD §4.4), called by TurnManager for every DOWNED unit
+## as a round begins, host-side. Not routed through `take_damage` because it is
+## not damage: armor does not stop bleeding, and nothing should flinch or report
+## being shot. Returns true if this tick killed the unit.
+func bleed_out_tick() -> bool:
+	if life_state != LifeState.DOWNED or not bleeds_out():
+		return false
+	downed_hp = maxi(downed_hp - bleed_amount(), 0)
+	hp_changed.emit(self)
+	if downed_hp == 0:
+		die()
+		return true
+	return false
+
+
+## Whether this unit's downed bar drains at round start. True for every soldier;
+## the Recover VIP overrides it false (extraction plan A10: "stable, not
+## bleeding"). TurnManager's drain asks this too, so a stable body logs nothing.
+func bleeds_out() -> bool:
+	return true
+
+
+## ACTIVE -> DOWNED. The unit leaves the fight (`_leave_fight`) with its body on
+## the deck: revivable, carriable, bleeding.
+func _go_down() -> void:
+	_leave_fight()
+	_set_life_state(LifeState.DOWNED)
+	downed.emit(self)
+
+
+## -> DEAD, from either other state. THE way a unit dies, whatever killed it.
+##
+## The body stays where it is as a corpse — on the deck, or over its carrier's
+## shoulder if it was being carried (a carried soldier who bleeds out stays
+## carried, and goes home as a recovered body). Its gear stays on it: extraction
+## plan Phase 3 makes a corpse lootable, and Phase 4 credits one carried out.
+## Placeholder look: the downed pose, tinted (UnitVisual.set_dead_tint).
+func die() -> void:
+	if life_state == LifeState.DEAD:
+		return
+	var was_active := life_state == LifeState.ACTIVE
+	if was_active:
+		_leave_fight()
+	_set_life_state(LifeState.DEAD)
+	# Extraction plan 3.2: a corpse is a loot source, and what is lootable off it
+	# is its pack PLUS its equipped gear as items. Converted here, once, so the
+	# rest of the game only ever has to read `inventory` — the loot panel, a
+	# carried corpse's recovery (MissionResult.loot), Phase 4's credit for it.
+	_stow_gear_as_items()
+	if was_active:
+		downed.emit(self)
+	died.emit(self)
+
+
+## Everything that stops when a unit drops out of the fight, whether onto the deck
+## or dead outright. Host-side game state only; how it LOOKS is
+## `_present_life_state`, which every peer runs.
+func _leave_fight() -> void:
+	on_overwatch = false
+	stunned = false
+	hunkered = false
+	# A corpse holds nobody down. `is_suppressed` also guards against a dead
+	# suppressor, so this is belt-and-braces — but it clears the back-link too,
+	# which that guard cannot.
+	release_suppression()
+	# GDD §4.4: a carrier who goes down (or dies) drops what they were carrying,
+	# on their own tile.
+	if carrying != null:
+		drop_carried()
+	# A body is evidence a Proctor can find long after the fight that made it
+	# (security-robots/design-choices/detection-and-network-alert.md). Reported
+	# for every unit, robots included: a wrecked machine is as much a sign
+	# something came through here as a corpse is.
+	SecurityNetwork.report_evidence(grid_pos, SecurityNetwork.Evidence.CORPSE)
+
+
+## Writes `life_state` and presents the change on this peer. Clients get the
+## same presentation from `_after_replication` when the new state arrives.
+func _set_life_state(new_state: LifeState) -> void:
+	var old := life_state
+	life_state = new_state
+	_shown_life_state = new_state
+	_present_life_state(old)
+
+
+## How a life-state change LOOKS, on every peer: the collapse, the corpse tint,
+## standing back up — and the tile it frees or retakes, since every peer keeps
+## its own occupancy grid.
+func _present_life_state(old: LifeState) -> void:
+	if old == LifeState.ACTIVE and life_state != LifeState.ACTIVE:
+		# Bodies hold no tile. Guarded on still being the occupant, because a unit
+		# downed MID-walk holds none (move_along) and somebody else may be there.
+		var tile: GridTileData = GridManager.get_tile(grid_pos)
+		if tile and tile.occupant == self:
+			GridManager.set_occupant(grid_pos, null)
+		if _name_label:
+			_name_label.visible = false
+		# The rig light goes down with the soldier: LightingManager already skips a
+		# downed unit's beam, and leaving the model's own lamp lit would show a
+		# beam that lights nothing. Comes back on with a revive (below).
+		visual.set_flashlight_enabled(false)
+		# Deliberately not awaited: the unit is out of the fight the moment its
+		# HP hits zero, and the shooter's own activation shouldn't stall on the
+		# collapse playing out. (ActiveMarker self-hides off is_downed.)
+		visual.play_action(UnitVisual.DOWNED)
+	if life_state == LifeState.DEAD:
+		visual.set_dead_tint(true)
+	if life_state == LifeState.ACTIVE and old != LifeState.ACTIVE:
+		GridManager.set_occupant(grid_pos, self)
+		global_position = GridManager.grid_to_world(grid_pos)
+		if _name_label:
+			_name_label.visible = true
+		visual.set_flashlight_enabled(has_flashlight and flashlight_on)
+		# No stand-up animation exists (extraction plan art list), so standing back
+		# up is a cut to the idle — the same answer do_hunker gives for the same
+		# missing transition.
+		settle_idle()
+
+
+# --- Revive (GDD §4.4, extraction plan 2.2) ------------------------------------
+
+
+## "No tile" for `revive_tile_for`. A floor index no deck has.
+const NO_REVIVE_TILE := Vector3i(-99999, -99999, -99999)
+
+
+## The tile a revive would stand `body` up on if THIS unit did it, or
+## NO_REVIVE_TILE.
+##
+## The body's own tile when it is free. Bodies hold no occupancy, so somebody may
+## be standing on it — the reviver very often, having walked onto it. Then the
+## free tile adjacent to the REVIVER nearest the body, ties broken in neighbour
+## order so every peer picks the same one; none free -> no revive (plan A3).
+func revive_tile_for(body: Unit) -> Vector3i:
+	if body == null:
+		return NO_REVIVE_TILE
+	if GridManager.is_free(body.grid_pos):
+		return body.grid_pos
+	var best := NO_REVIVE_TILE
+	var best_dist := 999999
+	for n in GridManager.neighbors(grid_pos):
+		if not GridManager.is_free(n):
+			continue
+		var d := GridManager.chebyshev_dist(n, body.grid_pos)
+		if d < best_dist:
+			best_dist = d
+			best = n
+	return best
+
+
+## Whether `tile` is within this unit's reach for a revive, pick up or (Phase 3)
+## loot: movement-adjacent (GridManager.is_melee_adjacent — what a step could
+## reach, through no wall corner), or the tile it is standing on, since a body
+## holds no tile and a soldier can be standing right over one.
+func within_reach(tile: Vector3i) -> bool:
+	return tile == grid_pos or GridManager.is_melee_adjacent(grid_pos, tile)
+
+
+## Why THIS unit cannot revive `body` right now, or "" if it can. Rules only — AP
+## is the caller's (PlayerUnit.try_revive prices it). Any downed contractor
+## qualifies, whoever OWNS it (GDD §7.6 cross-player rescue): ownership is the
+## acting unit's question, asked by `_rpc_command`, never the target's.
+func revive_blocker(body: Unit) -> String:
+	if life_state != LifeState.ACTIVE:
+		return "not able"
+	if carrying != null:
+		return "hands full"
+	if body == null or body == self or body.life_state != LifeState.DOWNED:
+		return "nobody downed there"
+	if is_hostile_to(body):
+		return "not one of ours"
+	if not body.can_be_revived():
+		# The Recover VIP (extraction plan Phase 6): carried out, never stood up.
+		return "can't be revived — carry them out"
+	if body.carried_by != null:
+		# Put them down first (free): reviving someone still slung over a shoulder
+		# has nowhere sensible to stand them.
+		return "being carried"
+	if not within_reach(body.grid_pos):
+		return "out of reach"
+	if revive_tile_for(body) == NO_REVIVE_TILE:
+		return "no room to stand them up"
+	return ""
+
+
+## Brings a DOWNED unit back up on `tile` (GDD §4.4). Host-side; validated by the
+## caller (`revive_blocker`). Back at ceil(REVIVE_HP_FRACTION x max HP), with the
+## down count AND the downed bar untouched — a revive refills neither.
+##
+## Joins the pool NEXT round: TurnManager's pool is a snapshot that already
+## dropped this unit when it went down — or would keep it, if it went down and
+## came back up inside one activation before the next draw — so it is erased
+## here too.
+func revive_at(tile: Vector3i) -> void:
+	if life_state != LifeState.DOWNED:
+		return
+	current_hp = maxi(1, ceili(stats.max_hp() * REVIVE_HP_FRACTION))
+	grid_pos = tile
+	TurnManager.pool.erase(self)
+	_set_life_state(LifeState.ACTIVE)
+	hp_changed.emit(self)
+	revived.emit(self)
+
+
+# --- Carrying (GDD §4.4, extraction plan 2.3) ----------------------------------
+
+
+## Whether a revive can stand this body back up (revive_blocker asks the BODY).
+## Soldiers — the units that go down rather than die — can; the Recover VIP
+## (VipUnit, extraction plan Phase 6) overrides it false.
+func can_be_revived() -> bool:
+	return can_be_downed
+
+
+## Whether hostile AI may deliberately finish this body off when it lies DOWNED
+## (`downed_targets`, the GDD §4.4 per-faction policy). True for soldiers; the
+## Recover VIP overrides it false (decisions log, Phase 6). Stray damage is not
+## targeting and still lands either way.
+func is_finish_target() -> bool:
+	return true
+
+
+## Whether this unit can be lifted: a downed or dead CONTRACTOR soldier nobody is
+## carrying. "Contractor soldier" is `can_be_downed` for now. The Recover VIP
+## overrides this (VipUnit, extraction plan Phase 6); a merc corpse would too, if
+## carrying one is ever wanted.
+func is_carriable() -> bool:
+	return life_state != LifeState.ACTIVE and carried_by == null and can_be_downed
+
+
+## Why THIS unit cannot pick up `body`, or "". Rules only; AP is the caller's.
+## Like revive, any owner's body qualifies (GDD §7.6).
+func pick_up_blocker(body: Unit) -> String:
+	if life_state != LifeState.ACTIVE:
+		return "not able"
+	if carrying != null:
+		return "already carrying someone"
+	if body == null or body == self or not body.is_carriable() or is_hostile_to(body):
+		return "nobody to carry there"
+	if not within_reach(body.grid_pos):
+		return "out of reach"
+	return ""
+
+
+## Lifts `body` (host-side; validated by `pick_up_blocker`). The body moves onto
+## this unit's tile and is hidden; the sidearm comes out (`_apply_carry`).
+func pick_up(body: Unit) -> void:
+	_link_carry(body)
+	_carry_follow()
+
+
+## Puts down whatever this unit carries, on its own tile. Free (GDD §4.4), and
+## also what happens automatically when a carrier goes down or dies. Returns the
+## body, or null if nothing was carried.
+func drop_carried() -> Unit:
+	var body := carrying
+	if body == null:
+		return null
+	body.grid_pos = grid_pos
+	body.global_position = GridManager.grid_to_world(grid_pos)
+	_link_carry(null)
+	return body
+
+
+## Sets (or with null, clears) the carry pair on both ends, host-side, and keeps
+## everything that hangs off it in step: the replicated paths, the weapon in hand
+## and the rounds in it, the visuals, the signal.
+func _link_carry(body: Unit) -> void:
+	var old := carrying
+	if old != null:
+		old.carried_by = null
+		old.carried_by_path = NodePath()
+	carrying = body
+	carrying_path = body.get_path() if body != null and body.is_inside_tree() else NodePath()
+	if body != null:
+		body.carried_by = self
+		body.carried_by_path = get_path() if is_inside_tree() else NodePath()
+	var was_drawn := stats.sidearm_drawn
+	_apply_carry()
+	if stats.sidearm_drawn != was_drawn:
+		_swap_weapon_rounds()
+	if old != null and old != body:
+		old._apply_carry()
+		old.carry_changed.emit(old)
+	if body != null:
+		body._apply_carry()
+		body.carry_changed.emit(body)
+	carry_changed.emit(self)
+
+
+## Swaps the rounds in hand with the stowed weapon's (see `stowed_ammo`). Host-side
+## only, and only on an actual draw/holster: the swapped values replicate.
+func _swap_weapon_rounds() -> void:
+	var a := ammo
+	ammo = stowed_ammo
+	stowed_ammo = a
+	var r := reserve
+	reserve = stowed_reserve
+	stowed_reserve = r
+	ap_changed.emit(self)  # the HUD reads ammo off the same refresh
+
+
+## Which gun is in hand, from the two things that decide it: carrying a body
+## forces the pistol, otherwise it is the soldier's own pick (`sidearm_selected`).
+## Every peer derives it the same way from replicated state.
+func _apply_drawn() -> void:
+	stats.sidearm_drawn = stats.sidearm != null and (carrying != null or sidearm_selected)
+
+
+## Why this unit cannot switch weapons now, or "" (GDD §4.3). Only a soldier with
+## a sidearm has two guns; a carrier's hands decide for them.
+func switch_weapon_blocker() -> String:
+	if stats.sidearm == null:
+		return "no sidearm"
+	if life_state != LifeState.ACTIVE:
+		return "not able"
+	if carrying != null:
+		return "hands full — pistol only while carrying"
+	return ""
+
+
+## Swaps primary and pistol (host-side; validated by `switch_weapon_blocker`,
+## priced by the caller at UnitStats.Action.SWITCH_WEAPON). Each gun keeps its
+## own magazine and reserve (`_swap_weapon_rounds`).
+func switch_weapon() -> void:
+	var was_drawn := stats.sidearm_drawn
+	sidearm_selected = not sidearm_selected
+	_apply_drawn()
+	if stats.sidearm_drawn != was_drawn:
+		_swap_weapon_rounds()
+
+
+## Keeps the carried body on this unit's tile. Called per step of a walk.
+func _carry_follow() -> void:
+	if carrying == null:
+		return
+	carrying.grid_pos = grid_pos
+	carrying.global_position = global_position
+
+
+## What carrying LOOKS like and which gun is in hand, on every peer, from this
+## unit's own two links. Placeholders throughout (extraction plan art list):
+##   carried  hidden, and its click/LOS body switched off so it neither eats a
+##            click meant for its carrier nor stands in a line of fire;
+##   carrier  a slung-body marker on the back, the body's name on its label, and
+##            the sidearm drawn (UnitStats.sidearm_drawn). The rifle stays on the
+##            model, and the rifle poses play — no pistol art yet.
+func _apply_carry() -> void:
+	_apply_drawn()
+	_show_carry_marker(carrying != null)
+	if _name_label and life_state == LifeState.ACTIVE:
+		_name_label.text = stats.display_name if carrying == null \
+			else "%s [+%s]" % [stats.display_name, carrying.stats.display_name]
+	visible = carried_by == null
+	var body := get_node_or_null("Body") as CollisionObject3D
+	if body:
+		if carried_by != null:
+			if _body_layer < 0:
+				_body_layer = body.collision_layer
+			body.collision_layer = 0
+		elif _body_layer >= 0:
+			body.collision_layer = _body_layer
+			_body_layer = -1
+
+
+## Client-side: rebuilds the carry links from the replicated paths, and presents
+## any change. The ammo swap already happened on the host and arrives as values.
+func _sync_carry_from_paths() -> void:
+	var want_carrying: Unit = null
+	if not carrying_path.is_empty():
+		want_carrying = get_node_or_null(carrying_path) as Unit
+	var want_carrier: Unit = null
+	if not carried_by_path.is_empty():
+		want_carrier = get_node_or_null(carried_by_path) as Unit
+	if want_carrying == carrying and want_carrier == carried_by:
+		return
+	carrying = want_carrying
+	carried_by = want_carrier
+	_apply_carry()
+	carry_changed.emit(self)
+
+
+func _show_carry_marker(on: bool) -> void:
+	if not on:
+		if _carry_marker:
+			_carry_marker.visible = false
+		return
+	if _carry_marker == null:
+		# A body bag across the back: a dark box at shoulder height. Enough to
+		# read "this soldier has their hands full" from the camera.
+		_carry_marker = MeshInstance3D.new()
+		var box := BoxMesh.new()
+		box.size = Vector3(0.9, 0.32, 0.4)
+		_carry_marker.mesh = box
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(0.35, 0.3, 0.22)
+		_carry_marker.material_override = mat
+		_carry_marker.position = Vector3(0, 1.45, 0.25)
+		add_child(_carry_marker)
+	_carry_marker.visible = true
+
+
+## Whether a landed hit from `shooter` on THIS unit goes into the body it carries
+## instead (GDD §4.4). Never when this unit was in cover from the shot
+## (Combat.target_in_cover — the body is behind the cover with the carrier);
+## never into a corpse (it takes no damage, and letting it soak hits would make a
+## corpse armour); otherwise CARRY_REDIRECT_CHANCE. Rolls the global RNG, so a
+## seeded caller gets a repeatable answer.
+func redirects_hit_to_carried(shooter: Unit, result: Combat.ShotResult) -> bool:
+	if carrying == null or carrying.life_state != LifeState.DOWNED:
+		return false
+	if Combat.target_in_cover(shooter, result):
+		return false
+	return randf() < CARRY_REDIRECT_CHANCE
+
+
+## Moves this unit to `tile` with no walk: no AP, no overwatch, no alarms. Host
+## side. For the game moving a unit rather than the unit moving — a ship landing
+## on top of it (ExtractionManager). Keeps occupancy right for a standing unit
+## (and tells clients, as a settled move does) and carries a carried body along.
+func relocate_to(tile: Vector3i) -> void:
+	if life_state == LifeState.ACTIVE:
+		var t: GridTileData = GridManager.get_tile(grid_pos)
+		if t and t.occupant == self:
+			GridManager.set_occupant(grid_pos, null)
+		grid_pos = tile
+		GridManager.set_occupant(grid_pos, self)
+		if multiplayer.has_multiplayer_peer() and multiplayer.is_server():
+			_rpc_sync_grid_pos.rpc(grid_pos)
+	else:
+		grid_pos = tile
+	global_position = GridManager.grid_to_world(grid_pos)
+	_carry_follow()
+
+
+## Every downed, uncarried unit this one is hostile to — the candidates for
+## finishing off — or nothing at all for a faction whose DOWNED_POLICY is NEVER
+## (extraction plan 2.4). `hostiles()` stays the list of LIVE threats; this is
+## the other list, and which of the two a unit reads first is its faction's call.
+func downed_targets() -> Array[Unit]:
+	var out: Array[Unit] = []
+	if Faction.downed_policy(faction) == Faction.DownedPolicy.NEVER:
+		return out
+	for node in get_tree().get_nodes_in_group("units"):
+		var other := node as Unit
+		if other != null and other.life_state == LifeState.DOWNED \
+				and other.carried_by == null and other.is_finish_target() and is_hostile_to(other):
+			out.append(other)
+	return out
+
+
+## Every body (DOWNED or DEAD unit) lying on `tile`. Bodies hold no occupancy, so
+## this is how anything finds one — a click, a grenade. A carried body shares its
+## carrier's tile and is only included with `include_carried`. Skips a unit on
+## its way out of the tree (a dissolved worm is DEAD but is not a body).
+func bodies_on(tile: Vector3i, include_carried := false) -> Array[Unit]:
+	var out: Array[Unit] = []
+	for node in get_tree().get_nodes_in_group("units"):
+		var other := node as Unit
+		if other == null or other.life_state == LifeState.ACTIVE or other.grid_pos != tile:
+			continue
+		if other.carried_by != null and not include_carried:
+			continue
+		if other.is_queued_for_deletion() or not other.leaves_body():
+			continue
+		out.append(other)
+	return out
+
+
+## Whether this unit, out of the fight, is a BODY on the deck — something
+## `bodies_on` finds and a revive, pick-up or loot could be aimed at. True for
+## everything that falls; false for a disabled door gun (DoorGunUnit), which is
+## part of the ship rather than a corpse lying under it.
+func leaves_body() -> bool:
+	return true
+
+
+
+# --- Inventory and looting (GDD §7.5, extraction plan 3.1–3.2) -------------------
+
+
+func free_slots() -> int:
+	return maxi(0, INVENTORY_SLOTS - inventory.size())
+
+
+func has_free_slot() -> bool:
+	return inventory.size() < INVENTORY_SLOTS
+
+
+## Puts `item` in this unit's pack. Host-side. Refused (false) when the pack is
+## full, unless `ignore_cap` — which only the corpse conversion and a spawner
+## seeding a pack use; nothing a player does can overfill a living soldier.
+func add_item(item: ItemData, ignore_cap := false) -> bool:
+	if item == null or (not ignore_cap and not has_free_slot()):
+		return false
+	inventory.append(item)
+	_inventory_changed()
+	return true
+
+
+## Takes the item at `index` out of the pack and returns it, or null.
+func remove_item(index: int) -> ItemData:
+	if index < 0 or index >= inventory.size():
+		return null
+	var item: ItemData = inventory[index]
+	inventory.remove_at(index)
+	_inventory_changed()
+	return item
+
+
+## Index of the first item with this code, or -1.
+func find_item_code(code: String) -> int:
+	for i in inventory.size():
+		if inventory[i].code == code:
+			return i
+	return -1
+
+
+func has_item_code(code: String) -> bool:
+	return find_item_code(code) >= 0
+
+
+func _inventory_changed() -> void:
+	inventory_codes = ItemPresets.codes_of(inventory)
+	inventory_changed.emit(self)
+
+
+## The equipped gear a corpse gives up as items (extraction plan 3.2): the primary
+## — with its attachments and ammo, as one item — for any unit carrying a roster
+## gun. Aliens' and robots' built-in weapons are not roster guns and yield
+## nothing. PlayerUnit adds its grenades. The sidearm is deliberately NOT here:
+## every soldier is issued one (decisions log), so looting it would spend a slot
+## on something nobody is short of.
+func _equipped_gear_items() -> Array[ItemData]:
+	var out: Array[ItemData] = []
+	var weapon_item := ItemPresets.make_weapon_from(stats.weapon if stats else null)
+	if weapon_item != null:
+		out.append(weapon_item)
+	return out
+
+
+func _stow_gear_as_items() -> void:
+	if _gear_stowed:
+		return
+	_gear_stowed = true
+	var gear := _equipped_gear_items()
+	if gear.is_empty():
+		return
+	inventory.append_array(gear)
+	_inventory_changed()
+
+
+# The LOOT SOURCE interface. A loot source is anything `PlayerUnit.try_loot` can
+# take from: a corpse (this), a LootContainer, a pile. Duck-typed rather than a
+# shared base class, because a corpse is a Unit and a container is a prop and
+# neither should inherit the other's baggage. Every source answers:
+#   loot_items() -> Array[ItemData]   what is on it, in panel order
+#   loot_take(index) -> ItemData      host-side: removes and returns one item
+#   loot_tile() -> Vector3i           where it is, for reach
+#   loot_name() -> String             what the panel calls it
+
+
+## Why `looter` cannot loot THIS unit, or "". GDD §4.4/§11.10: corpses are
+## lootable — a dead soldier of either player's (GDD §7.6 cross-player rule: the
+## owner is never asked), a dead merc, a robot wreck with its Salvage. A DOWNED
+## friendly is not (decisions log: the GDD names corpses, and stripping a
+## squadmate who is still bleeding is a revive's job, not a looter's). A carried
+## corpse is put down first, as with a revive.
+func loot_blocker(looter: Unit) -> String:
+	if life_state != LifeState.DEAD:
+		return "not a corpse"
+	if carried_by != null:
+		return "being carried"
+	if is_queued_for_deletion():
+		return "gone"
+	if looter == null or not looter.within_reach(grid_pos):
+		return "out of reach"
+	return ""
+
+
+func loot_items() -> Array[ItemData]:
+	return inventory
+
+
+func loot_take(index: int) -> ItemData:
+	return remove_item(index)
+
+
+func loot_tile() -> Vector3i:
+	return grid_pos
+
+
+func loot_name() -> String:
+	return "%s's body" % stats.display_name
 
 
 ## Whether this unit will engage `other`. THE hostility test — every targeting
@@ -763,6 +1582,27 @@ func hostiles() -> Array[Unit]:
 	for node in get_tree().get_nodes_in_group("units"):
 		var other := node as Unit
 		if other != null and not other.is_downed and is_hostile_to(other):
+			out.append(other)
+	return out
+
+
+## Whether this unit would START a fight with `other`, given that it is hostile
+## (extraction plan Phase 7). `is_hostile_to` says who may be shot. This says
+## who this unit chooses to go after on its own initiative. They are the same for
+## everyone except the rival mercs, who are professionals and pick fights with a
+## third party only when it is worth it (MercUnit, CrossFactionRules.merc_engages).
+## Being shot at bypasses this: a unit that fires on you has made the choice.
+func will_engage(other: Unit) -> bool:
+	return is_hostile_to(other)
+
+
+## `hostiles()` narrowed to the ones this unit would choose to fight
+## (`will_engage`). Use it where the question is "what should I shoot", and
+## keep `hostiles()` where it is "what could shoot me" (overwatch lanes, threat).
+func engageable_hostiles() -> Array[Unit]:
+	var out: Array[Unit] = []
+	for other in hostiles():
+		if will_engage(other):
 			out.append(other)
 	return out
 
@@ -802,8 +1642,13 @@ func is_suppressed() -> bool:
 
 ## Needs a full burst in the magazine, not just a round. Suppression is volume
 ## of fire — a soldier with two bullets left cannot lay any down.
+##
+## And never while carrying (extraction plan A4): the only gun in hand is a
+## pistol fired one-handed, and one-handed fire is not volume of fire. Gated here
+## rather than at the button so the HUD, PlayerUnit and every GOAP Suppress
+## action refuse it through the one check they all already make.
 func can_suppress() -> bool:
-	return ammo >= SUPPRESS_AMMO_COST
+	return ammo >= SUPPRESS_AMMO_COST and carrying == null
 
 
 ## Sec 4.2 + the coordinated-AI doc's `Suppress` action. ENDS the activation, as
@@ -813,7 +1658,7 @@ func can_suppress() -> bool:
 ## Coroutine — callers MUST await. The burst that opens it is played rather than
 ## implied, so suppression starts on screen the way any other shot does.
 func do_suppress(target: Unit) -> void:
-	if target == null or target.is_downed:
+	if target == null or target.is_downed or carrying != null:
 		return
 	ammo -= SUPPRESS_AMMO_COST
 	# Replace whatever this unit was pinning before. One weapon, one direction.
@@ -886,6 +1731,10 @@ func ap_pool() -> int:
 	return stats.ap_pool()
 
 
+## The flat-cost extraction actions (UnitStats.FLAT_AP_COST — revive, pick up,
+## loot, call ship, dust-off) route through here exactly like Shoot does, and
+## `stats.action_cost` returns them undiscounted. Callers never special-case
+## them; a subclass overriding this should hand unknown actions to `super`.
 func action_cost(action: UnitStats.Action) -> int:
 	return stats.action_cost(action)
 
@@ -934,14 +1783,23 @@ func move_cost_for(tiles: int) -> int:
 ## Scales how far enemies can SEE this unit (EnemyUnit._can_see and the robots'
 ## override). Above 1 is a visual tell — a Laser Sight's dot.
 func visibility_multiplier() -> float:
-	return stats.weapon.visibility_multiplier() if stats.weapon else 1.0
+	var w := active_weapon()
+	return w.visibility_multiplier() if w else 1.0
 
 
 ## How many tiles this unit's gunfire carries: the weapon's own radius with its
 ## attachments (a suppressor takes tiles off). The network's default covers the
 ## unarmed case, which should never fire anyway.
 func gunfire_noise_radius() -> int:
-	return stats.weapon.effective_noise_radius() if stats.weapon else SecurityNetwork.NOISE_RADIUS
+	var w := active_weapon()
+	return w.effective_noise_radius() if w else SecurityNetwork.NOISE_RADIUS
+
+
+## The weapon in this unit's hands: the sidearm while carrying a body, otherwise
+## the primary (extraction plan 2.5). Delegates to UnitStats.active_weapon, which
+## every weapon getter and Combat read already go through.
+func active_weapon() -> WeaponData:
+	return stats.active_weapon()
 
 
 func ranged_accuracy_penalty() -> int:
@@ -999,6 +1857,30 @@ func heal_injury(part: int) -> void:
 	_body_part_damage[part] = 0
 
 
+## The parts injured right now, sorted (Combat.BodyPart values). What the campaign
+## debrief writes back to a soldier's record (GDD §4.2.1: an injury lasts until
+## the medical resource treats it, so it outlives the mission that caused it).
+func injured_parts() -> Array[int]:
+	var out: Array[int] = []
+	for part in _injured_parts:
+		if _injured_parts[part]:
+			out.append(int(part))
+	out.sort()
+	return out
+
+
+## Spawn-time: carries a soldier's untreated injuries (SoldierRecord.injuries)
+## into the mission. Each part is set AT its threshold rather than merely flagged,
+## so the damage counter agrees with the flag and `heal_injury` resets both. Needs
+## `stats` (the threshold is a fraction of max HP); safe before add_child. Run on
+## every peer from the same record, so a client's move preview prices the same
+## injured legs the host simulates.
+func apply_injuries(parts: Array) -> void:
+	for part in parts:
+		_injured_parts[int(part)] = true
+		_body_part_damage[int(part)] = _body_part_threshold(int(part))
+
+
 func _body_part_threshold(part: int) -> int:
 	return maxi(1, roundi(stats.max_hp() * PART_HP_FRACTION.get(part, 0.35)))
 
@@ -1054,9 +1936,20 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 		# plating covers would not be one. `result.damage` ends up holding what
 		# actually landed, so every log line reports the real figure.
 		var raw := result.damage
-		result.damage = target.take_damage(raw)
+		# GDD §4.4: a landed hit on a carrier may go into the body instead —
+		# decided AFTER the hit is rolled against the carrier, so carrying never
+		# changes how often a carrier is hit, only who a hit lands on.
+		var victim := target
+		if target.redirects_hit_to_carried(self, result):
+			victim = target.carrying
+			result.hit_carried = true
+			result.redirect_note = "the round hits %s, slung over %s's shoulder" % [
+				victim.stats.display_name, target.stats.display_name]
+		result.damage = victim.take_damage(raw)
 		result.absorbed = raw - result.damage
-		if action == Combat.ShotAction.AIMED_SHOT and not target.is_downed:
+		# Body-part injury and stun are about the unit aimed AT; a round that went
+		# into the body on its shoulder did neither to it.
+		if action == Combat.ShotAction.AIMED_SHOT and not target.is_downed and victim == target:
 			result.newly_injured = target.apply_body_part_damage(body_part, raw)
 			if result.stunned:
 				target.stunned = true

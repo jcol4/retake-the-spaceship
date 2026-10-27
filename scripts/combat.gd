@@ -160,6 +160,29 @@ class ShotResult:
 	var body_part: int = -1  # Combat.BodyPart targeted, only set for AIMED_SHOT
 	var newly_injured: bool = false  # this hit just crossed the targeted part's injury threshold
 	var stunned: bool = false  # a torso crit stuns the target for its next activation
+	# GDD §4.4: this landed hit went into the body the target was CARRYING, not
+	# the target (Unit.redirects_hit_to_carried). `damage` is still what landed —
+	# on the body's downed bar — and `redirect_note` is the log's half-sentence
+	# saying so, appended by `describe` so every caller's line carries it.
+	var hit_carried: bool = false
+	var redirect_note: String = ""
+
+
+## Whether `result` is a shot the target was IN COVER from: the defending edge
+## existed AND it cost `shooter` accuracy. The second half matters for a weapon
+## that partly ignores cover (Sagittarii's `cover_penalty_for`): cover the shooter
+## does not respect is not cover the target is hiding behind. "Not flanked" falls
+## out of `had_cover` itself — under edge cover a flanking shot is one with no
+## defending edge (`defending_cover`). Duck-typed like the rest of this file.
+##
+## Read by Unit.redirects_hit_to_carried (GDD §4.4: "if the carrier is in cover
+## from that shot, the body cannot be hit").
+static func target_in_cover(shooter, result: ShotResult) -> bool:
+	if not result.had_cover:
+		return false
+	var penalty: int = shooter.cover_penalty_for(result.cover_type) \
+		if shooter != null and shooter.has_method("cover_penalty_for") else cover_penalty(result.cover_type)
+	return penalty > 0
 
 
 ## Which edge of the target's tile, if any, this shot has to cross — as
@@ -278,8 +301,8 @@ static func compute_accuracy(shooter, target, action: ShotAction, body_part: int
 		acc -= SUPPRESSED_PENALTY
 	var dist := GridManager.chebyshev_dist(shooter.grid_pos, target.grid_pos)
 	acc -= distance_penalty(dist)
-	acc -= weapon_range_penalty(shooter.stats.weapon, dist)
-	var weapon: WeaponData = shooter.stats.weapon
+	acc -= weapon_range_penalty(shooter.stats.active_weapon(), dist)
+	var weapon: WeaponData = shooter.stats.active_weapon()
 	if weapon:
 		acc += weapon.close_accuracy_at(dist)
 	if light_matters(shooter, target):
@@ -320,7 +343,7 @@ static func _roll_hit(result: ShotResult, attacker, target, crit_divisor: float 
 ## (armored or not, UnitStats.armored). Weapon-less shooters fall back to the
 ## flat stat.
 static func shot_damage(shooter, target) -> int:
-	var weapon: WeaponData = shooter.stats.weapon
+	var weapon: WeaponData = shooter.stats.active_weapon()
 	if weapon == null:
 		return shooter.stats.weapon_damage
 	var dist := GridManager.chebyshev_dist(shooter.grid_pos, target.grid_pos)
@@ -420,6 +443,8 @@ static func describe(result: ShotResult) -> String:
 	# player who cannot see the plate eating half the shot has no way to work out
 	# that the EMP grenade in their kit is the answer.
 	var armor := " (-%d armor)" % result.absorbed if result.absorbed > 0 else ""
+	if result.redirect_note != "":
+		armor += " — " + result.redirect_note
 	if result.severe_crit:
 		return "SEVERE CRITICAL for %d dmg!!%s" % [result.damage, armor]
 	if result.crit:

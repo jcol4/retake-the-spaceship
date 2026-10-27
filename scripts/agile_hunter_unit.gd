@@ -60,6 +60,13 @@ func _combat_turn() -> void:
 	var quarry := acquire_target()
 	if quarry == null:
 		return
+	if quarry.is_downed:
+		# Finishing prey (GDD §4.4). The planner's whole action set is about a
+		# quarry that fights back — ambush, flank, retreat — and every one of its
+		# goals is moot against a body (GoapBrain stops on a downed target), so the
+		# hunter does the obvious thing directly: close and claw.
+		await _finish_downed_in_melee(quarry)
+		return
 	_brain.blackboard.set_fact(&"ally_is_engaging_target", _fodder_is_engaging(quarry))
 	await _brain.run(self, quarry)
 

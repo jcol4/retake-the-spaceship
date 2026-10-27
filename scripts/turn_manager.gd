@@ -3,14 +3,62 @@ extends Node
 
 signal unit_activated(unit: Unit)
 signal turn_started(turn_number: int)
+## The round is over: every unit in the pool has acted, and the next round has
+## NOT started yet. Emitted with the number of the round that is ending, always
+## before the `turn_started` of the next one, once per round.
+##
+## The moment GDD §7.4 hangs ship departure on ("the ship leaves at the end of
+## the round"). A signal cannot be awaited by its emitter, so work that must
+## FINISH before the next round starts — departure, which may end the mission —
+## registers with `add_turn_end_hook` instead; this signal is the notification,
+## the hooks are the work. Mirrored to clients (see `_rpc_turn_ending`); the
+## hooks only ever run on the host.
+signal turn_ending(turn_number: int)
 signal log_message(text: String)
-signal mission_ended(player_won: bool)
+signal mission_ended(result: MissionResult)
 
 var turn_number: int = 0
 var pool: Array[Unit] = []
 var active_unit: Unit = null
 var mission_over: bool = false
 var _awaiting_player: bool = false
+
+## The legacy "every hostile down = mission won" rule (now MissionResult.CLEARED).
+## With it OFF a mission ends only by extraction (extraction plan Phase 1) or a
+## wipe — killing everything leaves the squad with a quiet deck to walk to the
+## ship across, which is GDD §7's whole loop.
+##
+## ON by default, because no deck has a hangar yet and a mission with no way out
+## must still be able to end; every existing test deck and the `--auto` smoke
+## run depend on it. Phase 1 switches it off for a deck that has a hangar (set
+## before `start_mission`; see main.gd `_spawn_and_start`). Deliberately NOT
+## reset by `start_mission`, so whoever sets it is the one place that decides.
+var clear_out_mode: bool = true
+
+## Asked (host) when no PlayerUnit is left standing on the board, before that is
+## called a wipe: `() -> bool`, true if it ended the mission some other way.
+## ExtractionManager sets it — soldiers who boarded a landed ship are off the
+## board but not lost (GDD §7.4). A seam rather than a direct call so this
+## autoload keeps no compile-time dependency on the extraction layer.
+var squad_gone_hook: Callable = Callable()
+
+## Host-side work run at the end of each round, in registration order, each one
+## awaited before the next — see `turn_ending`. Callables taking the ending
+## round's number; a coroutine is awaited to completion, a plain function just
+## runs. Lives on the autoload and outlives missions, so a registering autoload
+## (ExtractionManager) registers once rather than once per mission.
+var _turn_end_hooks: Array[Callable] = []
+
+
+## Registers `hook(turn_number)` to run, and be awaited, at the end of every
+## round on the host. Idempotent: registering the same Callable twice is one hook.
+func add_turn_end_hook(hook: Callable) -> void:
+	if not _turn_end_hooks.has(hook):
+		_turn_end_hooks.append(hook)
+
+
+func remove_turn_end_hook(hook: Callable) -> void:
+	_turn_end_hooks.erase(hook)
 
 
 ## True on every peer in single-player (nothing to gate), and on the host in
@@ -48,6 +96,7 @@ func start_mission() -> void:
 	# claims — on units that no longer exist — is the bug this prevents.
 	Doctrines.reset()
 	AlienHivemind.reset()
+	SecurityNetwork.clear_aggression()
 	_start_turn()
 
 
@@ -55,11 +104,19 @@ func start_mission() -> void:
 ## reloaded out from under this autoload (main.gd, when the host leaves). A
 ## client's TurnManager still holds the last `active_unit` the host synced, and
 ## a freed unit left there would be the first thing the next mission reads.
+##
+## Also the ABANDONED outcome: anything listening for `mission_ended` (the HUD
+## today, the campaign later) hears that this mission stopped without being
+## decided. Emitted only if it had not already ended — a host that leaves on the
+## debrief screen has not abandoned anything.
 func abandon() -> void:
+	var was_over := mission_over
 	mission_over = true
 	active_unit = null
 	pool.clear()
 	_awaiting_player = false
+	if not was_over:
+		mission_ended.emit(MissionResult.new(MissionResult.Outcome.ABANDONED))
 
 
 func _all_units() -> Array[Unit]:
@@ -75,6 +132,10 @@ func _start_turn() -> void:
 	if not _is_authority():
 		return
 	turn_number += 1
+	# Before the pool, so the snapshot is taken of a board the bleed has already
+	# settled — and before `turn_started`, so a soldier who bleeds out this round
+	# is already a corpse when the HUD, the ship and the AI first look at it.
+	_bleed_downed()
 	pool = _all_units()
 	var flicker_seed := randi()
 	LightingManager.reroll_flicker(flicker_seed)  # Sec 5.3: flickering lights fluctuate turn-to-turn
@@ -83,6 +144,23 @@ func _start_turn() -> void:
 		_rpc_turn_started.rpc(turn_number, flicker_seed)
 	_log("--- Turn %d: %d units in the pool ---" % [turn_number, pool.size()])
 	_draw_next()
+
+
+## GDD §4.4: every DOWNED unit's downed bar drains `Unit.bleed_amount` at the
+## start of each round, and empties into death. Host-only (it is called from
+## `_start_turn`); the bar and the life state replicate. Round 1 never finds
+## anyone downed, so "each round start" needs no special case for it.
+func _bleed_downed() -> void:
+	for node in get_tree().get_nodes_in_group("units"):
+		var unit := node as Unit
+		# A stable body (the Recover VIP, extraction plan A10) does not drain.
+		if unit == null or unit.life_state != Unit.LifeState.DOWNED or not unit.bleeds_out():
+			continue
+		if unit.bleed_out_tick():
+			_log("%s has bled out." % unit.stats.display_name)
+		else:
+			_log("%s is bleeding out (%d/%d)." % [
+				unit.stats.display_name, unit.downed_hp, unit.downed_bar_max()])
 
 
 func _draw_next() -> void:
@@ -99,6 +177,11 @@ func _draw_next() -> void:
 	# `.is_downed` off one is a hard crash.
 	pool = pool.filter(func(u: Unit) -> bool: return is_instance_valid(u) and not u.is_downed)
 	if pool.is_empty():
+		await _end_round()
+		# A hook may have ended the mission (the last soldiers flew out), or
+		# changed the board enough to (departure leaving nobody standing).
+		if mission_over or _check_end_conditions():
+			return
 		_start_turn()
 		return
 	# Weighted random without replacement — roulette wheel on Initiative.
@@ -138,6 +221,25 @@ func _draw_next() -> void:
 		call_deferred("_draw_next")
 	else:
 		_awaiting_player = true  # wait for end_activation from the player unit
+
+
+## The round-end moment: notify (`turn_ending`, here and on clients), then run
+## every registered hook to completion. Host-only, like the rest of the draw loop.
+func _end_round() -> void:
+	turn_ending.emit(turn_number)
+	if SteamLobby.is_networked() and SteamLobby.is_host():
+		_rpc_turn_ending.rpc(turn_number)
+	# Iterates a copy: a hook may unregister itself (or another) as it runs.
+	for hook in _turn_end_hooks.duplicate():
+		if mission_over:
+			return
+		if hook.is_valid():
+			await hook.call(turn_number)  # no-op await if the hook isn't a coroutine
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_turn_ending(number: int) -> void:
+	turn_ending.emit(number)
 
 
 ## Without this a client's lights never flickered at all (its TurnManager never
@@ -266,6 +368,17 @@ func _check_end_conditions() -> bool:
 	# it. The second is a faction question rather than "is anything left that
 	# isn't the player" — a future neutral or allied faction should not have to be
 	# killed to end a mission.
+	#
+	# The two halves ask different questions on purpose (the Phase 0.4 audit):
+	# "is the squad standing" counts PlayerUnits (`is_player_controlled`), not the
+	# Contractor faction — a door gun or an escorted VIP is on the squad's side,
+	# but a mission with only those left standing has no soldier in it. "Is
+	# anything hostile left" stays a faction test.
+	#
+	# Only "standing" is checked here. A soldier already flown out is not on the
+	# board to count; ExtractionManager (extraction plan Phase 1) ends a mission
+	# by departure itself, through `end_mission`, before this can read a board
+	# emptied by extraction as a wipe.
 	var players_alive := false
 	var enemies_alive := false
 	for node in get_tree().get_nodes_in_group("units"):
@@ -276,26 +389,66 @@ func _check_end_conditions() -> bool:
 			players_alive = true
 		elif Faction.is_hostile(Faction.Id.CONTRACTORS, unit.faction):
 			enemies_alive = true
-	if not enemies_alive:
-		_end_mission(true)
+	# Checked before the wipe, as the old boolean was: a last exchange that drops
+	# the final hostile and the final soldier together still reads as a clear.
+	if clear_out_mode and not enemies_alive:
+		end_mission(_squad_result(MissionResult.Outcome.CLEARED))
 		return true
 	if not players_alive:
-		_end_mission(false)
+		# Nobody standing on the BOARD is not yet a wipe if some of the squad
+		# already boarded a landed ship (GDD §7.4): the extraction layer flies them
+		# out instead, and ends the mission itself.
+		if squad_gone_hook.is_valid() and squad_gone_hook.call():
+			return true
+		end_mission(_squad_result(MissionResult.Outcome.WIPED))
 		return true
 	return false
 
 
-func _end_mission(player_won: bool) -> void:
+## A result for the outcomes TurnManager itself decides (CLEARED, WIPED), with
+## the squad sorted into the two lists off the board as it stands: standing
+## soldiers count as extracted, everyone else as lost (see MissionResult).
+func _squad_result(outcome: MissionResult.Outcome) -> MissionResult:
+	var result := MissionResult.new(outcome)
+	for node in get_tree().get_nodes_in_group("units"):
+		var unit := node as Unit
+		if unit == null or not unit.is_player_controlled:
+			continue
+		# A wipe loses EVERY deployed soldier (GDD §4.4: "nobody is left to carry
+		# anyone"), stated outright rather than left to fall out of "nobody is
+		# standing" — so it holds even for a soldier the check raced.
+		if unit.is_downed or outcome == MissionResult.Outcome.WIPED:
+			result.lost_units.append(unit)
+		else:
+			result.extracted_units.append(unit)
+	result.objective_complete = outcome == MissionResult.Outcome.CLEARED
+	return result
+
+
+## Ends the mission with `result` on every peer. THE one way a mission ends on
+## the host: TurnManager's own end checks come through here, and so does
+## extraction (extraction plan Phase 1's departure, from a turn-end hook). Safe to
+## call more than once — only the first call counts.
+func end_mission(result: MissionResult) -> void:
+	if mission_over:
+		return
 	mission_over = true
 	active_unit = null
-	_log("=== MISSION %s ===" % ("WON — all hostiles down" if player_won else "FAILED — squad wiped"))
-	mission_ended.emit(player_won)
+	# Rival lifts (extraction plan Phase 8) belong in every outcome's debrief, and
+	# whoever built the result — this manager for a wipe, ExtractionManager for a
+	# lift — need not know about them.
+	if result.rivals.is_empty() and ExtractionManager.is_active():
+		result.rivals = ExtractionManager.rival_report()
+	_log("=== MISSION %s ===" % result.describe())
+	mission_ended.emit(result)
 	if SteamLobby.is_networked() and SteamLobby.is_host():
-		_rpc_mission_ended.rpc(player_won)
+		_rpc_mission_ended.rpc(result.to_dict())
 
 
+## A MissionResult is a RefCounted and cannot cross the wire, so it travels as
+## `MissionResult.to_dict` and is rebuilt here, with units re-resolved by path.
 @rpc("authority", "call_remote", "reliable")
-func _rpc_mission_ended(player_won: bool) -> void:
+func _rpc_mission_ended(data: Dictionary) -> void:
 	mission_over = true
 	active_unit = null
-	mission_ended.emit(player_won)
+	mission_ended.emit(MissionResult.from_dict(data, get_tree().root))
