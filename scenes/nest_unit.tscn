@@ -26,12 +26,16 @@ script = ExtResource("1_script")
 ; 0.45 its near edge ran off the bottom of the canvas facing the camera.
 ; body_depth_nest.tres gives every pixel its real depth, so the parts that sit
 ; in front of the origin draw over the floor instead of being cut by it.
+;
+; contact_shadow_radius is doubled from the 0.42 default: the body spans ~1.7 m
+; of deck, and a footprint-sized shadow under it reads as a coin, not contact.
 [node name="Visual" type="Node3D" parent="."]
 script = ExtResource("2_visual")
 layers = Array[StringName]([&"body"])
 variant = &"nest"
 canvas_height = 2.56
 foot_anchor = Vector2(0.5, 0.74609375)
+contact_shadow_radius = 0.85
 has_light = false
 
 [node name="Body" type="StaticBody3D" parent="."]
