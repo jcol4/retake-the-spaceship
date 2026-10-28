@@ -433,6 +433,11 @@ func _ready() -> void:
 ## pile) opens straight up for whoever is already in `SteamLobby.ready_peers`.
 func _setup_replication() -> void:
 	var sync := MultiplayerSynchronizer.new()
+	# Fixed name, for the same reason main.gd names the units themselves: the
+	# synchronizer is addressed by path across peers, and an engine-generated
+	# "@MultiplayerSynchronizer@<n>" differs on every peer, so the client could
+	# never resolve the host's and no unit state replicated at all.
+	sync.name = "Sync"
 	var config := SceneReplicationConfig.new()
 	# `life_state`, not `is_downed`: the latter is derived from it (and refuses
 	# assignment), so the synchronizer writing it would do nothing.
