@@ -459,6 +459,10 @@ func _on_lighting_changed() -> void:
 	# interrupt is overwatch's job alone (TurnManager.check_overwatch).
 	if is_downed or alert_state == AlertState.COMBAT:
 		return
+	# The host decides awareness; a client recomputes lighting for its own
+	# previews, and must not wake its copy of a unit the host's has not.
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
+		return
 	var lit := LightingManager.flashlight_value(grid_pos)
 	if lit < beam_alert_threshold:
 		return
@@ -635,6 +639,22 @@ func _set_state(new_state: AlertState) -> void:
 	# scream. Nothing downstream depends on the clip finishing.
 	if was == AlertState.UNAWARE and new_state != AlertState.UNAWARE:
 		visual.play_action(UnitVisual.ALERT_SCREAM)
+	_refresh_label()
+	state_changed.emit(self)
+	# Awareness is decided on the host alone (see `_on_lighting_changed`), so the
+	# label each client reads is handed the result. The scream is already on its
+	# way — UnitVisual mirrors its own actions.
+	if visual.mirrors():
+		for peer_id in SteamLobby.ready_peers:
+			_rpc_show_state.rpc_id(peer_id, new_state)
+
+
+## Client-side: the host's awareness change, for the label and the HUD. Skips
+## `_set_state` and the overrides on it: a client never acts on `target`, and
+## the scream and CerberusUnit's status light are mirrored on their own.
+@rpc("authority", "call_remote", "reliable")
+func _rpc_show_state(new_state: AlertState) -> void:
+	alert_state = new_state
 	_refresh_label()
 	state_changed.emit(self)
 

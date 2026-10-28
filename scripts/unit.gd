@@ -245,6 +245,14 @@ var _gear_stowed := false
 ## see a transition arrive and play it (collapse, tint, stand up) — the host plays
 ## its own as it makes them, through the same `_present_life_state`.
 var _shown_life_state: LifeState = LifeState.ACTIVE
+## Client-side: the AP/ammo the HUD was last told about (via `ap_changed`). The
+## synchronizer writes these straight into the vars, which fires nothing, so
+## `_after_replication` compares against this to know when to announce them.
+var _shown_ap_ammo: Vector3i = Vector3i(-1, -1, -1)
+## Client-side: the beam (on, facing) this peer last lit tiles for. The host
+## recomputes the lighting as it turns and walks units; a client only sees the
+## results land, so `_after_replication` recomputes when the beam has moved.
+var _shown_beam: Vector2 = Vector2(-1.0, 0.0)
 ## Collision layer the click/LOS body had before it was hidden by being carried.
 var _body_layer: int = -1
 ## Placeholder "carrying a body" marker on the carrier — see `_show_carry_marker`.
@@ -485,6 +493,22 @@ func _after_replication() -> void:
 	if inventory_codes != ItemPresets.codes_of(inventory):
 		inventory = ItemPresets.items_from(inventory_codes)
 		inventory_changed.emit(self)
+	# The HUD gates every AP-priced button on `ap`, and refreshes on `ap_changed`.
+	# Without this a client's buttons sat on the AP from before the activation's
+	# refill (usually 0, all greyed) until some free action — Flashlight, Face —
+	# happened to call `_refresh` by hand.
+	var ap_ammo := Vector3i(ap, ammo, reserve)
+	if ap_ammo != _shown_ap_ammo:
+		_shown_ap_ammo = ap_ammo
+		ap_changed.emit(self)
+	# Snapped so a turn in progress recomputes a handful of times rather than on
+	# every batch; the settled facing always lands on a fresh value.
+	var beam := Vector2(1.0 if has_flashlight and flashlight_on else 0.0, snappedf(rotation.y, 0.05))
+	if beam != _shown_beam:
+		var was_lit := _shown_beam.x > 0.0
+		_shown_beam = beam
+		if beam.x > 0.0 or was_lit:
+			LightingManager.recompute_dynamic()
 	_on_replicated()
 
 
@@ -520,6 +544,10 @@ func _rpc_sync_grid_pos(new_grid_pos: Vector3i) -> void:
 	GridManager.set_occupant(grid_pos, null)
 	grid_pos = new_grid_pos
 	GridManager.set_occupant(grid_pos, self)
+	# The beam is cast from `grid_pos`, so it has only now arrived where the
+	# host lit it from (see `_shown_beam`).
+	if has_flashlight and flashlight_on:
+		LightingManager.recompute_dynamic()
 
 
 func begin_activation() -> void:
@@ -1685,7 +1713,7 @@ func do_suppress(target: Unit) -> void:
 	is_busy = true
 	await face_toward(target.global_position)
 	_arm_covering_fire(target)
-	await visual.play_burst(SUPPRESSION_BURST_ROUNDS)
+	await _play_armed_burst(SUPPRESSION_BURST_ROUNDS)
 	_disarm_covering_fire()
 	is_busy = false
 	# Deliberately NOT awaited: the covering fire runs for as long as the
@@ -1708,10 +1736,12 @@ func do_suppress(target: Unit) -> void:
 ## first one is empty — rounds going downrange with no effect is the mechanic.
 ##
 ## Skipped entirely when the unit is off screen or headless (`is_instant`), where
-## there is nobody to show it to and the timer would just burn turn time.
+## there is nobody to show it to and the timer would just burn turn time — unless
+## a co-op client is connected, whose view the host cannot see from here. Nothing
+## waits on this loop, so the host keeping it ticking costs no turn time.
 func _suppression_fire_loop() -> void:
 	while suppressing != null and not is_downed and is_inside_tree():
-		if is_instant():
+		if is_instant() and not visual.mirrors():
 			return
 		await get_tree().create_timer(SUPPRESSION_BURST_GAP).timeout
 		# Re-checked after the wait: three seconds is long enough for the
@@ -1719,7 +1749,7 @@ func _suppression_fire_loop() -> void:
 		if suppressing == null or is_downed or is_busy or not is_inside_tree():
 			return
 		_arm_covering_fire(suppressing)
-		await visual.play_burst(SUPPRESSION_BURST_ROUNDS)
+		await _play_armed_burst(SUPPRESSION_BURST_ROUNDS)
 		_disarm_covering_fire()
 
 
@@ -1942,7 +1972,7 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	_pending_target = target
 	_burst_round = 0
 	_burst_strays = _pick_strays(rounds, result.hit)
-	await visual.play_burst(rounds)  # emits `muzzle` once per round
+	await _play_armed_burst(rounds)  # emits `muzzle` once per round
 	_pending_shot = null
 	_pending_target = null
 	if result.hit:
@@ -2003,10 +2033,7 @@ func melee_at(target: Unit) -> Combat.ShotResult:
 	is_busy = true
 	await visual.play_action(UnitVisual.MELEE)
 	if result.hit:
-		if not is_instant():
-			var vfx := get_tree().get_first_node_in_group("vfx")
-			if vfx:
-				vfx.impact(target.global_position, result.crit)
+		show_impact(target.global_position, result.crit)
 		var raw := result.damage
 		result.damage = target.take_damage(raw)
 		result.absorbed = raw - result.damage
@@ -2083,6 +2110,66 @@ func _on_muzzle() -> void:
 	# ever wanted, the SAMPLE has to change with it — a single crack, not a burst.
 	if round_index == 0:
 		Sfx.play("rifle_fire", from)
+
+
+## Plays the burst armed by `fire_at` or `_arm_covering_fire`, and hands every
+## ready client the same arming. The roll exists only on the host, so without it
+## a client saw the rifle kick and nothing land; with it, the client's own
+## `_on_muzzle` draws the impacts and plays the gunfire, gated on that client's
+## own `is_instant`.
+func _play_armed_burst(rounds: int) -> void:
+	if visual.mirrors():
+		var target_path := _pending_target.get_path() if _pending_target else NodePath()
+		var has_shot := _pending_shot != null
+		var hit := has_shot and _pending_shot.hit
+		var crit := has_shot and _pending_shot.crit
+		var strays := PackedInt32Array(_burst_strays)
+		for peer_id in SteamLobby.ready_peers:
+			_rpc_play_armed_burst.rpc_id(peer_id, target_path, rounds, has_shot, hit, crit, strays)
+	await visual.play_burst(rounds, false)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, hit: bool,
+		crit: bool, strays: PackedInt32Array) -> void:
+	# Only what `_on_muzzle` reads; the rest of the result stays on the host.
+	var shot: Combat.ShotResult = null
+	if has_shot:
+		shot = Combat.ShotResult.new()
+		shot.hit = hit
+		shot.crit = crit
+	_pending_shot = shot
+	_pending_target = get_node_or_null(target_path) as Unit if not target_path.is_empty() else null
+	_burst_round = 0
+	_burst_strays.assign(strays)
+	await visual.play_burst(rounds, false)
+	# Unless a later burst took the arming over meanwhile — the suppression-break
+	# case `_disarm_covering_fire` describes.
+	if _pending_shot == shot:
+		_pending_shot = null
+		_pending_target = null
+
+
+## A hit landing at `at` — a swing connecting, a grenade going off. Sent to every
+## ready client as well, each of which shows it only if it can see this unit.
+func show_impact(at: Vector3, crit: bool) -> void:
+	if visual.mirrors():
+		for peer_id in SteamLobby.ready_peers:
+			_rpc_show_impact.rpc_id(peer_id, at, crit)
+	_show_impact(at, crit)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_show_impact(at: Vector3, crit: bool) -> void:
+	_show_impact(at, crit)
+
+
+func _show_impact(at: Vector3, crit: bool) -> void:
+	if is_instant():
+		return
+	var vfx := get_tree().get_first_node_in_group("vfx")
+	if vfx:
+		vfx.impact(at, crit)
 
 
 ## Arms the muzzle hook for a burst that resolves NO shot — suppressing fire.

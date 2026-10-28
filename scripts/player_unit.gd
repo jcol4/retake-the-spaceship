@@ -412,9 +412,7 @@ func _try_throw_grenade(target: Vector3i, type: GrenadeType) -> void:
 	# facing while it happens is adjusted.
 	await face_toward(_grenade_face_position(target))
 	await visual.play_action(UnitVisual.GRENADE)
-	var vfx := get_tree().get_first_node_in_group("vfx")
-	if vfx and not is_instant():
-		vfx.impact(GridManager.grid_to_world(target) + Vector3(0, 0.9, 0), true)
+	show_impact(GridManager.grid_to_world(target) + Vector3(0, 0.9, 0), true)
 	# An explosion is loud, and the robots' sound channel is the one thing about
 	# them a grenade does NOT bypass: throwing it announces where you are.
 	SecurityNetwork.report_noise(target, self)

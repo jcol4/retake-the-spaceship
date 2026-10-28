@@ -512,6 +512,21 @@ func covered_sides(pos: Vector3i) -> Array[int]:
 ## turn into impassable rubble the way the old per-tile version did. Light is the
 ## bottom tier and does go to nothing.
 func damage_cover_edge(pos: Vector3i, side: int, amount: int) -> int:
+	# Only the host resolves the fire that does this, so each ready client is
+	# handed the same damage to apply to its own copy — the edge HP starts the
+	# same everywhere, so the same hits leave it at the same tier.
+	if multiplayer.has_multiplayer_peer() and multiplayer.is_server():
+		for peer_id in SteamLobby.ready_peers:
+			_rpc_damage_cover_edge.rpc_id(peer_id, pos, side, amount)
+	return _damage_cover_edge(pos, side, amount)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_damage_cover_edge(pos: Vector3i, side: int, amount: int) -> void:
+	_damage_cover_edge(pos, side, amount)
+
+
+func _damage_cover_edge(pos: Vector3i, side: int, amount: int) -> int:
 	var edge := cover_edge(pos, side)
 	if edge == null or not edge.is_intact():
 		return MapData.Cover.NONE

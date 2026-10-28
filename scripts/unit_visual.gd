@@ -704,6 +704,11 @@ func aim_direction() -> Vector3:
 
 
 func set_flashlight_enabled(on: bool) -> void:
+	_mirror(&"_rpc_set_flashlight_enabled", [on])
+	_set_flashlight_enabled(on)
+
+
+func _set_flashlight_enabled(on: bool) -> void:
 	_light_on = on
 	if _light:
 		_light.visible = on
@@ -951,6 +956,80 @@ func _duration(pose: StringName) -> float:
 	return ONE_SHOT_TIME.get(pose, FALLBACK_TIME.get(pose, DEFAULT_FALLBACK_TIME))
 
 
+# --- Co-op mirroring ---------------------------------------------------------
+#
+# Every action resolves on the host alone (PlayerUnit._issue), and the unit's
+# synchronizer streams only where it is, never what it is doing — so a client's
+# copy slid across the deck in idle and never fired, reloaded or flinched. Each
+# public driver below therefore forwards itself to every ready client before it
+# plays here, and the client runs the local-only `_` version, which is what the
+# drivers call among themselves too so a nested call is never sent twice.
+#
+# Sent BEFORE the host's own `_instant` check: whether the HOST can see the unit
+# says nothing about whether a client can, and the client answers that for
+# itself through its own `_instant`.
+
+
+## True on the host of a co-op session — the only peer that sends.
+func mirrors() -> bool:
+	return multiplayer.has_multiplayer_peer() and multiplayer.is_server() \
+			and not SteamLobby.ready_peers.is_empty()
+
+
+## Per ready peer rather than a broadcast, for the reason the unit's
+## synchronizer starts hidden: a client that has not built this node yet cannot
+## resolve the path. See SteamLobby.ready_peers.
+func _mirror(rpc_method: StringName, args: Array = []) -> void:
+	if not mirrors():
+		return
+	for peer_id in SteamLobby.ready_peers:
+		callv(&"rpc_id", [peer_id, rpc_method] + args)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_set_cover_pose(family: StringName) -> void:
+	_set_cover_pose(family)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_set_stance(stance: StringName) -> void:
+	_set_stance(stance)
+
+
+# The client's await-free copies of the coroutines: nothing on a client waits on
+# them, the host's own pacing already spaces the calls out.
+@rpc("authority", "call_remote", "reliable")
+func _rpc_play_action(action: StringName) -> void:
+	_play_action(action)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_play_hit_react() -> void:
+	_play_hit_react()
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_play_stance_exit(action: StringName, next: StringName) -> void:
+	_play_stance_exit(action, next)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_play_burst(rounds: int) -> void:
+	_play_burst(rounds)
+
+
+# Idempotent, so the copy a client also sets for itself off the replicated
+# `flashlight_on` and `life_state` costs nothing.
+@rpc("authority", "call_remote", "reliable")
+func _rpc_set_flashlight_enabled(on: bool) -> void:
+	_set_flashlight_enabled(on)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_set_status_color(color: Color) -> void:
+	_set_status_color(color)
+
+
 # --- Playback ----------------------------------------------------------------
 
 
@@ -958,6 +1037,11 @@ func _duration(pose: StringName) -> float:
 ## the cover BONUS is a property of the tile edge the shot crosses, never of
 ## what the unit is doing on screen.
 func set_cover_pose(family: StringName) -> void:
+	_mirror(&"_rpc_set_cover_pose", [family])
+	_set_cover_pose(family)
+
+
+func _set_cover_pose(family: StringName) -> void:
 	if family == _cover:
 		return
 	_cover = family
@@ -965,6 +1049,11 @@ func set_cover_pose(family: StringName) -> void:
 
 
 func set_stance(stance: StringName) -> void:
+	_mirror(&"_rpc_set_stance", [stance])
+	_set_stance(stance)
+
+
+func _set_stance(stance: StringName) -> void:
 	# Recorded even when a one-shot is mid-flight; play_action hands back to
 	# whatever the stance has become rather than to what it was on entry.
 	_stance = stance
@@ -981,6 +1070,15 @@ func play_action(action: StringName) -> void:
 	# Coroutine — callers MUST await, or the next game action resolves while this
 	# one is still on screen. Shooting does NOT come through here — see
 	# play_burst — so nothing here emits `muzzle`.
+	#
+	# DOWNED is not sent: a client plays its own collapse off the replicated
+	# `life_state` (Unit._present_life_state), and a second copy would restart it.
+	if action != DOWNED:
+		_mirror(&"_rpc_play_action", [action])
+	await _play_action(action)
+
+
+func _play_action(action: StringName) -> void:
 	if _instant():
 		# Still recorded, so a unit killed out of sight is a body when it next
 		# comes into view.
@@ -1018,27 +1116,45 @@ func _settle_dead() -> void:
 ## victim's reaction, so missing art costs NO time here. Skipped rather than
 ## stacked when another one-shot is already on screen.
 func play_hit_react() -> void:
+	_mirror(&"_rpc_play_hit_react")
+	await _play_hit_react()
+
+
+func _play_hit_react() -> void:
 	if _instant() or _action != &"" or not (_authored and _has_any(HIT_REACT)):
 		return
-	await play_action(HIT_REACT)
+	await _play_action(HIT_REACT)
 
 
 ## Plays a one-shot that bridges the current stance into `next`, then settles
 ## there. Coroutine — callers MUST await. Missing art costs NO time: it falls
 ## straight through to the stance, a hard cut rather than a mysterious pause.
 func play_stance_exit(action: StringName, next: StringName) -> void:
+	_mirror(&"_rpc_play_stance_exit", [action, next])
+	await _play_stance_exit(action, next)
+
+
+func _play_stance_exit(action: StringName, next: StringName) -> void:
 	if _instant() or not _has_any(action):
-		set_stance(next)
+		_set_stance(next)
 		return
 	# Recorded WITHOUT playing it, so the exit animation is what shows; the tail
 	# of play_action then settles into whatever _stance has become.
 	_stance = next
-	await play_action(action)
+	await _play_action(action)
 
 
-func play_burst(rounds: int) -> void:
+func play_burst(rounds: int, mirror: bool = true) -> void:
 	# Coroutine — callers MUST await. Weapon comes up, fires `rounds` rounds on a
 	# fixed cadence, holds, then hands back to the stance. One `muzzle` per round.
+	# `mirror` false is for a caller that sends the burst itself, with what each
+	# round hits — see Unit._play_armed_burst.
+	if mirror:
+		_mirror(&"_rpc_play_burst", [rounds])
+	await _play_burst(rounds)
+
+
+func _play_burst(rounds: int) -> void:
 	if _instant():
 		for _i in rounds:
 			muzzle.emit()
@@ -1166,7 +1282,14 @@ func _fidget_loop() -> void:
 ## readability: a machine's posture cannot be read off its body language the way
 ## an alien's can, so the state is a colour instead. A no-op for a character with
 ## no status part.
+## Mirrored like the poses: what drives it (a robot's alert state, its EMP timer)
+## lives on the host alone.
 func set_status_color(color: Color) -> void:
+	_mirror(&"_rpc_set_status_color", [color])
+	_set_status_color(color)
+
+
+func _set_status_color(color: Color) -> void:
 	_status_color = color
 	if _status_material:
 		_status_material.albedo_color = color
