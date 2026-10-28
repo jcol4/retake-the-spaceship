@@ -41,3 +41,9 @@ assets/room_tiles/scaled-room-tiles*
 # tools/ scripts (make_sprite_gif.py defaults --out here). ~27 MB across 146
 # files, all regenerable from the blends in art_src/, so not worth versioning.
 out/
+
+# GodotSteam: the copy Godot makes of a native library while the editor has it
+# loaded (plus Windows' ~RF*.TMP leftovers of that copy). Committed by accident
+# more than once while the editor was open, and because the editor keeps it
+# locked, it blocks any checkout or merge that tries to overwrite it.
+addons/godotsteam/win64/~*
