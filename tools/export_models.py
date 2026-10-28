@@ -6,6 +6,9 @@
     # A worm pile: writes a LAYOUT (.json), not a model -- see export_pile.
     blender.exe -b art_src/worm_pile_tide.blend -P tools/export_models.py -- --variant worm_tide
 
+    # A gun, from its own .blend: grip at the origin, barrel +Y, top +Z.
+    blender.exe -b art_src/guns/rifle.blend -P tools/export_models.py -- --gun rifle
+
     # Everything, each from its own .blend (spawns one Blender per variant).
     blender.exe -b -P tools/export_models.py -- --all
 
@@ -31,7 +34,14 @@ render_sprites.py rather than restated here, so the two cannot drift:
     .blend is never written, so this is in memory only).
 
 The sidecar `<variant>.json` next to the .glb carries what the .glb cannot:
-the per-pose yaw corrections.
+the per-pose yaw corrections, and the gun the character was animated with.
+
+GUNS are separate .glbs (`assets/models/guns/<gun>.glb`). A character carrying
+one has a `weapon_mount` Empty on its `weapon` bone at the primary grip (see
+tools/standardize_gun_mount.py); the gun parented under it in the .blend is a
+preview -- it stays in the scene through the export so the left hand's IK can
+still reach `grip_support`, but is left out of the .glb. The game mounts
+whichever gun the unit carries on `weapon_mount`.
 """
 
 import argparse
@@ -56,7 +66,7 @@ EXTRA_POSES = ["reload_low", "reload_high"]
 ## Which .blend each variant is exported from. Piles are listed separately
 ## because they are not models (see export_pile).
 MODELS = {
-    "merc": "art_src/merc_anim.blend",
+    "merc": "art_src/merc_anim_gunswap.blend",
     "brawler": "art_src/zombie_anim.blend",
     "worm": "art_src/worm_anims.blend",
     "nest": "art_src/worm_spawn_scaled.blend",
@@ -83,6 +93,21 @@ PILES = {
 }
 ## The model every pile instance is a copy of.
 PILE_BASE = "worm"
+
+## Swappable guns, each its own .blend, exported to OUT_DIR/guns/.
+## `rifle` is the one the merc was animated with; the rest are built from it by
+## tools/build_guns.py and keep its grip.
+GUNS = {
+    "rifle": "art_src/guns/rifle.blend",
+    "assault_rifle": "art_src/guns/assault_rifle.blend",
+    "battle_rifle": "art_src/guns/battle_rifle.blend",
+    "lmg": "art_src/guns/lmg.blend",
+    "smg": "art_src/guns/smg.blend",
+    "shotgun": "art_src/guns/shotgun.blend",
+}
+## The Empty a gun-carrying character holds its gun by. Its `gun` property
+## names the gun the .blend previews, and becomes the sidecar's default.
+MOUNT = "weapon_mount"
 
 ## Blender (x, y, z) -> Godot (x, z, -y): the axis swap the glTF exporter
 ## applies with +Y up. Used to hand pile transforms to the game in its own axes.
@@ -191,6 +216,15 @@ def export_model(variant, out_dir):
     character.rotation_euler.z = math.radians(
         rs.VARIANT_BUCKET_ZERO.get(variant, rs.BUCKET_ZERO_DEGREES))
 
+    # The preview gun is HIDDEN, not deleted: the left hand's IK targets its
+    # grip_support, and the export bakes that IK into the arm.
+    mount = bpy.data.objects.get(MOUNT)
+    gun = None
+    if mount is not None:
+        gun = mount.get("gun")
+        for obj in mount.children_recursive:
+            obj.hide_set(True)
+
     os.makedirs(out_dir, exist_ok=True)
     glb = os.path.join(out_dir, variant + ".glb")
     bpy.ops.export_scene.gltf(
@@ -205,9 +239,12 @@ def export_model(variant, out_dir):
         export_frame_range=False,
         export_def_bones=False,
         export_image_format="AUTO",
+        use_visible=mount is not None,
     )
     yaw = {pose: delta for pose, delta in rs.POSE_BUCKET_ZERO.get(variant, {}).items()}
     sidecar = {"variant": variant, "poses": poses, "pose_yaw_degrees": yaw}
+    if gun:
+        sidecar["gun"] = gun
     with open(os.path.join(out_dir, variant + ".json"), "w") as f:
         json.dump(sidecar, f, indent=2)
     print("[export_models] wrote %s (%d poses: %s)" % (glb, len(poses), ", ".join(poses)))
@@ -274,6 +311,32 @@ def export_pile(variant, out_dir):
     print("[export_models] wrote %s (%d instances of %s)" % (path, len(instances), PILE_BASE))
 
 
+def export_gun(gun, out_dir):
+    """A gun is one static object: the gun mesh at the origin with its
+    `grip_support` and `muzzle_flash` children. No rig, no animation."""
+    root = bpy.data.objects.get(gun)
+    if root is None:
+        sys.exit("[export_models] %s has no object named %r" % (bpy.data.filepath, gun))
+    rs.unlink_missing_images()
+    for image in bpy.data.images:
+        w, h = image.size
+        if max(w, h) > MAX_TEXTURE:
+            s = MAX_TEXTURE / max(w, h)
+            image.scale(max(1, int(w * s)), max(1, int(h * s)))
+    out_dir = os.path.join(out_dir, "guns")
+    os.makedirs(out_dir, exist_ok=True)
+    glb = os.path.join(out_dir, gun + ".glb")
+    bpy.ops.export_scene.gltf(
+        filepath=glb,
+        export_format="GLB",
+        export_yup=True,
+        export_apply=True,
+        export_animations=False,
+        export_image_format="AUTO",
+    )
+    print("[export_models] wrote %s" % glb)
+
+
 def _fcurves(action):
     return [fc for layer in action.layers for strip in layer.strips
             for bag in getattr(strip, "channelbags", ()) for fc in bag.fcurves]
@@ -282,28 +345,33 @@ def _fcurves(action):
 def export_all():
     blender = bpy.app.binary_path
     me = os.path.abspath(__file__)
-    for variant, blend in list(MODELS.items()) + list(PILES.items()):
-        print("[export_models] --- %s from %s" % (variant, blend))
-        result = subprocess.run([blender, "-b", blend, "-P", me, "--", "--variant", variant])
+    jobs = [(blend, "--variant", v) for v, blend in list(MODELS.items()) + list(PILES.items())]
+    jobs += [(blend, "--gun", g) for g, blend in GUNS.items()]
+    for blend, flag, name in jobs:
+        print("[export_models] --- %s from %s" % (name, blend))
+        result = subprocess.run([blender, "-b", blend, "-P", me, "--", flag, name])
         if result.returncode != 0:
-            sys.exit("[export_models] %s failed" % variant)
+            sys.exit("[export_models] %s failed" % name)
 
 
 def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     parser = argparse.ArgumentParser()
     parser.add_argument("--variant")
+    parser.add_argument("--gun")
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--out", default=OUT_DIR)
     args = parser.parse_args(argv)
     if args.all:
         export_all()
+    elif args.gun:
+        export_gun(args.gun, os.path.abspath(args.out))
     elif args.variant in PILES:
         export_pile(args.variant, os.path.abspath(args.out))
     elif args.variant:
         export_model(args.variant, os.path.abspath(args.out))
     else:
-        sys.exit("pass --variant <name> or --all")
+        sys.exit("pass --variant <name>, --gun <name> or --all")
 
 
 if __name__ == "__main__":

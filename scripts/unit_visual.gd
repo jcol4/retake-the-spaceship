@@ -191,6 +191,11 @@ const COVER_HIGH := &"high"
 ## `<variant>.json`. A gear swap is a reassignment of this — see `set_variant`.
 @export var variant: StringName = &"soldier"
 
+## Which gun to put in the model's hands: `assets/models/guns/<gun>.glb`. Empty
+## takes the gun the model was animated with (its sidecar's `gun`). See
+## `set_gun`, and MOUNT_NODE for what a gun has to look like to fit.
+@export var gun: StringName = &""
+
 ## Uniform scale on the model. 1.0 is true size, which every export is authored
 ## at; the worm mass uses it to grow within a tier (WormUnit._apply_count).
 @export var model_scale: float = 1.0:
@@ -242,6 +247,15 @@ const MIN_BRIGHTNESS := 0.3
 ## mount there.
 const MUZZLE_NODE := "muzzle_flash"
 
+## The node on the model's `weapon` bone a gun hangs from, at the trigger-hand
+## grip. Every gun .glb is modelled to fit it: grip at the origin, barrel down
+## -Z, top +Y, with a MUZZLE_NODE at the barrel tip and a `grip_support` where
+## the left hand closes. The arm is baked to the animated gun's support grip, so
+## a gun that moves `grip_support` leaves the left hand short of it.
+## tools/standardize_gun_mount.py made the merc's.
+const MOUNT_NODE := "weapon_mount"
+const GUN_DIR := MODEL_DIR + "guns/"
+
 ## Inverted-hull outline, drawn as a second pass on every character surface in
 ## a darkened copy of that surface's own colour. See `_outline_for`.
 const OUTLINE_SHADER := preload("res://shaders/outline.gdshader")
@@ -278,6 +292,8 @@ var _current: StringName = &""
 ## The model's barrel-tip marker (MUZZLE_NODE) and the flash mounted beside it.
 var _muzzle: Node3D = null
 var _flash: MuzzleFlash = null
+## The model's MOUNT_NODE, or null for a model that holds no gun.
+var _mount: Node3D = null
 ## Placeholder only: the node posed to crouch or lie down, and the status light.
 var _pose_root: Node3D = null
 var _status_material: StandardMaterial3D = null
@@ -346,6 +362,11 @@ func _build_model() -> void:
 	_pose_yaw.clear()
 	_muzzle = null
 	_flash = null
+	_mount = null
+	_health_band = null
+	_band_glow = null
+	_down_pips.clear()
+	_pip_glows.clear()
 	_pose_root = null
 	_status_material = null
 	_floor_materials.clear()
@@ -401,13 +422,28 @@ func _build_single(sidecar: Dictionary) -> bool:
 	if yaw is Dictionary:
 		for pose: String in yaw:
 			_pose_yaw[StringName(pose)] = float(yaw[pose])
+	# Before the muzzle lookup and dressing: the muzzle is on the gun, and the
+	# gun is tinted and outlined like the rest of the model.
+	_mount_gun(inst, gun if gun != &"" else StringName(sidecar.get("gun", "")))
 	_muzzle = inst.find_child(MUZZLE_NODE, true, false) as Node3D
 	if _muzzle:
 		_muzzle.visible = false
+	# Before dressing, which skips them: they glow, so no tint or outline.
+	_find_status_lights(inst)
 	_dress_surfaces(inst)
 	# After dressing, which would otherwise tint and outline the flash too.
 	_mount_flash()
 	return true
+
+
+## Hangs `gun_name`'s .glb on the model's MOUNT_NODE. A model with no mount, or
+## a gun with no .glb, is left empty-handed.
+func _mount_gun(inst: Node, gun_name: StringName) -> void:
+	_mount = inst.find_child(MOUNT_NODE, true, false) as Node3D
+	var path := GUN_DIR + String(gun_name) + ".glb"
+	if _mount == null or gun_name == &"" or not ResourceLoader.exists(path):
+		return
+	_mount.add_child((load(path) as PackedScene).instantiate())
 
 
 ## A worm mass: N copies of the single worm laid out by export_models.py, each a
@@ -494,7 +530,8 @@ func _mount_flash() -> void:
 func _dress_surfaces(root: Node) -> void:
 	for node in root.find_children("*", "MeshInstance3D", true, false):
 		var mesh := node as MeshInstance3D
-		if mesh.mesh == null or mesh == _muzzle:
+		if mesh.mesh == null or mesh == _muzzle or mesh == _health_band \
+				or mesh in _down_pips:
 			continue
 		mesh.layers |= CHARACTER_LAYER
 		for s in mesh.mesh.get_surface_count():
@@ -570,6 +607,19 @@ func set_variant(new_variant: StringName) -> void:
 	if has_light:
 		_build_light()
 	_play(_action if _action != &"" else _stance, true)
+
+
+## Swaps the gun in the model's hands. The animation is untouched: every gun
+## shares the grip, so the same poses hold any of them.
+func set_gun(new_gun: StringName) -> void:
+	if new_gun == gun:
+		return
+	gun = new_gun
+	# A model with no mount (an alien, the placeholder) has nothing to swap, and
+	# a rebuild would only restart its animation. Before _ready there is no
+	# model yet either; _build_model reads `gun` when it gets there.
+	if _mount != null:
+		set_variant(variant)
 
 
 ## A plain SpotLight3D riding the rifle: placed on the barrel tip and pointed
@@ -657,6 +707,200 @@ func set_flashlight_enabled(on: bool) -> void:
 	_light_on = on
 	if _light:
 		_light.visible = on
+
+
+## THE SUIT'S STATUS LIGHTS (tools/add_merc_lights.py): a band down the back in
+## the colour of the soldier's HP bracket, and a pip on the right breast per down
+## taken -- the third down kills, so the third pip lights on a corpse. Hidden
+## until `set_status_lights` is first called, so a model that carries them but is
+## not a squad soldier (the rival crew wears the same suit) never shows them.
+const HEALTH_BAND_NODE := "health_band"
+const DOWN_PIP_NODES: Array[String] = ["down_pip_1", "down_pip_2", "down_pip_3"]
+## [HP fraction at or above which, band colour], highest first.
+const HEALTH_BRACKETS := [
+	[0.9, Color(0.2, 1.0, 0.8)],  # blue-green
+	[0.7, Color(0.35, 1.0, 0.3)],  # green
+	[0.4, Color(1.0, 0.62, 0.1)],  # amber
+	[0.0, Color(1.0, 0.12, 0.08)],  # red
+]
+const DOWNED_BAND_COLOR := Color(1.0, 0.12, 0.08)
+const PIP_COLOR := Color(1.0, 0.1, 0.06)
+## A lit light's emission energy: enough to clear the environment's glow
+## threshold for a soft halo.
+const LIGHT_ENERGY := 1.6
+## A dark lens, so an unlit pip or a dead band still reads as hardware.
+const LIGHT_OFF_COLOR := Color(0.06, 0.06, 0.07)
+## Seconds per pulse of the downed band, and how far it dims at the trough.
+const DOWNED_PULSE_TIME := 1.4
+const DOWNED_PULSE_LOW := 0.2
+## The band's spill onto its surroundings: a dim, shadowless omni a hand's width
+## off the band, in its colour. Kept faint -- a hint on the floor and the wall
+## behind a soldier, not a lamp. Rides this bone, which the band mostly covers.
+const BAND_GLOW_ENERGY := 0.175
+const BAND_GLOW_RANGE := 0.75
+const BAND_GLOW_OFFSET := 0.12
+const GLOW_BONE := "chest"
+## Each lit pip's spill: the same kind of light, much smaller.
+const PIP_GLOW_ENERGY := 0.0875
+const PIP_GLOW_RANGE := 0.375
+const PIP_GLOW_OFFSET := 0.04
+
+var _health_band: MeshInstance3D = null
+var _band_glow: OmniLight3D = null
+var _down_pips: Array[MeshInstance3D] = []
+## One per pip, in step with `_down_pips`; null where the model has no chest bone.
+var _pip_glows: Array[OmniLight3D] = []
+var _band_material: StandardMaterial3D = null
+var _pip_materials: Array[StandardMaterial3D] = []
+var _band_pulse: Tween = null
+## The last state handed to set_status_lights, kept so a model rebuild (gear or
+## gun swap) comes back showing it. Empty: never set, lights hidden.
+var _status_lights: Dictionary = {}
+
+
+## Shows the status lights. `hp_fraction` picks the band's bracket while the
+## soldier is up; downed, the band pulses red instead, and dead it goes dark.
+## `downs` lights that many pips. Cheap to call on every change: an unchanged
+## state is ignored, so a running pulse is not restarted.
+func set_status_lights(hp_fraction: float, downs: int, downed: bool, dead: bool) -> void:
+	var state := {"hp": hp_fraction, "downs": downs, "downed": downed, "dead": dead}
+	if state == _status_lights:
+		return
+	_status_lights = state
+	_apply_status_lights()
+
+
+## Picks the lights out of a freshly built model and gives each its own glow
+## material, so every pip can be lit on its own.
+func _find_status_lights(inst: Node) -> void:
+	_health_band = inst.find_child(HEALTH_BAND_NODE, true, false) as MeshInstance3D
+	_band_material = null
+	_band_glow = null
+	if _health_band:
+		_band_material = _glow_material()
+		_health_band.material_override = _band_material
+		_band_glow = _build_glow(_health_band, BAND_GLOW_RANGE, BAND_GLOW_OFFSET)
+	_down_pips.clear()
+	_pip_materials.clear()
+	_pip_glows.clear()
+	for node_name in DOWN_PIP_NODES:
+		var pip := inst.find_child(node_name, true, false) as MeshInstance3D
+		if pip:
+			var mat := _glow_material()
+			pip.material_override = mat
+			_down_pips.append(pip)
+			_pip_materials.append(mat)
+			_pip_glows.append(_build_glow(pip, PIP_GLOW_RANGE, PIP_GLOW_OFFSET))
+	_apply_status_lights()
+
+
+## Hangs a status light's spill on GLOW_BONE, just out from `mesh`'s middle. The
+## lights are skinned, so their own nodes never move; the bone does. Placed from
+## the rest pose: the mesh's centre, pushed `offset` out along the level line
+## from the bone to it. Null on a model without the bone.
+func _build_glow(mesh: MeshInstance3D, glow_range: float, offset: float) -> OmniLight3D:
+	var skeleton := mesh.get_node_or_null(mesh.skeleton) as Skeleton3D
+	var bone := skeleton.find_bone(GLOW_BONE) if skeleton else -1
+	if bone < 0:
+		return null
+	var rest := skeleton.get_bone_global_rest(bone)
+	var to_skeleton := skeleton.global_transform.affine_inverse() * mesh.global_transform
+	var centre := to_skeleton * mesh.get_aabb().get_center()
+	var out := centre - rest.origin
+	out.y = 0.0
+	var attach := BoneAttachment3D.new()
+	attach.name = "%sGlowMount" % mesh.name
+	attach.bone_name = GLOW_BONE
+	skeleton.add_child(attach)
+	var glow := OmniLight3D.new()
+	glow.name = "%sGlow" % mesh.name
+	glow.omni_range = glow_range
+	glow.omni_attenuation = 2.0
+	glow.shadow_enabled = false
+	glow.light_volumetric_fog_energy = 0.0
+	glow.light_specular = 0.0
+	glow.position = rest.affine_inverse() * (centre + out.normalized() * offset)
+	attach.add_child(glow)
+	return glow
+
+
+## The band and its glow together. `level` scales both, for the downed pulse.
+func _set_band(color: Color, level: float) -> void:
+	_set_glow(_band_material, color, LIGHT_ENERGY * level)
+	if _band_glow:
+		_band_glow.light_color = color
+		_band_glow.light_energy = BAND_GLOW_ENERGY * level
+		_band_glow.visible = level > 0.0
+
+
+func _set_band_level(level: float) -> void:
+	_set_band(_band_material.emission, level)
+
+
+static func _glow_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.roughness = 1.0
+	mat.metallic_specular = 0.0
+	mat.emission_enabled = true
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return mat
+
+
+## Lit: all emission on a black body, so the colour is its own whatever light
+## falls on it. Off: the dark lens.
+static func _set_glow(mat: StandardMaterial3D, color: Color, energy: float) -> void:
+	mat.albedo_color = Color.BLACK if energy > 0.0 else LIGHT_OFF_COLOR
+	mat.emission = color
+	mat.emission_energy_multiplier = energy
+
+
+func _apply_status_lights() -> void:
+	var shown := not _status_lights.is_empty()
+	if _health_band:
+		_health_band.visible = shown
+	if _band_glow:
+		_band_glow.visible = shown
+	for pip in _down_pips:
+		pip.visible = shown
+	for glow in _pip_glows:
+		if glow:
+			glow.visible = shown
+	if _band_pulse:
+		_band_pulse.kill()
+		_band_pulse = null
+	if not shown:
+		return
+	var dead: bool = _status_lights.dead
+	if _band_material:
+		if dead:
+			_set_band(LIGHT_OFF_COLOR, 0.0)
+		elif _status_lights.downed:
+			_set_band(DOWNED_BAND_COLOR, 1.0)
+			_band_pulse = create_tween().set_loops()
+			_band_pulse.set_trans(Tween.TRANS_SINE)
+			_band_pulse.tween_method(_set_band_level, 1.0, DOWNED_PULSE_LOW,
+				DOWNED_PULSE_TIME / 2.0)
+			_band_pulse.tween_method(_set_band_level, DOWNED_PULSE_LOW, 1.0,
+				DOWNED_PULSE_TIME / 2.0)
+		else:
+			_set_band(_bracket_color(_status_lights.hp), 1.0)
+	var downs: int = _status_lights.downs
+	for i in _pip_materials.size():
+		var lit := i < downs
+		_set_glow(_pip_materials[i], PIP_COLOR if lit else LIGHT_OFF_COLOR,
+			LIGHT_ENERGY if lit else 0.0)
+		var glow := _pip_glows[i]
+		if glow:
+			glow.light_color = PIP_COLOR
+			glow.light_energy = PIP_GLOW_ENERGY
+			glow.visible = lit
+
+
+static func _bracket_color(hp_fraction: float) -> Color:
+	for bracket: Array in HEALTH_BRACKETS:
+		if hp_fraction >= bracket[0]:
+			return bracket[1]
+	return HEALTH_BRACKETS[-1][1]
 
 
 ## Re-asserts whatever the unit should be showing, for a unit coming back into
