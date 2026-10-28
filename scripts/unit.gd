@@ -397,6 +397,7 @@ func _ready() -> void:
 	_name_label = get_node_or_null("NameLabel")
 	if _name_label:
 		_name_label.text = stats.display_name
+	sync_gun_model()
 	visual.setup()
 	visual.muzzle.connect(_on_muzzle)
 	GridManager.cover_destroyed.connect(_on_cover_destroyed)
@@ -870,6 +871,16 @@ func cover_pose() -> StringName:
 ## call at any point — it re-resolves what is on screen without restarting it.
 func refresh_cover_pose() -> void:
 	visual.set_cover_pose(cover_pose())
+
+
+## Puts the primary weapon's gun model in the visual's hands. Called at spawn
+## and whenever the weapon is swapped (PlayerUnit._equip). A weapon with no
+## model leaves the model's own default gun.
+func sync_gun_model() -> void:
+	# `visual` is @onready: a loadout applied before the unit enters the tree is
+	# picked up by the call in _ready instead.
+	if visual and stats and stats.weapon:
+		visual.set_gun(WeaponPresets.gun_model(stats.weapon.id))
 
 
 ## Settles into idle in whatever posture the unit's current tile and facing call

@@ -88,6 +88,18 @@ const DATA := {
 	},
 }
 
+## The gun model each weapon is drawn with: `assets/models/guns/<model>.glb`,
+## built by tools/build_guns.py. Every one shares the rifle's grip, so any of
+## them fits any gun-carrying character (UnitVisual.set_gun). The pistol has no
+## model yet; a unit with its sidearm out keeps showing its primary.
+const GUN_MODEL := {
+	WeaponId.ASSAULT_RIFLE: &"assault_rifle",
+	WeaponId.SHOTGUN: &"shotgun",
+	WeaponId.SMG: &"smg",
+	WeaponId.LMG: &"lmg",
+	WeaponId.BATTLE_RIFLE: &"battle_rifle",
+}
+
 const CLASS_DEFAULT := {
 	UnitStats.UnitClass.ASSAULT: WeaponId.ASSAULT_RIFLE,
 	UnitStats.UnitClass.SNIPER: WeaponId.BATTLE_RIFLE,
@@ -120,6 +132,12 @@ static func make(id: WeaponId, attachment_ids: PackedInt32Array = PackedInt32Arr
 	if AmmoPresets.DATA.has(ammo_id) and AmmoPresets.fits(ammo_id, id):
 		w.ammo = AmmoPresets.make(ammo_id)
 	return w
+
+
+## The gun model for weapon `id`, or "" for one with none (the pistol, and the
+## non-roster weapons aliens and the door gun are built with, id -1).
+static func gun_model(id: int) -> StringName:
+	return GUN_MODEL.get(id, &"")
 
 
 static func default_for_class(unit_class: UnitStats.UnitClass) -> WeaponId:

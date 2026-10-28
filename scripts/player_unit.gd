@@ -121,6 +121,23 @@ func _ready() -> void:
 		stats.sidearm = WeaponPresets.make_sidearm()
 	stowed_ammo = stats.sidearm.effective_mag_size()
 	stowed_reserve = stats.sidearm.effective_reserve()
+	# Host-side changes arrive through these; a client's through _on_replicated.
+	for changed: Signal in [hp_changed, downed, died, revived]:
+		changed.connect(_refresh_status_lights.unbind(1))
+	_refresh_status_lights()
+
+
+func _on_replicated() -> void:
+	super()
+	_refresh_status_lights()
+
+
+## The suit's status lights (UnitVisual.set_status_lights): the HP bracket on the
+## back, the downs taken on the chest. Squad soldiers only — the rival crew wears
+## the same suit, with them dark.
+func _refresh_status_lights() -> void:
+	visual.set_status_lights(float(current_hp) / maxi(1, stats.max_hp()), down_count,
+		life_state == LifeState.DOWNED, life_state == LifeState.DEAD)
 
 
 func set_mode(new_mode: Mode) -> void:
@@ -638,6 +655,7 @@ func _equip(weapon_id: int, attachment_ids: PackedInt32Array, ammo_id: int) -> v
 	stats.weapon = WeaponPresets.make(weapon_id, attachment_ids, ammo_id)
 	ammo = stats.mag_size
 	reserve = stats.weapon.effective_reserve()
+	sync_gun_model()
 
 
 ## The host can deploy before a client has even built this unit, and the

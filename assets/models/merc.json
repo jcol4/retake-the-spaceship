@@ -25,5 +25,6 @@
   ],
   "pose_yaw_degrees": {
     "run": 90.0
-  }
+  },
+  "gun": "rifle"
 }

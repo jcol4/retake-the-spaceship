@@ -68,6 +68,9 @@ func _closeup() -> void:
 		(node as CanvasLayer).visible = false
 		hidden += 1
 	print("[screenshot] hid ", hidden, " CanvasLayer(s)")
+	# That includes PixelView, which leaves the root drawing no 3D of its own;
+	# the closeup camera is the root's, so turn it back on.
+	root.disable_3d = false
 	# Model diagnostics: which pose is on screen, and whether a model loaded at
 	# all or the code placeholder is standing in for it.
 	var vis: Node = unit.get_node_or_null("Visual")
@@ -92,6 +95,13 @@ func _process(delta: float) -> bool:
 		_prepared = true
 		if OS.has_environment("SHOT_CLOSEUP"):
 			_closeup()
+		elif OS.has_environment("SHOT_ZOOM"):
+			# Tactical camera at this Camera3D.size, set on the live size and the
+			# rig's smoothing target both so it doesn't drift back.
+			var rig := root.get_tree().get_first_node_in_group("camera_rig")
+			var zoom := float(OS.get_environment("SHOT_ZOOM"))
+			rig.set("_zoom_target", zoom)
+			(rig.get_node("Camera3D") as Camera3D).size = zoom
 		return false
 	if _settle < 2:
 		_settle += 1  # let the new camera actually render
