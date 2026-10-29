@@ -283,6 +283,11 @@ BUCKET_ZERO_DEGREES = 90.0
 ## files one bucket rather than by re-rendering.
 VARIANT_BUCKET_ZERO = {
     "brawler": 180.0,
+    # civilian_cleaned.blend: the merc's rig, whose poses face -Y in bone space.
+    # The merc gets this same quarter turn only on `run` (POSE_BUCKET_ZERO);
+    # every civilian pose faces like that run, so it goes on the whole rig.
+    # Judged on a running unit in game: at 90 it ran toward the camera.
+    "civilian": 180.0,
     # worm_anims.blend: the Z rotation that points the head (the spiked +Y end)
     # along Blender +Y, MEASURED off the rest mesh -- its tail-to-head axis sits
     # 5.3 deg anticlockwise of +Y with the rig at 25.5. The rig also lies ~93 deg
@@ -358,6 +363,10 @@ POSE_BUCKET_ZERO = {
 ## added. Eight renders buys a `melee/<dir>` that is right in every facing.
 POSE_ACTION = {
     "brawler": {"melee": "idle"},
+    # The civilian (Fodder) has no attack art either: its claw plays the idle,
+    # the way the brawler's swing does. Its collapse is the Mixamo download's
+    # `headshot dying`; with no `dead`, the corpse holds that clip's last frame.
+    "civilian": {"melee": "idle", "downed": "headshot dying"},
     # `overwatch_hold` is the pose name the game plays; `overwatch` is the
     # Blender action it is now drawn from -- a 32-frame scanning-stance cycle
     # replacing the old placeholder-length hold. See LOOP_TIME below for why

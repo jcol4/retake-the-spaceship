@@ -150,6 +150,9 @@ const VARIANT_LOOP_TIME := {
 	&"brawler": {WALK: 1.6},
 	# 0.75 m/s crosses its one tile a turn in two seconds — one cycle.
 	&"worm": {WALK: 2.0},
+	# The civilian runs the merc's stride (tools/build_civilian_run.py) at a
+	# third of his 4.5 m/s, so a third of the cadence keeps the feet planted.
+	&"civilian": {RUN: 3 * 2 * FOOTSTEP_GAP},
 }
 
 ## Crossfade between poses, in seconds. Short: the game's actions are brisk and

@@ -1,0 +1,10 @@
+{
+  "variant": "civilian",
+  "poses": [
+    "downed",
+    "idle",
+    "melee",
+    "run"
+  ],
+  "pose_yaw_degrees": {}
+}
