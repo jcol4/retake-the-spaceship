@@ -1,7 +1,8 @@
 # Retake the Spaceship — Game Design Document
 
-*Draft v2.1 (2026-10-13) — a turn-based extraction tactics game. v2.1 adds exploration mode and
-much bigger decks (§4.7), on paper only so far.*
+*Draft v2.2 (2026-10-28) — a turn-based extraction tactics game. v2.1 added exploration mode and
+much bigger decks (§4.7). v2.2 settles exploration mode's open rules: wait, the opening action,
+the clock's edge cases, and co-op. Still on paper only.*
 
 > **v2.0 is a rewrite, not a patch.** v1.1 had accumulated a dozen "⚠️ SUPERSEDED" callouts that
 > pointed at other documents for the live rule. Those rules are now stated here directly, and the
@@ -350,10 +351,17 @@ is turn-based only when there is a fight. Out of combat, soldiers move and act f
 - **Detection is checked every step** of a free walk, with the ordinary light and sound rules
   (§5, §11.2). A soldier who is spotted **stops on that tile** and turn mode starts. Any other walk
   in progress stops too, including the other co-op player's.
-- **Attacking starts combat.** Shooting or throwing at an enemy from exploration mode is the
-  opening action, Fallout-style: the shot resolves, then turn mode begins.
-- **Opening round:** a fresh round with the **normal weighted initiative draw**. No surprise
-  round, and no free first activation for either side.
+- **Attacking starts combat.** Shooting, an aimed shot, throwing, melee or Suppress at an enemy
+  from exploration mode is the opening action, Fallout-style: it resolves, then turn mode begins.
+  - **The opening action is paid for.** Its AP comes off the attacker's first activation.
+  - **An opening Suppress is the suppressor's whole first activation.** Suppress ends the
+    activation it is used in, so the suppressor sits out the opening round's draw. The pin holds
+    through that round and lifts at their next activation, as in turn mode.
+- **Opening round:** the **normal weighted initiative draw**. No surprise round, and no free first
+  activation for either side.
+  - **Contact costs no time by itself.** The round in progress becomes the opening round: no
+    round passes when turn mode starts, so a downed soldier doesn't bleed and the ship countdown
+    doesn't drop just for being spotted. Steps already walked that round are dropped.
 - **Who is in the pool:** the squad, plus every unit **near the fight** (within a radius of a
   soldier, or already in COMBAT). Distant units are left out and keep acting on the clock between
   rounds (§4.7.3), so a round on a deck with dozens of enemies doesn't wait on AI half a map away.
@@ -361,6 +369,9 @@ is turn-based only when there is a fight. Out of combat, soldiers move and act f
 - **Turn mode ends** once **no hostile has been in COMBAT with the squad for one full round**:
   every hunter has died or lost track (dropped to ALERT or UNAWARE). Exploration mode resumes at
   the start of the next round.
+  - **Activation-scoped states clear when combat ends:** hunker down, suppression (both the
+    pinned unit and the suppressor) and stun. None of them can carry into the next fight.
+  - **Overwatch is the exception:** it carries over, per §4.7.4.
 
 #### 4.7.3 The exploration clock
 
@@ -371,6 +382,8 @@ of combat, a round is measured in **distance walked**:
 - **20 steps = 1 round.** Every tile walked by **any** soldier is one step, and all soldiers' steps
   add to one shared counter. Scouting with one soldier is cheap. Shuffling four soldiers
   separately costs four times as much.
+  - **A wounded leg costs more steps.** A tile costs what it costs in AP (§4.2.1): 2 steps with
+    one injured leg, 3 with two. A limping soldier burns the squad's clock faster.
 - **Actions cost steps equal to their AP price** (loot 1 per item, pick up 2, revive 3, operate
   terminal 2, call ship 1, board 1, switch weapon 1), so stripping a room or reviving in a
   bleed-out race still costs time. Reload and doors stay cheap at their AP price, and actions that
@@ -379,8 +392,20 @@ of combat, a round is measured in **distance walked**:
   unit not in combat takes its normal UNAWARE/ALERT turn**: patrols walk, merc crews work their job,
   robots sweep, ALERT enemies investigate. A patrol can walk into the squad this way, which starts
   combat.
-- **Standing still costs nothing.** Thinking is free. A *wait* action (spend steps to let a ship
-  arrive or a patrol pass) is likely needed. *TBD.*
+  - **An action always lands before the round it crosses.** At 19 steps, a revive (3) resolves
+    first, then the round passes, and the counter carries the remainder (2). A revive that started
+    in time arrives in time.
+  - **Walks pause for the round.** Soldiers walking when the counter reaches 20 stop at the next
+    tile while the enemies take their turns, then carry on. If those turns start a fight, any
+    enemies yet to act lose their turn and simply join the opening round.
+  - **The enemies' turns play out together.** They are decided one at a time, in order, but shown
+    at once, so a round of patrols doesn't hold the squad up one unit at a time. Their
+    flashlights sweep along the paths they walk, and they come into view or leave it where
+    their path crosses the edge of what the squad can see.
+- **Standing still costs nothing.** Thinking is free.
+- **Wait:** one press passes time to the start of the next round. It is how a squad lets a ship
+  arrive, holds a terminal, or lets a patrol pass. Pressing it again waits another round. Waiting
+  isn't acting, so it never breaks a soldier's overwatch.
 - **Reference speeds at 20 steps a round:** a 150-tile crossing is about 8 rounds. Carrying a
   downed soldier (about 5 rounds of bleed) reaches roughly 100 tiles.
 
@@ -388,16 +413,30 @@ of combat, a round is measured in **distance walked**:
 
 - **Movement:** select any of the player's soldiers, in any order, and send them to any reachable
   tile. No AP, no distance cap. Individual control only for now; no group or follow moves.
+  - **Selecting:** click the soldier in the world or in the squad portrait bar, or cycle with
+    Tab. The portrait bar shows in both modes.
+  - **Redirecting:** a new order for a soldier who is still walking takes over at the next tile.
+  - **The move preview** shows the path to the cursor and its cost in steps and rounds. There's
+    no reachable-area overlay out of combat.
 - **Free actions (no AP, but steps per §4.7.3):** loot, doors, flashlight, reload, switch weapon,
   revive, pick up, drop, call ship, board, operate terminal. Extract is also available (§7.4) once
   valid.
-- **Overwatch** can be set in exploration mode. It holds **until it fires or that soldier moves or
-  acts**, so a squad can lay an ambush and reposition others around it. A triggered overwatch shot
-  is an attack and starts combat.
+- **Not available out of combat:** Hunker Down, which protects against nothing until a fight
+  starts. Every attack, Suppress included, starts combat (§4.7.2).
+- **Overwatch** can be set in exploration mode, at its AP price in steps. It holds **until it
+  fires or that soldier moves or acts**, so a squad can lay an ambush and reposition others around
+  it. Waiting doesn't break it. A triggered overwatch shot is an attack and starts combat.
 - **Stealth:** no separate sneak stance. The flashlight and the dark are the stealth tools (§5.2,
   §11.2).
 - **Co-op:** both players free-move their own soldiers **at the same time**. The host puts the
   moves in order, keeps the one shared step counter, and stops both players when combat starts.
+  - **A destination is claimed when it is ordered.** Sending a soldier to a tile the other
+    player's soldier is already headed for is refused ("tile taken").
+  - **Either player can wait**, and it takes effect at once for both. Walks in progress pause for
+    the round like any other.
+  - **The portrait bar** shows the partner's soldiers too, greyed and not selectable.
+
+Build plan: [`EXPLORATION_PLAN.md`](EXPLORATION_PLAN.md).
 
 ---
 
@@ -1030,7 +1069,8 @@ Fodder. Range, falloff and minimum range are TBD.
 - **Enemy count vs mission length:** same density on a 9× deck, or dormant rooms, or scaling with
   hangars and objectives? Measure with `--auto` once exploration mode exists.
 - **Pool radius:** how near the fight a unit must be to join the turn-mode pool (§4.7.2).
-- **Wait action:** how a squad spends steps on purpose (waiting for a ship, letting a patrol pass).
+- ~~**Wait action:** how a squad spends steps on purpose.~~ Settled (2026-10-28): one press waits
+  to the next round (§4.7.3).
 - **Clock rate:** 20 steps per round is the starting value; tune against bleed-out, merc leave
   rounds and nest spawns.
 - **Group moves:** individual control only for now. A follow or formation move may be wanted
@@ -1066,7 +1106,8 @@ Fodder. Range, falloff and minimum range are TBD.
 8. **Merc extraction AI and hangar contention.** **[built]**
 
 **Next: exploration mode and big decks (§4.7, §7.7).** In this order, so free movement can be
-played on today's deck sizes before anything grows:
+played on today's deck sizes before anything grows. Steps 9 and 10 are planned together in
+[`EXPLORATION_PLAN.md`](EXPLORATION_PLAN.md): the groundwork co-op needs is built into step 9.
 
 9. **Exploration mode on current decks:**
    - the mode switch (enter on squad combat, leave after one quiet round);
