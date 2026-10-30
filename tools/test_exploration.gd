@@ -453,6 +453,13 @@ func _check_opening_suppress() -> void:
 	_turns.unit_activated.connect(note)
 	# Round 1's pool runs out: the suppressor is never drawn, and the pin holds.
 	var opening: int = _turns.turn_number
+	# Read at the round's end itself: a frame later, round 2 may already have drawn
+	# the suppressor, which is exactly what lets the pin go.
+	var pinned_at_end := [false]
+	var at_end := func(_n: int) -> void:
+		if not pinned_at_end[0]:
+			pinned_at_end[0] = e.suppressed_by == a or e.is_downed
+	_turns.turn_ending.connect(at_end, CONNECT_ONE_SHOT)
 	var guard := 0
 	while _turns.turn_number == opening and guard < 400 and not _turns.mission_over:
 		if _turns.active_unit != null and _turns.active_unit.is_player_controlled:
@@ -460,7 +467,7 @@ func _check_opening_suppress() -> void:
 			_turns.end_activation(_turns.active_unit)
 		guard += 1
 		await process_frame
-	_check(e.suppressed_by == a or e.is_downed, "the pin holds through the opening round")
+	_check(pinned_at_end[0], "the pin holds through the opening round")
 	guard = 0
 	while not drawn.has(a) and guard < 400 and not _turns.mission_over:
 		if _turns.active_unit != null and _turns.active_unit.is_player_controlled:
