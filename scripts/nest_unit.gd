@@ -127,6 +127,10 @@ func spawn_unit(kind: SpawnKind, tile: Vector3i) -> Unit:
 		_rpc_spawn.rpc(node_name, int(kind), tile, stat_seed)
 	var unit := _spawn_at(node_name, kind, tile, stat_seed)
 	if unit != null:
+		# A spawn during a tick is played back at its slot (plan B.12): hidden
+		# until then, after the nest's own last event.
+		if TurnManager.resolving_tick:
+			TurnManager.record({"unit": unit, "kind": ExplorationRules.EV_SPAWN, "by": self})
 		action_logged.emit("%s spawns a %s" % [stats.display_name,
 			"Fodder" if kind == SpawnKind.FODDER else "Hunter"])
 	return unit

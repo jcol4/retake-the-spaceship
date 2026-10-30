@@ -933,6 +933,13 @@ func room_at(grid_pos: Vector3i) -> int:
 	return data.room_index_at(grid_pos) if data != null else -1
 
 
+## Whether a unit standing on `grid_pos` would be drawn — the same test
+## `_apply_unit_visibility` runs on a unit's root. Tick playback asks it of where
+## a MODEL is (exploration plan B.12.2).
+func is_revealed_tile(grid_pos: Vector3i) -> bool:
+	return data != null and _revealed.has(data.room_index_at(grid_pos))
+
+
 func zone_at(grid_pos: Vector3i) -> int:
 	if data == null:
 		return SecurityNetwork.NO_ZONE

@@ -6,6 +6,38 @@ mode), §7.6 (co-op) and §12.2 steps 9–10. This file covers *how* to build it
 to build. If they disagree, fix the GDD first. The decisions table at the end is folded into GDD
 v2.2.
 
+## Status (2026-10-30)
+
+Phases A, B, C and D.1–D.3 are built. `tools/test_exploration.gd` covers them headless, and
+`tools/test_tick_playback.gd` covers playback and the display layer (it needs a window).
+
+**Still open:**
+- **The manual two-instance Steam checklist (Phase C).** Only the rules-level co-op tests have run,
+  so the RPCs (`_rpc_play_tick`, `_rpc_mode_changed`, `_rpc_clock`, `_rpc_command_rejected`) have
+  never crossed a real connection.
+- **D.4, retuning, and its playtest checkpoint.** All of it needs a human: `STEPS_PER_ROUND` and the
+  round timers are unchanged.
+
+**Where the build differs from the text below:**
+- **Redirect (B.5):** the new goal is swapped into the walk in flight at its next tile, rather than
+  cancelling, awaiting the stop and walking again. It meets E9 and skips a stop animation per click.
+- **Attack to start (B.7):** attacks call `TurnManager.notify_attack` outright. `come_under_fire`
+  alone misses a one-shot kill and a target already fighting someone else.
+- **Reaction shots (B.8):** `check_overwatch` also reports contact itself, for the same one-shot
+  reason, and because a soldier being shot has no `come_under_fire` to reach.
+- **Nests (B.4):** they are also excluded from `notify_combat` and `_squad_in_contact`. A nest never
+  takes a turn, so it can never lose contact, and would hold the squad in turn mode forever.
+- **Mid-tick commands (A.4):** `may_act` also refuses commands while a tick runs or contact is
+  pending, except re-aiming a paused walk.
+- **`--auto` (D.1):** soldiers keep using the existing helpers on a synthetic AP pool
+  (`Unit.auto_budget`) rather than `_issue`, with what each think spent charged to the clock at its
+  end. `TurnManager.hold_switch` makes the mode switch wait for a think to finish.
+- **Doors (B.6, B.12):** no door command or AI door toggle exists yet, so there is nothing to price
+  or record.
+- **Commits (Phase A):** A and B share files too closely to split, so they landed as one commit.
+
+---
+
 Steps 9 and 10 are **partially merged**: the groundwork both need is built co-op-correct inside
 step 9 (Phase A), and simultaneous co-op input stays its own phase (C) on top of a working
 single-player mode (B). Each phase ends playable and tested.

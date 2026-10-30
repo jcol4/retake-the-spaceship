@@ -330,6 +330,7 @@ func _ready() -> void:
 		_build_light()
 	if LightingManager:
 		LightingManager.lighting_changed.connect(_apply_floor)
+		LightingManager.display_lighting_changed.connect(_apply_floor)
 
 
 ## Whether playback should resolve with no time on the clock. Delegated to the
@@ -581,8 +582,12 @@ func _add_floor(mat: BaseMaterial3D) -> void:
 func _apply_floor() -> void:
 	var lit := 0.0
 	if _unit:
-		var tile: GridTileData = GridManager.get_tile(_unit.get("grid_pos"))
-		lit = clampf(tile.light_value / 100.0, 0.0, 1.0) if tile else 0.0
+		# The tile the MODEL stands on, read through the display layer: during a
+		# tick's playback the model is not where the unit's root already is.
+		var tile: Vector3i = _unit.get("grid_pos")
+		if LightingManager.is_displaying():
+			tile = GridManager.world_to_grid(global_position)
+		lit = clampf(LightingManager.display_light(tile) / 100.0, 0.0, 1.0)
 	var energy := MIN_BRIGHTNESS * (1.0 - lit) if darkness_floor else 0.0
 	for mat in _floor_materials:
 		mat.emission_energy_multiplier = energy
@@ -704,6 +709,12 @@ func aim_direction() -> Vector3:
 	if _light and _light.is_inside_tree():
 		return -_light.global_transform.basis.z.normalized()
 	return -global_transform.basis.z.normalized()
+
+
+## Whether the rig light is drawn on right now — what the display layer casts
+## from during playback, where `flashlight_on` is already the final answer.
+func light_shown() -> bool:
+	return _light_on
 
 
 func set_flashlight_enabled(on: bool) -> void:
@@ -989,6 +1000,16 @@ func _mirror(rpc_method: StringName, args: Array = []) -> void:
 		callv(&"rpc_id", [peer_id, rpc_method] + args)
 
 
+## A one-shot (an action, a flinch, a burst) is not sent while a tick is being
+## decided: nothing plays on the host then either, and the whole tick reaches
+## clients afterwards as one timeline (exploration plan C.9). State — stance,
+## cover family, lamp, status light — still goes, since nothing replays it.
+func _mirror_one_shot(rpc_method: StringName, args: Array = []) -> void:
+	if TurnManager.resolving_tick:
+		return
+	_mirror(rpc_method, args)
+
+
 @rpc("authority", "call_remote", "reliable")
 func _rpc_set_cover_pose(family: StringName) -> void:
 	_set_cover_pose(family)
@@ -1077,7 +1098,7 @@ func play_action(action: StringName) -> void:
 	# DOWNED is not sent: a client plays its own collapse off the replicated
 	# `life_state` (Unit._present_life_state), and a second copy would restart it.
 	if action != DOWNED:
-		_mirror(&"_rpc_play_action", [action])
+		_mirror_one_shot(&"_rpc_play_action", [action])
 	await _play_action(action)
 
 
@@ -1119,7 +1140,7 @@ func _settle_dead() -> void:
 ## victim's reaction, so missing art costs NO time here. Skipped rather than
 ## stacked when another one-shot is already on screen.
 func play_hit_react() -> void:
-	_mirror(&"_rpc_play_hit_react")
+	_mirror_one_shot(&"_rpc_play_hit_react")
 	await _play_hit_react()
 
 
@@ -1133,7 +1154,7 @@ func _play_hit_react() -> void:
 ## there. Coroutine — callers MUST await. Missing art costs NO time: it falls
 ## straight through to the stance, a hard cut rather than a mysterious pause.
 func play_stance_exit(action: StringName, next: StringName) -> void:
-	_mirror(&"_rpc_play_stance_exit", [action, next])
+	_mirror_one_shot(&"_rpc_play_stance_exit", [action, next])
 	await _play_stance_exit(action, next)
 
 
@@ -1153,7 +1174,7 @@ func play_burst(rounds: int, mirror: bool = true) -> void:
 	# `mirror` false is for a caller that sends the burst itself, with what each
 	# round hits — see Unit._play_armed_burst.
 	if mirror:
-		_mirror(&"_rpc_play_burst", [rounds])
+		_mirror_one_shot(&"_rpc_play_burst", [rounds])
 	await _play_burst(rounds)
 
 
@@ -1236,6 +1257,54 @@ func _play(base: StringName, restart: bool = false) -> void:
 		player.play(pose, blend, speed)
 		if restart or _phases[i] != 0.0:
 			player.seek(_phases[i] * length, true)
+
+
+# --- Tick playback (exploration plan B.12) --------------------------------------
+#
+# Local-only entry points for TickPlayback, which runs the same timeline on every
+# peer by itself — so none of these mirror. The rules already happened; these
+# only draw them.
+
+
+func set_stance_local(stance: StringName) -> void:
+	_set_stance(stance)
+
+
+func set_cover_pose_local(family: StringName) -> void:
+	_set_cover_pose(family)
+
+
+func set_lamp_local(on: bool) -> void:
+	_set_flashlight_enabled(on)
+
+
+func play_action_local(action: StringName) -> void:
+	await _play_action(action)
+
+
+func play_hit_react_local() -> void:
+	_play_hit_react()
+
+
+## Undoes, for the screen only, a collapse the tick already decided, so playback
+## can show it at its slot: back on its feet if it went down this tick
+## (`was_active`), or still the downed body if it only died, untinted either way.
+func replay_reset(was_active: bool) -> void:
+	set_dead_tint(false)
+	if was_active:
+		_action = &""
+		_stance = IDLE
+		_play(IDLE, true)
+
+
+## The collapse at its slot: down if it was standing, and the corpse tint if this
+## was a death. Coroutine.
+func replay_down(was_active: bool, dead: bool) -> void:
+	if was_active:
+		_set_flashlight_enabled(false)
+		await _play_action(DOWNED)
+	if dead:
+		set_dead_tint(true)
 
 
 # --- Idle behaviour ----------------------------------------------------------

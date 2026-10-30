@@ -89,8 +89,7 @@ func show_move_range(tile_costs: Dictionary, ap_per_tile: int, ap_available: int
 func _tint_by_light(quad: MeshInstance3D, base_color: Color, tile: Vector3i) -> void:
 	# Sec 4.0: the preview shows light level per tile, so routing through
 	# darkness is a visible, deliberate choice rather than a hidden number.
-	var t: GridTileData = GridManager.get_tile(tile)
-	var lit := t.light_value / 100.0 if t else 1.0
+	var lit := LightingManager.display_light(tile) / 100.0 if GridManager.has_tile(tile) else 1.0
 	var mat := quad.material_override as StandardMaterial3D
 	mat.albedo_color = base_color.darkened((1.0 - lit) * DARK_TINT_STRENGTH)
 
@@ -116,6 +115,19 @@ func show_path(path: Array[Vector3i], ap_cost: int, ap_left: int) -> void:
 		_cost_label.modulate = COST_TEXT_COLOR_SPENT if ap_left <= 0 else COST_TEXT_COLOR
 		_cost_label.global_position = dest + Vector3(0, COST_LABEL_Y, 0)
 		_cost_label.visible = true
+
+
+## A walk out of combat (exploration plan B.5): the same path markers, priced in
+## time rather than AP. Nothing is spent or left, so the label says how many steps
+## it is and how many rounds it will pass.
+func show_explore_path(path: Array[Vector3i], steps: int, rounds: int) -> void:
+	show_path(path, 0, 0)
+	if path.is_empty():
+		return
+	_cost_label.text = "%d steps  ·  %d round%s" % [steps, rounds, "" if rounds == 1 else "s"]
+	_cost_label.modulate = COST_TEXT_COLOR
+	_cost_label.global_position = GridManager.grid_to_world(path[-1]) + Vector3(0, COST_LABEL_Y, 0)
+	_cost_label.visible = true
 
 
 ## Where a grenade can land, and what the burst would cover if thrown at the tile

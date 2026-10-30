@@ -46,6 +46,9 @@ signal aimed_shot_target_picked(target: Unit)
 # the EMP/Frag payload menu instead of throwing immediately; `_try_throw_grenade`
 # below does the actual throw once the player picks one.
 signal grenade_target_picked(target: Vector3i)
+## The host refused a command this peer sent (`_reject`). The HUD says why; the
+## one thing a click can run into that it could not have seen (plan C.2).
+signal command_rejected(reason: String)
 
 # Sentinel for "the cursor isn't over a walkable tile". Floor -9999 can never
 # collide with a real grid key.
@@ -84,6 +87,9 @@ var _hover_tile: Vector3i = NO_TILE
 var _throw_tiles: Array[Vector3i] = []
 var _preview_path: Array[Vector3i] = []
 var _preview_cost: int = 0
+## How long a walk may be out of combat: more than any deck, since a walk's price
+## is time rather than a budget (plan B.5).
+const EXPLORE_PATH_CAP := 999
 var _loadout_weapon_id: int = -1  # host's record of the deployed pick; see show_to_peer
 var _loadout_attachment_ids := PackedInt32Array()  # ...and the attachments fitted to it
 var _loadout_ammo_id: int = -1  # ...and the ammo loaded in it
@@ -125,6 +131,21 @@ func _ready() -> void:
 	for changed: Signal in [hp_changed, downed, died, revived]:
 		changed.connect(_refresh_status_lights.unbind(1))
 	_refresh_status_lights()
+	TurnManager.mode_changed.connect(_on_mode_changed)
+	TurnManager.unit_selected.connect(_on_unit_selected)
+
+
+## Armed modes do not survive a change of loop: exploration's soldier arms Move by
+## itself, and turn mode's waits for a button.
+func _on_mode_changed(_new_mode: int) -> void:
+	set_mode(Mode.NONE)
+
+
+## Exploration (plan A.6): the soldier this peer just selected arms Move, and the
+## one it left drops whatever it had armed.
+func _on_unit_selected(unit: Unit) -> void:
+	if unit == self or mode != Mode.NONE:
+		set_mode(Mode.NONE)
 
 
 func _on_replicated() -> void:
@@ -141,26 +162,41 @@ func _refresh_status_lights() -> void:
 
 
 func set_mode(new_mode: Mode) -> void:
-	if is_busy:
+	var exploring := TurnManager.in_exploration()
+	# Out of combat a walking soldier can be re-ordered (E9), so disarming and Move
+	# stay open mid-walk; anything else still waits for the action on screen.
+	if is_busy and not (exploring and new_mode in [Mode.NONE, Mode.MOVE]):
 		return
+	# Nothing is ever "unarmed" for the soldier selected out of combat: a click on
+	# the deck is a walk there (plan B.5).
+	var selected := TurnManager.active_unit == self
+	if exploring and selected and new_mode == Mode.NONE and is_owned_by_local_player():
+		new_mode = Mode.MOVE
 	mode = new_mode
 	_hover_tile = NO_TILE
 	_preview_path = []
 	_preview_cost = 0
 	_move_costs = {}
 	_throw_tiles = []
-	var highlights := get_tree().get_first_node_in_group("highlights")
+	# Only the soldier this peer has selected owns the overlay. Out of combat two
+	# soldiers run commands at once, and a co-op partner's walk on the host's copy
+	# must not wipe the preview the host is looking at. In turn mode the only
+	# soldier running a command is the drawn one.
+	var highlights: Node = get_tree().get_first_node_in_group("highlights") if selected else null
 	if highlights:
 		highlights.clear_highlights()
 	match mode:
 		Mode.MOVE:
-			# One band, bounded by what the pool actually affords. The old inner/
-			# outer split existed because a move was one of two fixed-price
-			# actions; now the price is the distance, so a second band would just
-			# be an arbitrary line drawn across a continuous cost.
-			_move_costs = GridManager.reachable_costs(grid_pos, move_tiles_affordable())
-			if highlights:
-				highlights.show_move_range(_move_costs, move_ap_per_tile(), ap)
+			# No area overlay out of combat (E13): a walk has no budget to show the
+			# edge of, only a path to the cursor with its step and round cost.
+			if not exploring:
+				# One band, bounded by what the pool actually affords. The old inner/
+				# outer split existed because a move was one of two fixed-price
+				# actions; now the price is the distance, so a second band would just
+				# be an arbitrary line drawn across a continuous cost.
+				_move_costs = GridManager.reachable_costs(grid_pos, move_tiles_affordable())
+				if highlights:
+					highlights.show_move_range(_move_costs, move_ap_per_tile(), ap)
 		Mode.SHOOT, Mode.AIMED_SHOT, Mode.SUPPRESS:
 			if highlights:
 				_show_targets(highlights)
@@ -245,6 +281,14 @@ func _update_path_preview(highlights: Node) -> void:
 		return
 	_hover_tile = tile
 	_preview_path = []
+	if TurnManager.in_exploration():
+		_preview_cost = 0
+		if tile != NO_TILE and _can_enter(tile) and GridManager.open_destination(tile, self):
+			_preview_path = GridManager.find_path(grid_pos, tile, EXPLORE_PATH_CAP)
+			_preview_cost = _preview_path.size() * move_ap_per_tile()
+		highlights.show_explore_path(_preview_path, _preview_cost,
+			ExplorationRules.rounds_passed(TurnManager.steps, _preview_cost))
+		return
 	_preview_cost = _cost_for(tile)
 	if _preview_cost > 0:
 		_preview_path = GridManager.find_path(grid_pos, tile, move_tiles_affordable())
@@ -386,7 +430,7 @@ func _tile_under_mouse_any() -> Vector3i:
 ## `_try_throw_grenade` below re-validates everything for real once a payload is
 ## picked.
 func _try_pick_grenade_target(target: Vector3i) -> void:
-	if ap < action_cost(UnitStats.Action.GRENADE) or grenade_charges <= 0 or is_busy:
+	if not can_afford(action_cost(UnitStats.Action.GRENADE)) or grenade_charges <= 0 or is_busy:
 		return
 	if not _can_throw_grenade_at(target):
 		action_logged.emit("%s: no throwing line to %s" % [stats.display_name, target])
@@ -396,7 +440,7 @@ func _try_pick_grenade_target(target: Vector3i) -> void:
 
 func _try_throw_grenade(target: Vector3i, type: GrenadeType) -> void:
 	var cost := action_cost(UnitStats.Action.GRENADE)
-	if ap < cost or grenade_charges <= 0 or is_busy:
+	if not can_afford(cost) or grenade_charges <= 0 or is_busy:
 		return
 	# Re-validated live (see `_can_throw_grenade_at`) rather than against the
 	# cached overlay: this may be running on the host's copy of the unit, not
@@ -405,13 +449,17 @@ func _try_throw_grenade(target: Vector3i, type: GrenadeType) -> void:
 		action_logged.emit("%s: no throwing line to %s" % [stats.display_name, target])
 		return
 	grenade_charges -= 1
-	spend_ap(cost)
+	_pay_attack(cost)
 	set_mode(Mode.NONE)
 	# Faces short of the target on purpose — see GRENADE_RELEASE_OFFSET. The
 	# flash still lands exactly on `target`; only which way the merc is drawn
 	# facing while it happens is adjusted.
 	await face_toward(_grenade_face_position(target))
+	# Busy for the throw, so a switch to turn mode (which this throw has just
+	# asked for) waits for the blast rather than drawing over it.
+	is_busy = true
 	await visual.play_action(UnitVisual.GRENADE)
+	is_busy = false
 	show_impact(GridManager.grid_to_world(target) + Vector3(0, 0.9, 0), true)
 	# An explosion is loud, and the robots' sound channel is the one thing about
 	# them a grenade does NOT bypass: throwing it announces where you are.
@@ -419,7 +467,7 @@ func _try_throw_grenade(target: Vector3i, type: GrenadeType) -> void:
 	match type:
 		GrenadeType.EMP: _resolve_emp_throw(target)
 		GrenadeType.FRAG: _resolve_frag_throw(target)
-	_check_activation_end()
+	await _check_activation_end()
 
 
 func _resolve_emp_throw(target: Vector3i) -> void:
@@ -488,6 +536,8 @@ func _resolve_frag_throw(target: Vector3i) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not event.is_action_pressed("select_unit"):
 		return
+	if _click_selects():
+		return
 	if not _accepting_input():
 		print("[NET] %s ignored a click: active_unit=%s is_downed=%s is_busy=%s owned_locally=%s" % [
 			stats.display_name,
@@ -541,6 +591,27 @@ func _unhandled_input(event: InputEvent) -> void:
 		_issue(&"_try_face", [hit["position"]])
 
 
+## Out of combat a click on another of this player's soldiers selects them rather
+## than ordering this one (plan B.11). Asked only of the current selection, so one
+## click is one answer, and even mid-walk. Target modes keep the click: they may
+## mean a body or a hostile, and a squadmate is not what they are aiming at.
+func _click_selects() -> bool:
+	if not TurnManager.in_exploration() or TurnManager.active_unit != self:
+		return false
+	if mode != Mode.MOVE and mode != Mode.NONE:
+		return false
+	var hit := _raycast_mouse(2)
+	if hit.is_empty():
+		return false
+	var unit := _unit_from_collider(hit["collider"])
+	if unit == null or unit == self or not unit.is_player_controlled \
+			or not unit.is_owned_by_local_player() or unit.is_downed:
+		return false
+	TurnManager.select(unit)
+	get_viewport().set_input_as_handled()
+	return true
+
+
 ## Every method a click or HUD button can trigger on this unit. `_rpc_command`
 ## dispatches by NAME (see below), so this allowlist is what stops a peer
 ## sending an arbitrary method name and getting it `callv`'d.
@@ -551,6 +622,7 @@ const _COMMANDS := [
 	"try_revive", "try_pick_up", "try_drop",
 	"try_loot", "try_drop_item",
 	"try_operate_terminal",
+	"try_wait",
 ]
 
 
@@ -560,6 +632,11 @@ const _COMMANDS := [
 ## rather than mutating a copy nobody else will ever see. Single-player, and
 ## the host acting on its own units, skip the round trip and just run it.
 func _issue(method: StringName, args: Array = []) -> void:
+	# The one gate a host's own click passes through, where a client's is
+	# `_rpc_command`. Turn mode needs none: the HUD only drives the drawn unit.
+	if TurnManager.in_exploration() and multiplayer.is_server() \
+			and TurnManager.may_act(self, _local_peer(), method) != "":
+		return
 	if not multiplayer.has_multiplayer_peer() or multiplayer.is_server():
 		print("[NET] %s running '%s' locally (server=%s)" % [stats.display_name, method, multiplayer.has_multiplayer_peer() and multiplayer.is_server()])
 		await callv(method, args)  # `await` is a no-op if the callee isn't a coroutine
@@ -585,13 +662,10 @@ func _rpc_command(method: StringName, args: Array) -> void:
 		push_warning("%s: rejected unknown command '%s'" % [stats.display_name, method])
 		return
 	var sender := multiplayer.get_remote_sender_id()
-	if owner_peer_id != 0 and sender != owner_peer_id:
-		push_warning("%s: rejected '%s' from peer %d (owned by %d)" % [
-			stats.display_name, method, sender, owner_peer_id])
-		return
-	if TurnManager.active_unit != self:
-		push_warning("%s: rejected '%s' — not this unit's activation (active_unit=%s)" % [
-			stats.display_name, method, TurnManager.active_unit.stats.display_name if TurnManager.active_unit else "null"])
+	var why := TurnManager.may_act(self, sender, method)
+	if why != "":
+		push_warning("%s: rejected '%s' from peer %d — %s" % [
+			stats.display_name, method, sender, why])
 		return
 	# Undo `_issue`'s Node -> NodePath encoding. No command takes a real
 	# NodePath argument, so every one of these is a unit reference.
@@ -674,8 +748,19 @@ func _accepting_input() -> bool:
 	# `is_owned_by_local_player` is a no-op true in single-player (see Unit) —
 	# this is the entire client-side enforcement that a co-op squadmate can't
 	# drive your mercs: their copy of this same node just never accepts input.
-	return TurnManager.active_unit == self and not is_downed and not is_busy \
-			and is_owned_by_local_player()
+	#
+	# `active_unit` means "drawn" in turn mode and "this peer's selection" out of
+	# combat, and either way is what stops every soldier answering one click.
+	if TurnManager.active_unit != self or is_downed or not is_owned_by_local_player():
+		return false
+	if TurnManager.in_exploration():
+		return TurnManager.may_act(self, _local_peer(), &"_try_move" if mode == Mode.MOVE else &"") == ""
+	return not is_busy
+
+
+## This peer's id as `TurnManager.may_act` reads it.
+func _local_peer() -> int:
+	return multiplayer.get_unique_id() if multiplayer.has_multiplayer_peer() else owner_peer_id
 
 
 func _raycast_mouse(mask: int = 1 | 2) -> Dictionary:
@@ -723,18 +808,81 @@ func _unit_from_collider(collider: Object) -> Unit:
 ## populated for a squadmate's merc. A pathfind per click is cheap enough that
 ## there's no reason to keep the cache-dependent fast path around at all.
 func _try_move(target: Vector3i) -> void:
+	if TurnManager.in_exploration():
+		await _explore_move(target)
+		return
 	var path := GridManager.find_path(grid_pos, target, move_tiles_affordable())
 	if path.is_empty() or path[-1] != target:
 		return
 	var cost := move_cost_for(path.size())
-	if ap < cost:
+	if not can_afford(cost):
 		return
-	spend_ap(cost)  # before the walk, so the HUD greys the buttons immediately
+	pay(cost)  # before the walk, so the HUD greys the buttons immediately
 	set_mode(Mode.NONE)
 	await move_along(path)
 	action_logged.emit("%s moved to %s (%d tiles, %d AP)" % [
 		stats.display_name, target, path.size(), cost])
-	_check_activation_end()
+	await _check_activation_end()
+
+
+## A move out of combat (plan B.5): no budget, no AP, and the steps are paid per
+## tile inside the walk (TurnManager.after_step) rather than up front. The goal is
+## reserved at click time, so a second walker can never be sent to the same square
+## (E4, E15). A new order on a walking soldier takes effect at the next tile (E9).
+func _explore_move(target: Vector3i) -> void:
+	if target == NO_TILE or not _can_enter(target):
+		return
+	if not GridManager.reserve(target, self):
+		_reject("tile taken")
+		return
+	if is_walking():
+		redirect_walk(target)
+		return
+	var path := GridManager.find_path(grid_pos, target, EXPLORE_PATH_CAP)
+	if path.is_empty():
+		GridManager.release_reservation(self)
+		return
+	set_mode(Mode.NONE)
+	await move_along(path)
+	# Re-armed, because any preview still up is priced from where the walk began.
+	set_mode(Mode.NONE)
+	action_logged.emit("%s moved to %s" % [stats.display_name, grid_pos])
+	await _check_activation_end()
+
+
+## Tells the peer that sent a command the host refused it, and why (plan C.2). A
+## plain signal when that peer is this one. Generic on purpose: any command the
+## host turns down for a reason the click could not have known can use it.
+func _reject(reason: String) -> void:
+	if owner_peer_id != 0 and owner_peer_id != _local_peer() \
+			and owner_peer_id in multiplayer.get_peers():
+		_rpc_command_rejected.rpc_id(owner_peer_id, reason)
+	else:
+		command_rejected.emit(reason)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_command_rejected(reason: String) -> void:
+	command_rejected.emit(reason)
+
+
+## Wait (plan B.10): the round passes now, for everybody. On a soldier only so it
+## can ride the `_issue` -> `_rpc_command` path — it is not this soldier acting, so
+## it goes straight to the clock rather than through `pay`, and an overwatch held
+## survives it (E26). That is what lets a squad sit in an ambush.
+func try_wait() -> void:
+	await TurnManager.wait_round()
+
+
+## Pays for an attack. Out of combat the price is not steps: the attack starts the
+## fight (plan B.7), and it comes out of this soldier's first activation (E8). An
+## attack is also acting, so it lets go of any overwatch held (B.8).
+func _pay_attack(cost: int) -> void:
+	if _on_the_clock():
+		stand_down()
+		TurnManager.notify_attack(self, cost)
+		return
+	spend_ap(cost)
 
 
 ## Called directly (not via `_issue`) — the AIMED_SHOT branch only opens a
@@ -751,7 +899,7 @@ func _try_shoot(target: Unit) -> void:
 		# which one is being paid for is exactly what that menu is for. Purely
 		# a read of locally-mirrored state to decide whether to open the menu —
 		# `fire_aimed_shot` re-validates for real once a zone is picked.
-		if ap < min_aimed_shot_cost() or not can_shoot():
+		if not can_afford(min_aimed_shot_cost()) or not can_shoot():
 			return
 		if not GridManager.has_line_of_sight(self, target):
 			action_logged.emit("%s: no line of sight to %s" % [stats.display_name, target.stats.display_name])
@@ -763,17 +911,17 @@ func _try_shoot(target: Unit) -> void:
 
 func _do_shoot(target: Unit) -> void:
 	var cost := action_cost(UnitStats.Action.SHOOT)
-	if ap < cost or not can_shoot():
+	if not can_afford(cost) or not can_shoot():
 		return
 	if not GridManager.has_line_of_sight(self, target):
 		action_logged.emit("%s: no line of sight to %s" % [stats.display_name, target.stats.display_name])
 		return
-	spend_ap(cost)
+	_pay_attack(cost)
 	var result: Combat.ShotResult = await fire_at(target, Combat.ShotAction.SHOOT)
 	action_logged.emit("%s fired at %s (%d%% acc): %s" % [stats.display_name, target.stats.display_name, result.accuracy, Combat.describe(result)])
 	_log_shot_aftermath(target, result)
 	set_mode(Mode.NONE)
-	_check_activation_end()
+	await _check_activation_end()
 
 
 func fire_aimed_shot(target: Unit, body_part: int) -> void:
@@ -783,12 +931,12 @@ func fire_aimed_shot(target: Unit, body_part: int) -> void:
 	# is per zone (Sec 4.3a), so the zone picked is what decides affordability,
 	# not the Torso baseline `_try_shoot` gated on.
 	var cost := aimed_shot_cost(body_part)
-	if ap < cost or not can_shoot() or target.is_downed:
+	if not can_afford(cost) or not can_shoot() or target.is_downed:
 		return
 	if not GridManager.has_line_of_sight(self, target):
 		action_logged.emit("%s: no line of sight to %s" % [stats.display_name, target.stats.display_name])
 		return
-	spend_ap(cost)
+	_pay_attack(cost)
 	var result: Combat.ShotResult = await fire_at(target, Combat.ShotAction.AIMED_SHOT, body_part)
 	var zone_tag := " [%s]" % Combat.body_part_name(body_part)
 	action_logged.emit("%s fired at %s%s (%d%% acc): %s" % [stats.display_name, target.stats.display_name, zone_tag, result.accuracy, Combat.describe(result)])
@@ -798,7 +946,7 @@ func fire_aimed_shot(target: Unit, body_part: int) -> void:
 		action_logged.emit("%s is STUNNED!" % target.stats.display_name)
 	_log_shot_aftermath(target, result)
 	set_mode(Mode.NONE)
-	_check_activation_end()
+	await _check_activation_end()
 
 
 func _log_shot_aftermath(target: Unit, result: Combat.ShotResult) -> void:
@@ -819,20 +967,28 @@ func _log_shot_aftermath(target: Unit, result: Combat.ShotResult) -> void:
 ## Overwatch — see Unit.do_suppress.
 func _try_suppress(target: Unit) -> void:
 	var cost := action_cost(UnitStats.Action.SUPPRESS)
-	if ap < cost or not can_suppress() or target.is_downed or is_busy:
+	if not can_afford(cost) or not can_suppress() or target.is_downed or is_busy:
 		return
 	if not GridManager.has_line_of_sight(self, target):
 		action_logged.emit("%s: no line of sight to %s" % [stats.display_name, target.stats.display_name])
 		return
 	set_mode(Mode.NONE)
+	# An opening Suppress is the suppressor's whole first activation (E21).
+	if _on_the_clock():
+		stand_down()
+		TurnManager.notify_attack(self, 0, true)
 	await do_suppress(target)
 	action_logged.emit("%s lays down suppressing fire on %s (%d rounds)" % [
 		stats.display_name, target.stats.display_name, Unit.SUPPRESS_AMMO_COST])
-	_check_activation_end()
+	await _check_activation_end()
 
 
 func try_hunker() -> void:
-	if ap < action_cost(UnitStats.Action.HUNKER) or is_busy:
+	# Unavailable out of combat (E21): it protects against nothing until a fight
+	# starts, and the fight's own first draw is where it belongs.
+	if TurnManager.in_exploration():
+		return
+	if not can_afford(action_cost(UnitStats.Action.HUNKER)) or is_busy:
 		return
 	# No spend_ap here: hunkering ends the activation, and do_hunker burns the
 	# whole remaining AP itself so the AI cannot take the pose more cheaply than
@@ -840,18 +996,18 @@ func try_hunker() -> void:
 	do_hunker()
 	set_mode(Mode.NONE)
 	action_logged.emit("%s hunkered down" % stats.display_name)
-	_check_activation_end()
+	await _check_activation_end()
 
 
 func try_overwatch() -> void:
 	var cost := action_cost(UnitStats.Action.OVERWATCH)
-	if ap < cost or is_busy or not can_shoot():
+	if not can_afford(cost) or is_busy or not can_shoot():
 		return
 	do_overwatch()  # pays the fixed cost, then burns any remainder — see try_hunker above
 	set_mode(Mode.NONE)
 	action_logged.emit("%s is on overwatch (%d AP reserved)" % [
 		stats.display_name, overwatch_reserve])
-	_check_activation_end()
+	await _check_activation_end()
 
 
 func _try_face(world_pos: Vector3) -> void:
@@ -870,19 +1026,20 @@ func try_toggle_flashlight() -> void:
 	# Free action (0 AP, Sec 4.2) — no AP spend, doesn't end the activation.
 	if is_busy:
 		return
+	pay(0)  # free, but acting: out of combat that lets go of an overwatch (B.8)
 	toggle_flashlight()
 	action_logged.emit("%s switched their flashlight %s" % [stats.display_name, "on" if flashlight_on else "off"])
 
 
 func try_reload() -> void:
 	var cost := action_cost(UnitStats.Action.RELOAD)
-	if ap < cost or is_busy or not can_reload():
+	if not can_afford(cost) or is_busy or not can_reload():
 		return
-	spend_ap(cost)  # before the animation, so the HUD greys the buttons immediately
+	pay(cost)  # before the animation, so the HUD greys the buttons immediately
 	set_mode(Mode.NONE)
 	await do_reload()
 	action_logged.emit("%s reloaded" % stats.display_name)
-	_check_activation_end()
+	await _check_activation_end()
 
 
 ## Calls the ship to the hangar this soldier is standing in (GDD §7.3): 1 AP
@@ -894,16 +1051,16 @@ func try_reload() -> void:
 ## THIS soldier.
 func try_call_ship() -> void:
 	var cost := action_cost(UnitStats.Action.CALL_SHIP)
-	if ap < cost or is_busy or is_downed:
+	if not can_afford(cost) or is_busy or is_downed:
 		return
 	if ExtractionManager.callable_hangar_for(self) < 0:
 		action_logged.emit("%s: no hangar here to call the ship to" % stats.display_name)
 		return
-	spend_ap(cost)
+	pay(cost)
 	set_mode(Mode.NONE)
 	ExtractionManager.call_ship(self)
 	action_logged.emit("%s calls in the ship (%d AP)" % [stats.display_name, cost])
-	_check_activation_end()
+	await _check_activation_end()
 
 
 ## Walks up the ramp of our landed ship from its square (GDD §7.4), with whatever
@@ -912,16 +1069,18 @@ func try_call_ship() -> void:
 ## mission (that is `try_extract`). Either co-op player's soldier may board.
 func try_board_ship() -> void:
 	var cost := action_cost(UnitStats.Action.BOARD_SHIP)
-	if ap < cost or is_busy or is_downed:
+	if not can_afford(cost) or is_busy or is_downed:
 		return
 	if ExtractionManager.board_hangar_for(self) < 0:
 		action_logged.emit("%s: no ship of ours to board from here" % stats.display_name)
 		return
-	spend_ap(cost)
+	pay(cost)
 	set_mode(Mode.NONE)
 	ExtractionManager.board(self)
 	action_logged.emit("%s boards the ship (%d AP)" % [stats.display_name, cost])
 	end_activation()
+	await TurnManager.settle_clock()
+	TurnManager.squad_changed()
 
 
 ## The word to the pilot (GDD §7.4): our ship leaves NOW with everyone aboard and
@@ -948,18 +1107,18 @@ func try_extract() -> void:
 ## Does not end the activation unless it spends the last point.
 func try_switch_weapon() -> void:
 	var cost := action_cost(UnitStats.Action.SWITCH_WEAPON)
-	if ap < cost or is_busy or is_downed:
+	if not can_afford(cost) or is_busy or is_downed:
 		return
 	var why := switch_weapon_blocker()
 	if why != "":
 		action_logged.emit("%s: can't switch weapons — %s" % [stats.display_name, why])
 		return
-	spend_ap(cost)
+	pay(cost)
 	set_mode(Mode.NONE)
 	switch_weapon()
 	action_logged.emit("%s switches to the %s (%d AP)" % [
 		stats.display_name, stats.active_weapon().display_name if stats.active_weapon() else "weapon", cost])
-	_check_activation_end()
+	await _check_activation_end()
 
 
 ## The body a REVIVE / PICK_UP click means: the one whose collider the cursor is
@@ -993,7 +1152,7 @@ func _body_under_mouse() -> Unit:
 ## before anything is spent, so a refused revive costs nothing.
 func try_revive(target: Unit) -> void:
 	var cost := action_cost(UnitStats.Action.REVIVE)
-	if ap < cost or is_busy or is_downed:
+	if not can_afford(cost) or is_busy or is_downed:
 		return
 	var why := revive_blocker(target)
 	if why != "":
@@ -1001,34 +1160,34 @@ func try_revive(target: Unit) -> void:
 			stats.display_name, target.stats.display_name if target else "that", why])
 		return
 	var tile := revive_tile_for(target)
-	spend_ap(cost)
+	pay(cost)
 	set_mode(Mode.NONE)
 	await _kneel_over(target)
 	target.revive_at(tile)
 	action_logged.emit("%s revives %s (%d AP) — back up at %d HP, %d of %d downs used" % [
 		stats.display_name, target.stats.display_name, cost, target.current_hp,
 		target.down_count, MAX_DOWNS - 1])
-	_check_activation_end()
+	await _check_activation_end()
 
 
 ## Lifts `target` (2 AP flat): a downed squadmate or a corpse.
 func try_pick_up(target: Unit) -> void:
 	var cost := action_cost(UnitStats.Action.PICK_UP)
-	if ap < cost or is_busy or is_downed:
+	if not can_afford(cost) or is_busy or is_downed:
 		return
 	var why := pick_up_blocker(target)
 	if why != "":
 		action_logged.emit("%s: can't pick up %s — %s" % [
 			stats.display_name, target.stats.display_name if target else "that", why])
 		return
-	spend_ap(cost)
+	pay(cost)
 	set_mode(Mode.NONE)
 	await _kneel_over(target)
 	pick_up(target)
 	action_logged.emit("%s picks up %s%s (%d AP) — pistol drawn" % [
 		stats.display_name, target.stats.display_name,
 		"'s body" if target.life_state == LifeState.DEAD else "", cost])
-	_check_activation_end()
+	await _check_activation_end()
 
 
 ## Puts the carried body down on this tile. Free (GDD §4.4), and like the
@@ -1036,6 +1195,7 @@ func try_pick_up(target: Unit) -> void:
 func try_drop() -> void:
 	if is_busy or carrying == null:
 		return
+	pay(0)
 	set_mode(Mode.NONE)
 	var body := drop_carried()
 	if body:
@@ -1126,7 +1286,7 @@ func take_blocker(source: Object, index: int = 0) -> String:
 ## wrong thing. Every rule is asked before anything is spent.
 func try_loot(source: Object, index: int, expect_code: String = "") -> void:
 	var cost := action_cost(UnitStats.Action.LOOT)
-	if ap < cost or is_busy or is_downed:
+	if not can_afford(cost) or is_busy or is_downed:
 		return
 	var why := take_blocker(source, index)
 	if why == "" and expect_code != "" and source.loot_items()[index].code != expect_code:
@@ -1134,7 +1294,7 @@ func try_loot(source: Object, index: int, expect_code: String = "") -> void:
 	if why != "":
 		action_logged.emit("%s: can't loot — %s" % [stats.display_name, why])
 		return
-	spend_ap(cost)
+	pay(cost)
 	set_mode(Mode.NONE)
 	await _interact_at(source.loot_tile())
 	var item: ItemData = LootManager.take(source, index)
@@ -1144,7 +1304,7 @@ func try_loot(source: Object, index: int, expect_code: String = "") -> void:
 	action_logged.emit("%s takes %s from %s (%d AP) — pack %d/%d" % [
 		stats.display_name, item.display_name, source.loot_name(), cost,
 		inventory.size(), INVENTORY_SLOTS])
-	_check_activation_end()
+	await _check_activation_end()
 
 
 ## Drops item `index` from the pack onto this tile, where it forms a lootable pile
@@ -1152,6 +1312,7 @@ func try_loot(source: Object, index: int, expect_code: String = "") -> void:
 func try_drop_item(index: int) -> void:
 	if is_busy or is_downed or index < 0 or index >= inventory.size():
 		return
+	pay(0)
 	var item := remove_item(index)
 	LootManager.drop_to_pile(grid_pos, item)
 	action_logged.emit("%s drops %s" % [stats.display_name, item.display_name])
@@ -1168,20 +1329,26 @@ func try_drop_item(index: int) -> void:
 ## beside it at a round start counts — TerminalRules).
 func try_operate_terminal() -> void:
 	var cost := action_cost(UnitStats.Action.OPERATE_TERMINAL)
-	if ap < cost or is_busy or is_downed:
+	if not can_afford(cost) or is_busy or is_downed:
 		return
 	var why := ObjectiveManager.operate_blocker(self)
 	if why != "":
 		action_logged.emit("%s: can't operate the terminal — %s" % [stats.display_name, why])
 		return
-	spend_ap(cost)
+	pay(cost)
 	set_mode(Mode.NONE)
 	await _interact_at(ObjectiveManager.terminal().tile)
 	ObjectiveManager.operate_terminal(self)
-	_check_activation_end()
+	await _check_activation_end()
 
 
+## The end of a command. In turn mode it closes the activation on the last AP. Out
+## of combat there is no activation to close: any round the command's price crossed
+## ticks here, after the action has landed (E6). Coroutine.
 func _check_activation_end() -> void:
+	if TurnManager.in_exploration():
+		await TurnManager.settle_clock()
+		return
 	if ap <= 0:
 		end_activation()
 

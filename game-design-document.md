@@ -759,6 +759,18 @@ most of the time should go to fights.
   enemies with hangars and objectives rather than area. Settle this by measuring, not on paper
   (§12.1).
 
+**Baseline on today's decks (2026-10-30), before retuning.** Headless `--auto-campaign=4`, one
+unseeded run of each mode, every mission extracted. The bot is not a player, so read these as
+"rounds still pass at about the old rate", not as playtime.
+
+| Mode | Rounds per mission | Of which out of combat | Contacts per mission |
+|---|---|---|---|
+| Exploration | 24, 26, 24, 27 | 10, 2, 2, 11 | 1, 1, 1, 2 |
+| `--turn-mode` | 17, 31, 22, 27 | none | none |
+
+Steps per round is still the initial 20. Tuning it against a human playtest is open
+(`EXPLORATION_PLAN.md` D.4).
+
 ---
 
 ## 8. Setting & Tone
@@ -1109,7 +1121,7 @@ Fodder. Range, falloff and minimum range are TBD.
 played on today's deck sizes before anything grows. Steps 9 and 10 are planned together in
 [`EXPLORATION_PLAN.md`](EXPLORATION_PLAN.md): the groundwork co-op needs is built into step 9.
 
-9. **Exploration mode on current decks:**
+9. **Exploration mode on current decks:** **[built; not yet human-playtested or retuned]**
    - the mode switch (enter on squad combat, leave after one quiet round);
    - free movement and free actions;
    - the step clock driving every round timer and the non-combat AI;
@@ -1117,6 +1129,7 @@ played on today's deck sizes before anything grows. Steps 9 and 10 are planned t
    - overwatch carried into combat;
    - attack-to-start.
 10. **Co-op exploration:** simultaneous free moves, host-ordered, with the shared step counter.
+    **[built; the two-instance Steam checklist has not been run]**
 11. **Performance for big decks:** lighting, pathfinding, wall collision, nearby-only detection, and
     the near-the-fight pool.
 12. **Big decks:** 3× sizes, 4–6 hangars, same-density enemies, same-total loot. Then measure

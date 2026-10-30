@@ -69,6 +69,7 @@ func _ready() -> void:
 	_auto = "--auto" in OS.get_cmdline_user_args() or _auto_campaign > 0
 	if _auto:
 		TurnManager.unit_activated.connect(_auto_play)
+		TurnManager.mode_changed.connect(_on_auto_mode_changed)
 		_prepare_auto_deployment()
 		_sync_deck()
 		seed(int(Campaign.deployment.get("spawn_seed", randi())))
@@ -472,6 +473,9 @@ func _spawn_and_start() -> void:
 	# deck) has no way out but the old one and keeps it on. Set on every peer, but
 	# only the host's copy is ever checked.
 	TurnManager.clear_out_mode = deck_hangars.is_empty()
+	# GDD §4.7: missions open out of combat. `--turn-mode` keeps the plain initiative
+	# loop for the whole run, as the regression baseline (plan D.2, E12).
+	TurnManager.exploration_enabled = not ("--turn-mode" in OS.get_cmdline_user_args())
 	# Every peer, after the squad exists (discovery listens to their moves) and
 	# before the mission starts. Inert on a deck with no hangar.
 	ExtractionManager.begin_mission(map.data)
@@ -606,6 +610,10 @@ func _on_squadmate_left(peer_id: int) -> void:
 	for node in get_tree().get_nodes_in_group("player_units"):
 		var unit := node as Unit
 		if unit and unit.owner_peer_id == peer_id:
+			# Whatever they had that soldier doing out of combat stops with them
+			# (plan C.7): nobody is left to re-order it, and its goal frees up.
+			unit.cancel_walk()
+			GridManager.release_reservation(unit)
 			unit.owner_peer_id = multiplayer.get_unique_id()
 			# Mid-activation for one of theirs: re-announce it, so the HUD
 			# (which decided on activation that it wasn't ours to drive) picks
@@ -643,6 +651,8 @@ func _spawn_security_robots() -> void:
 ## fresh one each activation would reset exactly the state fixes C and F exist to
 ## accumulate.
 var _auto_brains: Dictionary = {}
+## The exploration loop is running (`_auto_explore`).
+var _auto_exploring := false
 
 
 ## Headless smoke test (`godot -- --auto`): soldiers resolve a full skirmish
@@ -710,6 +720,65 @@ func _auto_play(unit: Unit) -> void:
 			await _greedy_fallback(player)
 	if not TurnManager.mission_over:
 		player.end_activation()
+
+
+# --- `--auto` out of combat (exploration plan D.1) -----------------------------
+
+
+func _on_auto_mode_changed(new_mode: int) -> void:
+	if new_mode == TurnManager.Mode.EXPLORATION:
+		_auto_explore()
+
+
+## Turn mode drives `_auto_play` off each draw. Out of combat nothing is drawn, so
+## the harness loops the squad itself, one think per soldier, until contact or the
+## end. A pass in which nobody spent a step (all holding, all out of ideas) waits a
+## round rather than spinning: the clock is what ends a stalemate on an extraction
+## deck, exactly as the round count did in turn mode.
+func _auto_explore() -> void:
+	if _auto_exploring:
+		return
+	_auto_exploring = true
+	while TurnManager.in_exploration() and not TurnManager.mission_over:
+		await get_tree().process_frame
+		var before := _auto_clock()
+		for member: Variant in _living_squad():
+			if not TurnManager.in_exploration() or TurnManager.mission_over:
+				break
+			await _auto_explore_think(member)
+		if TurnManager.in_exploration() and not TurnManager.mission_over and _auto_clock() == before:
+			await TurnManager.wait_round()
+	_auto_exploring = false
+
+
+## One soldier's think against a synthetic AP pool, so the same planner and the same
+## helpers run in both modes. What the think spent goes on the clock at the end, less
+## what its walking already charged tile by tile (Unit.auto_budget). A shot fired is
+## an attack from exploration, the same as a human's (plan B.7).
+func _auto_explore_think(player: PlayerUnit) -> void:
+	if not is_instance_valid(player) or player.is_downed or player.aboard:
+		return
+	TurnManager.hold_switch += 1
+	player.auto_budget = true
+	var pool := player.ap_pool()
+	player.ap = pool
+	var clock := _auto_clock()
+	var ammo := player.ammo
+	await _auto_play(player)
+	if is_instance_valid(player):
+		player.auto_budget = false
+	TurnManager.hold_switch -= 1
+	if TurnManager.mission_over or not is_instance_valid(player):
+		return
+	if player.ammo < ammo:
+		TurnManager.notify_attack(player, player.action_cost(UnitStats.Action.SHOOT))
+	TurnManager.add_steps(maxi(0, (pool - player.ap) - (_auto_clock() - clock)))
+	await TurnManager.settle_clock()
+
+
+## Total steps walked so far this mission, across rounds.
+func _auto_clock() -> int:
+	return TurnManager.turn_number * TurnManager.STEPS_PER_ROUND + TurnManager.steps
 
 
 ## Round from which the auto squad stops hunting and heads for the ship however

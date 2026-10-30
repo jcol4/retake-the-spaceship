@@ -14,6 +14,10 @@ extends Node
 ## Detection listens to this (Sec 11.2) — the lighting layer itself stays
 ## ignorant of the AI, and remains the only writer of light_value.
 signal lighting_changed
+## The display-only layer changed (exploration plan B.12.1): what is DRAWN as
+## lit moved during a tick's playback. Never emitted with `lighting_changed`,
+## which is the rules' signal — nothing listening here may decide anything.
+signal display_lighting_changed
 
 ## What a tile no fixture or beam reaches is worth, so the rules agree with the
 ## faint ambient the scene actually renders (main.tscn ambient_light_energy 0.2).
@@ -42,6 +46,11 @@ var _base: Dictionary = {}  # Vector3i -> float, static fixtures only
 # beams — a non-zero value here means a player is deliberately lighting the tile.
 var _dynamic: Dictionary = {}  # Vector3i -> float, flashlights only
 var _dynamic_source: Dictionary = {}  # Vector3i -> Unit, whose beam is brightest
+## Tick playback's display layer (plan B.12.1): Vector3i -> total light as DRAWN,
+## with each beam cast from where its model is mid-playback. Read only through
+## `display_light`, and only while `_display_active`.
+var _display: Dictionary = {}
+var _display_active := false
 
 
 func register_source(source: LightSource) -> void:
@@ -88,27 +97,95 @@ func recompute_dynamic() -> void:
 	_dynamic.clear()
 	_dynamic_source.clear()
 	for unit: Unit in _flashlight_units():
-		var facing: Vector3 = _aim_of(unit)
-		for pos in GridManager.tiles.keys():
-			if GridManager.chebyshev_dist(unit.grid_pos, pos) > FLASHLIGHT_RANGE:
-				continue
-			var t: GridTileData = GridManager.get_tile(pos)
-			if not _within_cone(unit.global_position, facing, t.world_pos, FLASHLIGHT_CONE_DEGREES):
-				continue
-			var c := _falloff(unit.grid_pos, pos, FLASHLIGHT_INTENSITY, FLASHLIGHT_RANGE)
-			if c <= 0.0:
-				continue
-			if not GridManager.has_clear_line(unit, unit.global_position + Vector3(0, 1.2, 0), t.world_pos + Vector3(0, 0.5, 0)):
-				continue
+		var beam := _beam_contribution(unit.grid_pos, unit.global_position, _aim_of(unit), unit)
+		for pos: Vector3i in beam:
 			# Brightest beam wins the tile, and owns it for detection purposes —
 			# whoever is lighting a tile hardest is who gets noticed standing on it.
-			if c > _dynamic.get(pos, 0.0):
-				_dynamic[pos] = c
+			if beam[pos] > _dynamic.get(pos, 0.0):
+				_dynamic[pos] = beam[pos]
 				_dynamic_source[pos] = unit
 	for pos in GridManager.tiles.keys():
 		var t: GridTileData = GridManager.get_tile(pos)
 		t.light_value = clampf(_base.get(pos, AMBIENT_FLOOR) + _dynamic.get(pos, 0.0), 0.0, 100.0)
 	lighting_changed.emit()
+
+
+## One beam's light, tile -> contribution, cast from `origin_tile` /
+## `origin_pos` along `aim`. THE beam formula: the rules layer and the display
+## layer both call it, so what is drawn lit and what counts as lit cannot drift.
+func _beam_contribution(origin_tile: Vector3i, origin_pos: Vector3, aim: Vector3, unit: Node3D) -> Dictionary:
+	var out := {}
+	for pos: Vector3i in GridManager.tiles.keys():
+		if GridManager.chebyshev_dist(origin_tile, pos) > FLASHLIGHT_RANGE:
+			continue
+		var t: GridTileData = GridManager.get_tile(pos)
+		if not _within_cone(origin_pos, aim, t.world_pos, FLASHLIGHT_CONE_DEGREES):
+			continue
+		var c := _falloff(origin_tile, pos, FLASHLIGHT_INTENSITY, FLASHLIGHT_RANGE)
+		if c <= 0.0:
+			continue
+		if not GridManager.has_clear_line(unit, origin_pos + Vector3(0, 1.2, 0), t.world_pos + Vector3(0, 0.5, 0)):
+			continue
+		out[pos] = c
+	return out
+
+
+# --- Display layer (exploration plan B.12.1) -----------------------------------
+#
+# During a tick's playback the rules layer is already FINAL — every beam where
+# its unit ended up — while the models are still walking there. Recomputing the
+# rules layer along the replayed paths would re-run detection on a tick that has
+# already been decided (`lighting_changed` drives awareness), so the drawn light
+# gets a layer of its own instead: same base, same beam formula, each beam cast
+# from its model. It never writes `light_value` and never emits
+# `lighting_changed`.
+
+
+func begin_display() -> void:
+	_display_active = true
+	recompute_display()
+
+
+## Rebuilds the drawn light from where every flashlight's MODEL is and points.
+## Playback calls it once per slot, the cadence a real move recomputes at.
+func recompute_display() -> void:
+	if not _display_active:
+		return
+	var beams := {}
+	for node in get_tree().get_nodes_in_group("units"):
+		var unit := node as Unit
+		if unit == null or not unit.has_flashlight or not unit.visual.light_shown():
+			continue
+		var origin: Vector3 = unit.visual.global_position
+		var beam := _beam_contribution(GridManager.world_to_grid(origin), origin, _aim_of(unit), unit)
+		for pos: Vector3i in beam:
+			beams[pos] = maxf(beams.get(pos, 0.0), beam[pos])
+	_display.clear()
+	for pos: Vector3i in GridManager.tiles.keys():
+		_display[pos] = clampf(_base.get(pos, AMBIENT_FLOOR) + beams.get(pos, 0.0), 0.0, 100.0)
+	display_lighting_changed.emit()
+
+
+## Drops the display layer: the last slot left every model on its final tile, so
+## what is drawn now equals the rules layer again.
+func end_display() -> void:
+	_display_active = false
+	_display.clear()
+	display_lighting_changed.emit()
+
+
+## The light a tile is DRAWN with: the display layer during playback, the rules'
+## `light_value` otherwise. For the screen only — tile tint, model shading, the
+## HUD readout. Accuracy and awareness keep reading `light_value`.
+func display_light(pos: Vector3i) -> float:
+	if _display_active:
+		return _display.get(pos, 0.0)
+	var t: GridTileData = GridManager.get_tile(pos)
+	return t.light_value if t else 0.0
+
+
+func is_displaying() -> bool:
+	return _display_active
 
 
 func flashlight_value(pos: Vector3i) -> float:

@@ -19,12 +19,20 @@ signal cover_destroyed(pos: Vector3i, side: int, now: int)
 ## rather than rescanned per call: picking runs every frame while a move mode is
 ## armed, and the answer only changes when a deck is built.
 var _floors: Dictionary = {}
+## Goal reservations (exploration plan A.2): tile -> the unit walking to it, and
+## the reverse. A reserved tile is closed as a DESTINATION to every other unit
+## and stays open to pass through, so two concurrent walks can never be sent to
+## the same square while neither has arrived yet. Host-side, like every move.
+var _reservations: Dictionary = {}
+var _reserved_tile: Dictionary = {}
 
 
 func clear() -> void:
 	tiles.clear()
 	stair_links.clear()
 	_floors.clear()
+	_reservations.clear()
+	_reserved_tile.clear()
 
 
 func add_tile(pos: Vector3i, world_pos: Vector3) -> GridTileData:
@@ -109,6 +117,55 @@ func set_occupant(pos: Vector3i, unit: Node3D) -> void:
 	var t: GridTileData = tiles.get(pos)
 	if t:
 		t.occupant = unit
+
+
+## Clears `pos` only if `unit` is the one holding it. A walker releasing the tile
+## it just left must not wipe somebody who has since stepped in behind it.
+func release_occupant(pos: Vector3i, unit: Node3D) -> void:
+	var t: GridTileData = tiles.get(pos)
+	if t and t.occupant == unit:
+		t.occupant = null
+
+
+## Reserves `tile` as `unit`'s destination, replacing any reservation it held.
+## False (and nothing changes) if somebody else already holds it.
+func reserve(tile: Vector3i, unit: Node3D) -> bool:
+	var holder := reserved_by(tile)
+	if holder != null and holder != unit:
+		return false
+	release_reservation(unit)
+	_reservations[tile] = unit
+	_reserved_tile[unit] = tile
+	return true
+
+
+## Drops whatever `unit` had reserved. Safe on a unit holding nothing.
+func release_reservation(unit: Node3D) -> void:
+	if not _reserved_tile.has(unit):
+		return
+	var tile: Vector3i = _reserved_tile[unit]
+	_reserved_tile.erase(unit)
+	if _reservations.get(tile) == unit:
+		_reservations.erase(tile)
+
+
+## Who has reserved `tile` as a destination, or null. A freed holder reads as
+## nobody: a unit gone mid-walk holds no claim.
+func reserved_by(tile: Vector3i) -> Node3D:
+	var holder: Variant = _reservations.get(tile)
+	if holder == null:
+		return null
+	if not is_instance_valid(holder):
+		_reservations.erase(tile)
+		return null
+	return holder
+
+
+## Whether `unit` may END a walk on `tile`: nobody else has reserved it. Passing
+## through is never asked here — a reservation does not block a path.
+func open_destination(tile: Vector3i, unit: Node3D) -> bool:
+	var holder := reserved_by(tile)
+	return holder == null or holder == unit
 
 
 ## The eight grid directions a unit may step along, in the order the four

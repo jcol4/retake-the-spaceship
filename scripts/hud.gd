@@ -92,6 +92,20 @@ var _continue_button: Button
 ## Seconds before Continue appears, so a click meant for the last action does not
 ## land on it and skip the roll call unread.
 const CONTINUE_DELAY := 1.0
+## Exploration (GDD §4.7, plan B.11): which loop the mission is in and, out of
+## combat, the step clock. Code-built beside the other late additions.
+var _mode_label: Label
+## The squad, one button per soldier, in both modes (E24). Unit -> Button. Your own
+## select on click (exploration only); a co-op partner's are read-only and greyed;
+## whoever is drawn or selected is tinted.
+var _portrait_bar: HBoxContainer
+var _portraits: Dictionary = {}
+const PORTRAIT_ACTIVE := Color(0.55, 1.0, 0.65)
+const PORTRAIT_DOWN := Color(1.0, 0.45, 0.4)
+const PORTRAIT_PARTNER := Color(0.6, 0.6, 0.65)
+## The tile the unit panel was last drawn for. Out of combat a walk spends no AP, so
+## nothing else says the context buttons (Loot, Call ship) may have changed.
+var _shown_tile := Vector3i(0, -9999, 0)
 
 
 func _ready() -> void:
@@ -123,6 +137,12 @@ func _ready() -> void:
 	buttons["drop"].pressed.connect(_on_drop)
 	buttons["loot"].pressed.connect(_on_loot)
 	_build_terminal_button()
+	_build_wait_button()
+	_build_mode_label()
+	_build_portrait_bar()
+	TurnManager.unit_selected.connect(_on_unit_activated)
+	TurnManager.mode_changed.connect(_on_mode_changed)
+	TurnManager.clock_changed.connect(func(_s: int, _n: int) -> void: _refresh_mode_label())
 	_build_loot_panel()
 	_build_continue_button()
 	LootManager.container_changed.connect(func(_t: Vector3i) -> void: _refresh_loot_panel())
@@ -150,6 +170,9 @@ func _on_unit_activated(unit: Unit) -> void:
 	_hide_grenade_menu()
 	_hide_loot_panel()
 	_refresh(unit)
+	_refresh_portraits()
+	if unit is PlayerUnit and not unit.command_rejected.is_connected(_on_command_rejected):
+		unit.command_rejected.connect(_on_command_rejected)
 	if unit is PlayerUnit and not unit.inventory_changed.is_connected(_on_inventory_changed):
 		unit.inventory_changed.connect(_on_inventory_changed)
 	if unit is PlayerUnit and not unit.ap_changed.is_connected(_on_ap_changed):
@@ -205,15 +228,18 @@ func _refresh(unit: Unit) -> void:
 		# AP shows the POOL alongside what's left: the pool is per-soldier now
 		# (Fitness-derived, Sec 4.2), so a bare "AP 5" doesn't say whether that is
 		# a full activation or the tail of one.
-		unit_info.text = "%s  [%s]   %s\nHP %d/%d   AP %d/%d   Ammo %d/%d   Reserve %s\nInitiative %d%s\nFlashlight %s   Standing on %d%% light%s" % [
+		# Out of combat there is no AP to read; the clock is on the mode banner.
+		var ap_text := "" if TurnManager.in_exploration() else "   AP %d/%d" % [player.ap, player.ap_pool()]
+		_shown_tile = player.grid_pos
+		unit_info.text = "%s  [%s]   %s\nHP %d/%d%s   Ammo %d/%d   Reserve %s\nInitiative %d%s\nFlashlight %s   Standing on %d%% light%s" % [
 			player.stats.display_name,
 			UnitStats.UnitClass.keys()[player.stats.unit_class],
 			weapon_name,
-			player.current_hp, player.stats.max_hp(), player.ap, player.ap_pool(),
+			player.current_hp, player.stats.max_hp(), ap_text,
 			player.ammo, player.stats.mag_size, reserve_text,
 			player.stats.initiative(), reserved,
 			"ON" if player.flashlight_on else "OFF",
-			roundi(GridManager.get_tile(player.grid_pos).light_value) if GridManager.has_tile(player.grid_pos) else 0,
+			roundi(LightingManager.display_light(player.grid_pos)),
 			injury_line,
 		]
 	elif unit:
@@ -244,26 +270,34 @@ func _refresh(unit: Unit) -> void:
 		# which one it's spent on), so one count covers both.
 		buttons["grenade"].text = "Grenade (%d)  x%d" % [
 			player.action_cost(UnitStats.Action.GRENADE), player.grenade_charges]
-	buttons["move"].disabled = not is_player or player.ap < player.move_ap_per_tile()
+	buttons["move"].disabled = not is_player or not player.can_afford(player.move_ap_per_tile())
 	buttons["shoot"].disabled = not is_player \
-		or player.ap < player.action_cost(UnitStats.Action.SHOOT) or not player.can_shoot()
+		or not player.can_afford(player.action_cost(UnitStats.Action.SHOOT)) or not player.can_shoot()
 	# Gated on the Torso, the cheapest zone — the per-zone prices are on the menu
 	# itself, where the zone is actually chosen.
 	buttons["aimed_shot"].disabled = not is_player \
-		or player.ap < player.min_aimed_shot_cost() or not player.can_shoot()
+		or not player.can_afford(player.min_aimed_shot_cost()) or not player.can_shoot()
 	buttons["suppress"].disabled = not is_player \
-		or player.ap < player.action_cost(UnitStats.Action.SUPPRESS) or not player.can_suppress()
+		or not player.can_afford(player.action_cost(UnitStats.Action.SUPPRESS)) or not player.can_suppress()
 	buttons["grenade"].disabled = not is_player \
-		or player.ap < player.action_cost(UnitStats.Action.GRENADE) or player.grenade_charges <= 0
-	buttons["hunker"].disabled = not is_player or player.ap < player.action_cost(UnitStats.Action.HUNKER)
+		or not player.can_afford(player.action_cost(UnitStats.Action.GRENADE)) or player.grenade_charges <= 0
+	buttons["hunker"].disabled = not is_player or not player.can_afford(player.action_cost(UnitStats.Action.HUNKER))
 	buttons["overwatch"].disabled = not is_player \
-		or player.ap < player.action_cost(UnitStats.Action.OVERWATCH) or not player.can_shoot()
+		or not player.can_afford(player.action_cost(UnitStats.Action.OVERWATCH)) or not player.can_shoot()
 	buttons["reload"].disabled = not is_player \
-		or player.ap < player.action_cost(UnitStats.Action.RELOAD) or not player.can_reload()
+		or not player.can_afford(player.action_cost(UnitStats.Action.RELOAD)) or not player.can_reload()
 	# Both free actions (Sec 4.2) — no AP gate on either.
 	buttons["face"].disabled = not is_player
 	buttons["flashlight"].disabled = not is_player
 	buttons["end_turn"].disabled = not is_player
+	# Out of combat: no activation to end and nothing to hunker against (E21), and
+	# the one way to pass time without acting (plan B.10).
+	var exploring := TurnManager.in_exploration()
+	buttons["hunker"].visible = not exploring
+	buttons["end_turn"].visible = not exploring
+	buttons["wait"].visible = exploring
+	buttons["wait"].disabled = not is_player
+	buttons["move"].text = "Move" if exploring else "Move (1-2)"
 	# Extraction (GDD §7.3–7.4): SHOWN only where they could work — in a callable
 	# bay, in the square of our landed ship — rather than greyed out everywhere,
 	# since for most of a mission neither applies and two dead buttons are noise.
@@ -283,8 +317,8 @@ func _refresh(unit: Unit) -> void:
 		_label_cost(buttons["call_ship"], "Call ship", player.action_cost(UnitStats.Action.CALL_SHIP))
 		_label_cost(buttons["board"], "Board ship", player.action_cost(UnitStats.Action.BOARD_SHIP))
 		_label_cost(buttons["extract"], "EXTRACT", player.action_cost(UnitStats.Action.EXTRACT))
-		buttons["call_ship"].disabled = player.ap < player.action_cost(UnitStats.Action.CALL_SHIP)
-		buttons["board"].disabled = player.ap < player.action_cost(UnitStats.Action.BOARD_SHIP)
+		buttons["call_ship"].disabled = not player.can_afford(player.action_cost(UnitStats.Action.CALL_SHIP))
+		buttons["board"].disabled = not player.can_afford(player.action_cost(UnitStats.Action.BOARD_SHIP))
 		buttons["extract"].disabled = false
 	# GDD §4.3: primary <-> pistol. Hidden while carrying (the pistol is forced)
 	# and for anyone without a sidearm.
@@ -294,7 +328,7 @@ func _refresh(unit: Unit) -> void:
 		var other: WeaponData = player.stats.weapon if player.stats.sidearm_drawn else player.stats.sidearm
 		_label_cost(buttons["switch"], "Switch to %s" % (other.display_name if other else "weapon"),
 			player.action_cost(UnitStats.Action.SWITCH_WEAPON))
-		buttons["switch"].disabled = player.ap < player.action_cost(UnitStats.Action.SWITCH_WEAPON)
+		buttons["switch"].disabled = not player.can_afford(player.action_cost(UnitStats.Action.SWITCH_WEAPON))
 	# GDD §4.4, same rule as the ship buttons: shown only when there is a body in
 	# reach the action would accept (any player's — cross-player rescue, §7.6),
 	# greyed only on AP. Drop is shown whenever something is carried, and is free.
@@ -306,8 +340,8 @@ func _refresh(unit: Unit) -> void:
 	if is_player:
 		_label_cost(buttons["revive"], "Revive", player.action_cost(UnitStats.Action.REVIVE))
 		_label_cost(buttons["pick_up"], "Pick up", player.action_cost(UnitStats.Action.PICK_UP))
-		buttons["revive"].disabled = player.ap < player.action_cost(UnitStats.Action.REVIVE)
-		buttons["pick_up"].disabled = player.ap < player.action_cost(UnitStats.Action.PICK_UP)
+		buttons["revive"].disabled = not player.can_afford(player.action_cost(UnitStats.Action.REVIVE))
+		buttons["pick_up"].disabled = not player.can_afford(player.action_cost(UnitStats.Action.PICK_UP))
 		buttons["drop"].disabled = false
 	# Extraction plan 3.2, the same rule again: shown when there is something in
 	# reach to take (a crate, a pile, a corpse with anything on it — any player's,
@@ -330,7 +364,138 @@ func _refresh(unit: Unit) -> void:
 		var resume := ObjectiveManager.terminal_rules != null \
 			and ObjectiveManager.terminal_rules.state == TerminalRules.State.PAUSED
 		_label_cost(buttons["terminal"], "Restart terminal" if resume else "Operate terminal", cost)
-		buttons["terminal"].disabled = player.ap < cost
+		buttons["terminal"].disabled = not player.can_afford(cost)
+
+
+## Wait (plan B.10), beside the hud.tscn action buttons like the terminal's.
+func _build_wait_button() -> void:
+	var b := Button.new()
+	b.name = "Wait"
+	b.visible = false
+	$Actions.add_child(b)
+	buttons["wait"] = b
+	b.pressed.connect(func() -> void:
+		var player := _active_player()
+		if player:
+			player._issue(&"try_wait"))
+
+
+func _build_mode_label() -> void:
+	_mode_label = Label.new()
+	_mode_label.name = "ModeLabel"
+	_mode_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	_mode_label.offset_left = -300.0
+	_mode_label.offset_right = 300.0
+	_mode_label.offset_top = 88.0
+	_mode_label.offset_bottom = 116.0
+	_mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mode_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_mode_label.visible = false
+	add_child(_mode_label)
+
+
+func _build_portrait_bar() -> void:
+	_portrait_bar = HBoxContainer.new()
+	_portrait_bar.name = "PortraitBar"
+	_portrait_bar.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	_portrait_bar.offset_top = -116.0
+	_portrait_bar.offset_bottom = -64.0
+	_portrait_bar.alignment = BoxContainer.ALIGNMENT_CENTER
+	# It spans the screen: only the buttons may take a click from the deck.
+	_portrait_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_portrait_bar)
+
+
+## The banner and the clock: "EXPLORING — round 7 · 12 / 20 steps", or just the
+## round in a fight. Also what the Wait button promises.
+func _refresh_mode_label() -> void:
+	if _mode_label == null:
+		return
+	_mode_label.visible = TurnManager.turn_number > 0 and not TurnManager.mission_over
+	if TurnManager.in_exploration():
+		_mode_label.text = "EXPLORING — round %d  ·  %d / %d steps" % [
+			TurnManager.turn_number, TurnManager.steps, TurnManager.STEPS_PER_ROUND]
+	else:
+		_mode_label.text = "COMBAT — round %d" % TurnManager.turn_number
+	buttons["wait"].text = "Wait → round %d" % (TurnManager.turn_number + 1)
+
+
+func _on_mode_changed(_mode: int) -> void:
+	_hide_aimed_shot_menu()
+	_hide_grenade_menu()
+	# The soldiers disarm themselves, but by now none is selected to own the overlay.
+	var highlights := get_tree().get_first_node_in_group("highlights")
+	if highlights:
+		highlights.clear_highlights()
+	_refresh_mode_label()
+	_refresh(TurnManager.active_unit)
+	_refresh_portraits()
+
+
+## One button per soldier on the board, read off replicated state, so a co-op
+## partner's soldiers need no sync of their own (plan C.5). Polled with the body
+## labels; a soldier gone aboard drops off the bar.
+func _refresh_portraits() -> void:
+	if _portrait_bar == null:
+		return
+	var squad: Array[Unit] = []
+	for node in get_tree().get_nodes_in_group("player_units"):
+		var unit := node as Unit
+		if unit:
+			squad.append(unit)
+	squad.sort_custom(func(a: Unit, b: Unit) -> bool: return String(a.name) < String(b.name))
+	for unit: Variant in _portraits.keys():
+		if not is_instance_valid(unit) or not squad.has(unit):
+			_portraits[unit].queue_free()
+			_portraits.erase(unit)
+	for unit in squad:
+		var button: Button = _portraits.get(unit)
+		if button == null:
+			button = Button.new()
+			button.focus_mode = Control.FOCUS_NONE
+			button.pressed.connect(TurnManager.select.bind(unit))
+			_portrait_bar.add_child(button)
+			_portraits[unit] = button
+		var status := ""
+		if unit.life_state == Unit.LifeState.DEAD:
+			status = "DEAD"
+		elif unit.is_downed:
+			status = "DOWN %d/%d" % [unit.downed_hp, unit.downed_bar_max()]
+		else:
+			status = "HP %d/%d" % [unit.current_hp, unit.stats.max_hp()]
+		if unit.carrying != null:
+			status += " +%s" % unit.carrying.stats.display_name
+		button.text = "%s\n%s" % [unit.stats.display_name, status]
+		var mine := unit.is_owned_by_local_player()
+		button.disabled = not mine or unit.is_downed
+		if unit == TurnManager.active_unit:
+			button.modulate = PORTRAIT_ACTIVE
+		elif unit.is_downed:
+			button.modulate = PORTRAIT_DOWN
+		elif not mine:
+			button.modulate = PORTRAIT_PARTNER
+		else:
+			button.modulate = Color.WHITE
+
+
+func _on_command_rejected(reason: String) -> void:
+	_on_extraction_notice(reason, true)
+
+
+## Tab walks this player's own standing soldiers (E24), exploration only: in a
+## fight the draw decides who is up.
+func _input(event: InputEvent) -> void:
+	if not TurnManager.in_exploration():
+		return
+	var key := event as InputEventKey
+	if key == null or not key.pressed or key.echo or key.keycode != KEY_TAB:
+		return
+	var squad := TurnManager.own_squad()
+	if squad.is_empty():
+		return
+	var at := squad.find(TurnManager.active_unit) if is_instance_valid(TurnManager.active_unit) else -1
+	TurnManager.select(squad[(at + 1) % squad.size()])
+	get_viewport().set_input_as_handled()
 
 
 ## The Hold console's button (Phase 6). Built in code beside the hud.tscn action
@@ -390,7 +555,7 @@ func _on_aimed_shot_target_picked(target: Unit) -> void:
 		var acc := Combat.compute_accuracy(player, target, Combat.ShotAction.AIMED_SHOT, part)
 		var cost := player.aimed_shot_cost(part)
 		body_part_buttons[part].text = "%s — %d AP (%d%%)" % [Combat.body_part_name(part), cost, acc]
-		body_part_buttons[part].disabled = player.ap < cost
+		body_part_buttons[part].disabled = not player.can_afford(cost)
 	aimed_shot_menu.visible = true
 
 
@@ -547,7 +712,7 @@ func _refresh_loot_panel() -> void:
 		_hide_loot_panel()
 		return
 	var cost := player.action_cost(UnitStats.Action.LOOT)
-	var can_take := player.ap >= cost and player.has_free_slot()
+	var can_take := player.can_afford(cost) and player.has_free_slot()
 	for source in player.loot_sources():
 		_loot_rows.add_child(_loot_heading(source.loot_name()))
 		var items: Array = source.loot_items()
@@ -637,6 +802,8 @@ func _process(delta: float) -> void:
 		return
 	_body_label_clock = BODY_LABEL_REFRESH
 	_refresh_body_labels()
+	_refresh_portraits()
+	_refresh_exploration_selection()
 	# Polled on the same clock for the same reason as the body labels: a client
 	# hears no `downed` for the nest or `inventory_changed` for a squadmate's
 	# corpse until replication lands, and the line is one cheap string.
@@ -646,6 +813,20 @@ func _process(delta: float) -> void:
 	# client learns those through replication rather than any signal it hears.
 	if ExtractionManager.is_active():
 		_refresh_hangar_markers()
+
+
+## Out of combat, on the same poll: the soldier this peer had selected may have gone
+## down or aboard (plan C.5), and one that walked somewhere new may have new things
+## in reach. Compared first, because `_refresh` rebuilds an open loot panel.
+func _refresh_exploration_selection() -> void:
+	if not TurnManager.in_exploration() or TurnManager.mission_over:
+		return
+	if not is_instance_valid(TurnManager.active_unit) or TurnManager.active_unit.is_downed \
+			or TurnManager.active_unit.aboard:
+		TurnManager.reselect_local()
+		return
+	if TurnManager.active_unit.grid_pos != _shown_tile:
+		_refresh(TurnManager.active_unit)
 
 
 ## One label per body: "Okafor ▮▮▮▯▯ 12/20 ●○" in red while downed (the bar, its

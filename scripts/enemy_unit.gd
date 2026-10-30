@@ -551,6 +551,9 @@ func _enter_combat(new_target: Unit, reason: String) -> void:
 	_has_last_known = true
 	_last_contact_turn = TurnManager.turn_number
 	_set_state(AlertState.COMBAT)
+	# Every channel that starts a fight comes through here, so this is the one
+	# place contact with the squad is reported (exploration plan B.3).
+	TurnManager.notify_combat(self, new_target)
 	if was != AlertState.COMBAT:
 		# An empty reason enters combat SILENTLY. For a caller that is already
 		# narrating the whole event itself, a line per unit buries it rather than
