@@ -78,6 +78,9 @@ func setup() -> void:
 	_tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	vbox.add_child(_tabs)
 
+	if SteamLobby.current_lobby_id != 0:
+		vbox.add_child(PlayerColorRow.new())
+
 	_status = Label.new()
 	_status.modulate = Color(1.0, 0.8, 0.5)
 	vbox.add_child(_status)

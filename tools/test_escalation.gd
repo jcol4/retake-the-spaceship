@@ -36,6 +36,7 @@ func _initialize() -> void:
 	_hive = root.get_node_or_null("AlienHivemind")
 	_turns = root.get_node_or_null("TurnManager")
 	var map = load("res://scenes/test_map.tscn").instantiate()
+	map.layout_path = "res://maps/test_deck.txt"
 	root.add_child(map)
 	await process_frame
 

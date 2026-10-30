@@ -24,6 +24,7 @@ func _initialize() -> void:
 	_grid = root.get_node_or_null("GridManager")
 	_combat = load("res://scripts/combat.gd")
 	var map = load("res://scenes/test_map.tscn").instantiate()
+	map.layout_path = "res://maps/test_deck.txt"
 	root.add_child(map)
 	await process_frame
 

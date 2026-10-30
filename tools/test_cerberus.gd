@@ -38,6 +38,7 @@ func _initialize() -> void:
 	_combat = load("res://scripts/combat.gd")
 	_presets = load("res://scripts/cerberus_presets.gd")
 	_map = load("res://scenes/test_map.tscn").instantiate()
+	_map.layout_path = "res://maps/test_deck.txt"
 	root.add_child(_map)
 	await process_frame
 

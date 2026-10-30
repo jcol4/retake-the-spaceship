@@ -86,6 +86,14 @@ var _combat_pending: bool = false
 ## The last round with contact against the squad (plan B.9): set by
 ## `notify_combat` and by any enemy still fighting the squad at a draw.
 var _last_squad_combat_round: int = 0
+## A hostile has fallen in this fight since the last draw, so the next one asks
+## whether that won it (`_fight_is_won`). Only a kill ever asks: a squad that ran,
+## and whose pursuers gave up, leaves by the quiet round.
+var _kill_pending: bool = false
+## Tiles from a standing soldier within which an ALERT hostile keeps the fight open:
+## past weapon range (EnemyUnit.ATTACK_RANGE), so one the squad could be shooting at
+## next round still counts, and one investigating across the deck does not.
+const CALM_RADIUS := 10
 ## Something outside the board is mid-action and the switch to turn mode must wait
 ## for it: `--auto`'s soldier part-way through a think (main.gd, plan D.1).
 var hold_switch: int = 0
@@ -221,6 +229,7 @@ func start_mission() -> void:
 	resolving_tick = false
 	_combat_pending = false
 	_last_squad_combat_round = 0
+	_kill_pending = false
 	_timeline.clear()
 	# Both hold state that outlives a single activation and would otherwise
 	# outlive the MISSION too: squad blackboards are static, and an escalation is
@@ -258,6 +267,7 @@ func abandon() -> void:
 	_walking.clear()
 	_ticks_queued = 0
 	_combat_pending = false
+	_kill_pending = false
 	resolving_tick = false
 	if not was_over:
 		mission_ended.emit(MissionResult.new(MissionResult.Outcome.ABANDONED))
@@ -331,7 +341,13 @@ func _draw_next() -> void:
 	# so between two draws an entry here can become a freed object, and reading
 	# `.is_downed` off one is a hard crash.
 	pool = pool.filter(func(u: Unit) -> bool: return is_instance_valid(u) and not u.is_downed)
-	if _squad_in_contact():
+	# A won fight closes the round here, whoever had yet to act: out of combat their
+	# actions are free, so nobody loses anything by not being drawn.
+	var fight_won := _kill_pending and _fight_is_won()
+	_kill_pending = false
+	if fight_won:
+		pool.clear()
+	elif _squad_in_contact():
 		_last_squad_combat_round = turn_number
 	if pool.is_empty():
 		await _end_round()
@@ -340,8 +356,10 @@ func _draw_next() -> void:
 		if mission_over or _check_end_conditions():
 			return
 		# Plan B.9: a full round with nothing fighting the squad, and the fight is
-		# over — the next round opens out of combat instead of with a draw.
-		if exploration_enabled and ExplorationRules.quiet_for_a_round(_last_squad_combat_round, turn_number):
+		# over — the next round opens out of combat instead of with a draw. A won
+		# fight needs no such round, unless the round's end just woke something.
+		if exploration_enabled and ((fight_won and _fight_is_won())
+				or ExplorationRules.quiet_for_a_round(_last_squad_combat_round, turn_number)):
 			_leave_turn_mode()
 			return
 		_start_turn()
@@ -898,6 +916,47 @@ func notify_combat(enemy: Unit, target: Unit) -> void:
 		return
 	_last_squad_combat_round = turn_number
 	_begin_contact()
+
+
+## A unit just fell (Unit._set_life_state). A hostile falling in a fight may be the
+## one that wins it, which ends the fight without the quiet round (plan B.9). Also
+## while a switch to turn mode is pending: an opening shot can kill its only target.
+func notify_unit_down(unit: Unit) -> void:
+	if not _is_authority() or not exploration_enabled or mission_over:
+		return
+	if mode != Mode.TURN and not _combat_pending:
+		return
+	if unit is EnemyUnit and Faction.is_hostile(Faction.Id.CONTRACTORS, unit.faction):
+		_kill_pending = true
+		_close_won_fight.call_deferred()
+
+
+## The kill landed in a soldier's activation, so no draw is coming until it ends: if
+## that kill won the fight, end it, once the shot on screen has finished. Every other
+## case is the next draw's to read: an AI turn, or a switch to turn mode still pending.
+func _close_won_fight() -> void:
+	while _squad_busy() and not mission_over:
+		await get_tree().process_frame
+	if _kill_pending and mode == Mode.TURN and _awaiting_player and _fight_is_won():
+		_finish_activation(active_unit)
+
+
+## Nothing left for the squad to worry about: nobody fighting it, and no hostile
+## awake within CALM_RADIUS of a soldier still standing.
+func _fight_is_won() -> bool:
+	if _squad_in_contact():
+		return false
+	for node in get_tree().get_nodes_in_group("enemy_units"):
+		var enemy := node as EnemyUnit
+		if enemy == null or enemy.is_downed or enemy.alert_state != EnemyUnit.AlertState.ALERT \
+				or not Faction.is_hostile(Faction.Id.CONTRACTORS, enemy.faction):
+			continue
+		for other in get_tree().get_nodes_in_group("player_units"):
+			var soldier := other as Unit
+			if soldier and not soldier.is_downed \
+					and GridManager.chebyshev_dist(enemy.grid_pos, soldier.grid_pos) <= CALM_RADIUS:
+				return false
+	return true
 
 
 ## A soldier attacked from exploration (plan B.7): that alone starts the fight,

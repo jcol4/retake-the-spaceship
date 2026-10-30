@@ -34,6 +34,7 @@ func _initialize() -> void:
 	_grid = root.get_node_or_null("GridManager")
 	_combat = load("res://scripts/combat.gd")
 	var map = load("res://scenes/test_map.tscn").instantiate()
+	map.layout_path = "res://maps/test_deck.txt"
 	root.add_child(map)
 	await process_frame
 
@@ -142,12 +143,19 @@ func _check_breaking_cover_draws_the_held_shot() -> void:
 	var target = await _spawn(MERC, ANCHOR + Vector3i(3, 0, 0))
 	var turns = root.get_node_or_null("TurnManager")
 	await shooter.do_suppress(target)
-	shooter.ammo = 5  # refilled after the burst, so the reaction has something to fire
+	shooter.ammo = 5  # refilled after the burst, so a charge for the reaction would show
 
 	var before_ammo: int = shooter.ammo
+	var fired := [false]
+	var note := func(text: String) -> void:
+		if text.contains("SUPPRESSING FIRE"):
+			fired[0] = true
+	turns.log_message.connect(note)
 	await turns.check_suppression_break(target)
-	_check(shooter.ammo == before_ammo - 1,
-		"breaking cover draws a shot (ammo %d -> %d)" % [before_ammo, shooter.ammo])
+	turns.log_message.disconnect(note)
+	_check(fired[0], "breaking cover draws a shot")
+	_check(shooter.ammo == before_ammo,
+		"at no further ammo: do_suppress already paid for it (ammo %d -> %d)" % [before_ammo, shooter.ammo])
 	_check(not target.is_suppressed(),
 		"and the burst is spent — a pin fires once, then it is gone")
 

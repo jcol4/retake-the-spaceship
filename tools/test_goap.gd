@@ -53,6 +53,7 @@ func _initialize() -> void:
 	_coordinator = load("res://scripts/ai/squad_coordinator.gd")
 	_tile_threat = load("res://scripts/ai/tile_threat.gd")
 	var map = load("res://scenes/test_map.tscn").instantiate()
+	map.layout_path = "res://maps/test_deck.txt"
 	root.add_child(map)
 	await process_frame
 

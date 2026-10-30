@@ -250,6 +250,9 @@ func _refresh(unit: Unit) -> void:
 	else:
 		unit_info.text = "—"
 	var is_player := player != null
+	# The whole row goes, rather than greying, whenever there is nothing this player
+	# can do: the enemy's activation, or a co-op partner's soldier.
+	$Actions.visible = is_player and not player.is_downed and player.is_owned_by_local_player()
 	# Every price is per-soldier now (Reflexes discounts them, Sec 4.3), so the
 	# buttons carry their own cost rather than the player memorising a fixed
 	# table — the same number the gate below is testing against.
@@ -1133,6 +1136,7 @@ func _on_mission_ended(result: MissionResult) -> void:
 		end_details.visible = true
 	_hide_loot_panel()
 	radio_banner.visible = false
+	$Actions.visible = false
 	for key in buttons:
 		buttons[key].disabled = true
 	_reveal_continue()

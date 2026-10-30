@@ -30,6 +30,7 @@ var _enemy
 func _initialize() -> void:
 	_grid = root.get_node_or_null("GridManager")
 	_map = load("res://scenes/test_map.tscn").instantiate()
+	_map.layout_path = "res://maps/test_deck.txt"
 	root.add_child(_map)
 
 	_player = load("res://scenes/player_unit.tscn").instantiate()

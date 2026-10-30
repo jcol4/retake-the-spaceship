@@ -244,6 +244,12 @@ All existing tests and `--auto` pass with exploration off.
   against the squad at a draw. At each turn-mode `_end_round`, once a full round has passed with
   none (`ExplorationRules.quiet_for_a_round`), switch to `EXPLORATION` at the start of the next
   round.
+- **A won fight skips that round.** When a hostile falls, `TurnManager._fight_is_won` asks whether
+  anything is still fighting the squad or is ALERT within `CALM_RADIUS` tiles of a standing soldier.
+  If not, the round closes as soon as the action on screen has finished, whoever had yet to act, and
+  the next opens in `EXPLORATION`. Only a kill asks: a squad that ran still waits for its pursuers
+  to lose contact and then for the quiet round. That includes an opening shot that kills its only
+  target (B.7), which still counts as contact but closes straight away.
 - **On the switch (E10):**
   - clear `hunkered`, both ends of suppression (`release_suppression`, `suppressed_by`) and
     `stunned` on every unit, and **keep** `on_overwatch`;

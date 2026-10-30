@@ -1275,6 +1275,8 @@ func _set_life_state(new_state: LifeState) -> void:
 	life_state = new_state
 	_shown_life_state = new_state
 	_present_life_state(old)
+	if new_state != LifeState.ACTIVE:
+		TurnManager.notify_unit_down(self)
 
 
 ## How a life-state change LOOKS, on every peer: the collapse, the corpse tint,

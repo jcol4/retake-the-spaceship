@@ -94,6 +94,8 @@ func _ready() -> void:
 		# client that is still in its debrief.
 		if SteamLobby.is_host():
 			SteamLobby.ready_peers.clear()
+	if SteamLobby.current_lobby_id != 0:  # in a lobby, not merely holding a peer
+		add_child(SquadCursors.new())
 	# Spawning rolls stats off the global RNG (the alien/merc presets, the
 	# veteran roll below, a contract with no offer), and every co-op peer spawns
 	# its own copy of the board — so every peer seeds it with the deployment's

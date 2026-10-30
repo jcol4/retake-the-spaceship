@@ -64,6 +64,12 @@ func _initialize() -> void:
 	await _check_wait_keeps_overwatch()
 	await _check_overwatch_fires_on_patrol()
 	await _check_quiet_round_returns()
+	await _check_last_kill_returns()
+	await _check_living_fighter_holds()
+	await _check_nearby_alert_holds()
+	await _check_distant_alert_ignored()
+	await _check_friendly_fall_is_no_kill()
+	await _check_opening_kill_returns()
 	await _check_redirect()
 	await _check_ownership()
 
@@ -546,6 +552,114 @@ func _check_quiet_round_returns() -> void:
 	_check(_turns.pool.is_empty() and _turns.steps == 0, "and the pool and clock reset")
 	_end([a, e, other])
 	await process_frame
+
+
+func _check_last_kill_returns() -> void:
+	var fight = await _start_fight([])
+	var a = fight[0]
+	var e = fight[1]
+	var round_before: int = _turns.turn_number
+	var ap_before: int = a.ap
+	_check(ap_before > 0, "sanity: the soldier still has AP to give up")
+	e._set_life_state(LIFE.DEAD)
+	await _settle()
+	_check(_turns.in_exploration(), "the last kill returns to exploration at once, with no End Turn")
+	_check(_turns.turn_number == round_before + 1, "and the round still closes (%d -> %d)" % [round_before, _turns.turn_number])
+	_end([a, e])
+	await process_frame
+
+
+func _check_living_fighter_holds() -> void:
+	var fight = await _start_fight([AWARE.COMBAT])
+	var a = fight[0]
+	var e = fight[1]
+	var alive = fight[2]
+	e._set_life_state(LIFE.DEAD)
+	await _settle()
+	_check(not _turns.in_exploration(), "a kill with another hostile still fighting ends nothing")
+	_check(_turns.active_unit == a, "and the soldier keeps their activation")
+	_end([a, e, alive])
+	await process_frame
+
+
+func _check_nearby_alert_holds() -> void:
+	var fight = await _start_fight([AWARE.ALERT])
+	var a = fight[0]
+	var e = fight[1]
+	var alert = fight[2]
+	e._set_life_state(LIFE.DEAD)
+	await _settle()
+	_check(not _turns.in_exploration(), "an ALERT hostile nearby keeps the fight open")
+	_end([a, e, alert])
+	await process_frame
+
+
+func _check_distant_alert_ignored() -> void:
+	var fight = await _start_fight([AWARE.ALERT])
+	var a = fight[0]
+	var e = fight[1]
+	var alert = fight[2]
+	alert.grid_pos = a.grid_pos + Vector3i(_turns.CALM_RADIUS + 1, 0, 0)
+	e._set_life_state(LIFE.DEAD)
+	await _settle()
+	_check(_turns.in_exploration(), "an ALERT hostile past CALM_RADIUS does not")
+	_end([a, e, alert])
+	await process_frame
+
+
+func _check_friendly_fall_is_no_kill() -> void:
+	var fight = await _start_fight([])
+	var a = fight[0]
+	var e = fight[1]
+	var friend = await _spawn(ENEMY, ANCHOR + Vector3i(-3, 0, 2))
+	friend.faction = a.faction
+	# The enemy has left the fight, as a squad that ran away leaves one.
+	e.alert_state = AWARE.UNAWARE
+	e.target = null
+	friend._set_life_state(LIFE.DEAD)
+	await _settle()
+	_check(not _turns.in_exploration(), "only a hostile falling counts as winning the fight")
+	_end([a, e, friend])
+	await process_frame
+
+
+func _check_opening_kill_returns() -> void:
+	_start_exploring()
+	var a = await _spawn(PLAYER, ANCHOR)
+	var e = await _spawn(ENEMY, ANCHOR + Vector3i(4, 0, 2))
+	var round_before: int = _turns.turn_number
+	_turns.notify_attack(a, 0)
+	e._set_life_state(LIFE.DEAD)
+	await _settle()
+	_check(_turns.in_exploration(), "an opening shot that kills its only target leaves no fight to sit through")
+	_check(_turns.turn_number == round_before + 1 and a.pre_spent_ap == 0,
+		"and the round closes with the opening shot's cost forgotten")
+	_end([a, e])
+	await process_frame
+
+
+## A soldier with the draw and AP in hand, in a fight with one enemy in COMBAT, plus
+## one more hostile in each of `others`' states. [soldier, enemy, others...]. All are
+## stunned, so nobody shoots the soldier while the draw comes round.
+func _start_fight(others: Array) -> Array:
+	_start_exploring()
+	var a = await _spawn(PLAYER, ANCHOR)
+	var e = await _spawn(ENEMY, ANCHOR + Vector3i(4, 0, 2))
+	var out := [a, e]
+	for state in others:
+		var other = await _spawn(ENEMY, ANCHOR + Vector3i(-4, 0, 2))
+		other.alert_state = state
+		other.target = a if state == AWARE.COMBAT else null
+		other.stunned = true
+		out.append(other)
+	e.stunned = true
+	e._enter_combat(a, "spotted")
+	var guard := 0
+	while _turns.active_unit != a and guard < 400:
+		guard += 1
+		await process_frame
+	_check(_turns.active_unit == a and not _turns.in_exploration(), "sanity: the soldier has the draw")
+	return out
 
 
 func _check_redirect() -> void:

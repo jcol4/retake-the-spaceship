@@ -182,6 +182,7 @@ func _show_waiting() -> void:
 	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	info.text = "The host runs the campaign: roster, stash and contracts are theirs. You'll drop in with your share of the squad when they launch the next mission."
 	box.add_child(info)
+	box.add_child(PlayerColorRow.new())
 	box.add_child(_button("Leave", _back_to_title))
 	_waiting = true
 

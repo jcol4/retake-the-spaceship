@@ -18,6 +18,9 @@ var fullscreen: bool = false
 var sfx_volume: float = 1.0
 var music_volume: float = 0.7
 var ui_volume: float = 1.0
+## The co-op colour this player last picked, as an index into
+## CoopPlayers.PALETTE. -1: never picked, so take the default for their slot.
+var preferred_color: int = -1
 
 
 func _ready() -> void:
@@ -55,6 +58,11 @@ func set_ui_volume(value: float) -> void:
 	_save()
 
 
+func set_preferred_color(index: int) -> void:
+	preferred_color = index
+	_save()
+
+
 func _apply() -> void:
 	DisplayServer.window_set_mode(
 		DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen else DisplayServer.WINDOW_MODE_WINDOWED
@@ -89,6 +97,7 @@ func _load() -> void:
 	sfx_volume = cfg.get_value("audio", "sfx", 1.0)
 	music_volume = cfg.get_value("audio", "music", 0.7)
 	ui_volume = cfg.get_value("audio", "ui", 1.0)
+	preferred_color = cfg.get_value("coop", "color", -1)
 
 
 func _save() -> void:
@@ -97,4 +106,5 @@ func _save() -> void:
 	cfg.set_value("audio", "sfx", sfx_volume)
 	cfg.set_value("audio", "music", music_volume)
 	cfg.set_value("audio", "ui", ui_volume)
+	cfg.set_value("coop", "color", preferred_color)
 	cfg.save(SAVE_PATH)

@@ -1122,7 +1122,7 @@ played on today's deck sizes before anything grows. Steps 9 and 10 are planned t
 [`EXPLORATION_PLAN.md`](EXPLORATION_PLAN.md): the groundwork co-op needs is built into step 9.
 
 9. **Exploration mode on current decks:** **[built; not yet human-playtested or retuned]**
-   - the mode switch (enter on squad combat, leave after one quiet round);
+   - the mode switch (enter on squad combat, leave after one quiet round, or at once when the last kill leaves nothing fighting the squad or alert nearby);
    - free movement and free actions;
    - the step clock driving every round timer and the non-combat AI;
    - per-step detection and interrupts;

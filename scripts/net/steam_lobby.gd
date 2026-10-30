@@ -103,6 +103,7 @@ func leave() -> void:
 		Steam.leaveLobby(current_lobby_id)
 	current_lobby_id = 0
 	ready_peers.clear()
+	CoopPlayers.clear()
 
 
 func _on_lobby_created(connect_result: int, lobby_id: int) -> void:

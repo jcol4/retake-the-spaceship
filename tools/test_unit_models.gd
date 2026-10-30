@@ -40,13 +40,23 @@ func _init() -> void:
 			"%s is rigged" % variant)
 		root.free()
 
-	var merc_flash: Node = (load("res://assets/models/merc.glb") as PackedScene) \
+	var merc_model: Node = (load("res://assets/models/merc.glb") as PackedScene) \
 		.instantiate()
-	_check(merc_flash.find_child("muzzle_flash", true, false) != null,
-		"merc carries the muzzle_flash node the flash and rig light mount on")
+	_check(merc_model.find_child("weapon_mount", true, false) != null,
+		"merc carries the weapon_mount node its gun hangs from")
+	merc_model.free()
+	# The flash and rig light mount on the gun's marker, so any gun a merc can be
+	# handed needs one, or that soldier fires with no flash.
+	var guns := DirAccess.get_files_at("res://assets/models/guns/")
+	for file: String in guns:
+		if file.get_extension() != "glb":
+			continue
+		var gun: Node = (load("res://assets/models/guns/" + file) as PackedScene).instantiate()
+		_check(gun.find_child("muzzle_flash", true, false) != null,
+			"%s carries the muzzle_flash node the flash and rig light mount on" % file)
+		gun.free()
 	_check(ResourceLoader.exists("res://assets/vfx/muzzle_flash.glb"),
 		"the baked muzzle flash exists (tools/bake_muzzle_flash.py)")
-	merc_flash.free()
 
 	var sidecar: Variant = JSON.parse_string(
 		FileAccess.get_file_as_string("res://assets/models/merc.json"))
