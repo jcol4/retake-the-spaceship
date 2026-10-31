@@ -95,9 +95,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	# Discrete presses, not held-key polling: a snap is a step, and holding Q
 	# should not spin the deck.
 	if event.is_action_pressed("camera_snap_left"):
-		snap_by(1)
-	elif event.is_action_pressed("camera_snap_right"):
 		snap_by(-1)
+	elif event.is_action_pressed("camera_snap_right"):
+		snap_by(1)
 	elif event.is_action_pressed("camera_zoom_in"):
 		_zoom_target = maxf(MIN_ZOOM_SIZE, _zoom_target - ZOOM_STEP)
 	elif event.is_action_pressed("camera_zoom_out"):

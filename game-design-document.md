@@ -212,6 +212,16 @@ Detail: [`docs/design/factions/contractors/weapons/`](docs/design/factions/contr
 
 - **Fixed magazine plus a limited mission reserve.** An empty magazine means Reload before firing.
   Running out of reserve is a real way for a long mission to go wrong.
+- **The reserve is separate magazines, not a pool of rounds.** Reload loads the fullest spare and
+  the one coming out goes back on the vest with whatever it still holds, so no round is lost. Any
+  swap is allowed while the gun isn't full and a spare has rounds, even one that leaves the gun
+  with less. Magazine attachments enlarge every magazine rather than changing how many are carried.
+  The Shotgun is the exception: a tube fed from a pool of loose shells. Unlimited weapons (robots,
+  aliens, the door gun) have no magazines to swap.
+- **Ammo reads off the model.** A bar on the primary's right side drains from the barrel toward the
+  grip, and a pip per spare magazine sits beside the health band on the back, fullest at the bottom.
+  Both use the same colours for how full a magazine is: 70% and up pale yellow, 35% and up orange,
+  below that red, and empty shows nothing lit.
 - **Attachments** (underbarrel, optic, muzzle, magazine and so on) and **ammo types** modify
   accuracy, damage, noise, visibility and AP. They are fitted on the pre-mission loadout screen.
   Attachments are designed as **tiered loot** (§7.5).

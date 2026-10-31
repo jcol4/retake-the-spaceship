@@ -371,6 +371,8 @@ func _build_model() -> void:
 	_band_glow = null
 	_down_pips.clear()
 	_pip_glows.clear()
+	_ammo_bar = null
+	_mag_pips.clear()
 	_pose_root = null
 	_status_material = null
 	_floor_materials.clear()
@@ -535,7 +537,7 @@ func _dress_surfaces(root: Node) -> void:
 	for node in root.find_children("*", "MeshInstance3D", true, false):
 		var mesh := node as MeshInstance3D
 		if mesh.mesh == null or mesh == _muzzle or mesh == _health_band \
-				or mesh in _down_pips:
+				or mesh in _down_pips or mesh == _ammo_bar or mesh in _mag_pips:
 			continue
 		mesh.layers |= CHARACTER_LAYER
 		for s in mesh.mesh.get_surface_count():
@@ -763,6 +765,32 @@ const GLOW_BONE := "chest"
 const PIP_GLOW_ENERGY := 0.0875
 const PIP_GLOW_RANGE := 0.375
 const PIP_GLOW_OFFSET := 0.04
+## THE AMMO READOUT. A bar on the primary's right side (tools/add_gun_ammo_bars.py)
+## that drains toward the stock, and a pip on the back per spare magazine
+## (tools/add_merc_lights.py), fullest at the bottom and dark once empty. Bar and
+## pips share AMMO_BRACKETS, so a colour means the same amount in either. Always
+## the primary: a soldier with the sidearm out still holds the primary's model,
+## which is the gun the bar is on.
+const AMMO_BAR_NODE := "ammo_bar"
+const MAG_PIP_NODES: Array[String] = [
+	"mag_pip_1", "mag_pip_2", "mag_pip_3", "mag_pip_4", "mag_pip_5", "mag_pip_6",
+]
+## [magazine fraction at or above which, colour], highest first. The cuts put
+## every size of magazine through all three: a 3-round mag reads pale yellow,
+## orange, red, then an empty bar shows nothing.
+const AMMO_BRACKETS := [
+	[0.7, Color(1.0, 0.92, 0.55)],  # pale yellow
+	[0.35, Color(1.0, 0.48, 0.05)],  # orange
+	[0.0, Color(1.0, 0.1, 0.05)],  # red
+]
+## At 1.0 rather than LIGHT_ENERGY: the environment has no tonemapper, so anything
+## brighter clips, which would turn the orange yellow and the pale yellow white.
+const AMMO_LIGHT_ENERGY := 1.0
+
+var _ammo_bar: MeshInstance3D = null
+var _ammo_bar_material: StandardMaterial3D = null
+var _mag_pips: Array[MeshInstance3D] = []
+var _mag_pip_materials: Array[StandardMaterial3D] = []
 
 var _health_band: MeshInstance3D = null
 var _band_glow: OmniLight3D = null
@@ -779,10 +807,14 @@ var _status_lights: Dictionary = {}
 
 ## Shows the status lights. `hp_fraction` picks the band's bracket while the
 ## soldier is up; downed, the band pulses red instead, and dead it goes dark.
-## `downs` lights that many pips. Cheap to call on every change: an unchanged
-## state is ignored, so a running pulse is not restarted.
-func set_status_lights(hp_fraction: float, downs: int, downed: bool, dead: bool) -> void:
-	var state := {"hp": hp_fraction, "downs": downs, "downed": downed, "dead": dead}
+## `downs` lights that many pips. `mag_fraction` sets the ammo bar, and
+## `spare_mags` holds how full each spare magazine is, fullest first, one pip each;
+## dead, both go dark. Cheap to call on every change: an unchanged state is
+## ignored, so a running pulse is not restarted.
+func set_status_lights(hp_fraction: float, downs: int, downed: bool, dead: bool,
+		mag_fraction: float, spare_mags: Array) -> void:
+	var state := {"hp": hp_fraction, "downs": downs, "downed": downed, "dead": dead,
+		"mag": mag_fraction, "spare_mags": spare_mags}
 	if state == _status_lights:
 		return
 	_status_lights = state
@@ -810,6 +842,20 @@ func _find_status_lights(inst: Node) -> void:
 			_down_pips.append(pip)
 			_pip_materials.append(mat)
 			_pip_glows.append(_build_glow(pip, PIP_GLOW_RANGE, PIP_GLOW_OFFSET))
+	_ammo_bar = inst.find_child(AMMO_BAR_NODE, true, false) as MeshInstance3D
+	_ammo_bar_material = null
+	if _ammo_bar:
+		_ammo_bar_material = _glow_material()
+		_ammo_bar.material_override = _ammo_bar_material
+	_mag_pips.clear()
+	_mag_pip_materials.clear()
+	for node_name in MAG_PIP_NODES:
+		var pip := inst.find_child(node_name, true, false) as MeshInstance3D
+		if pip:
+			var mat := _glow_material()
+			pip.material_override = mat
+			_mag_pips.append(pip)
+			_mag_pip_materials.append(mat)
 	_apply_status_lights()
 
 
@@ -887,6 +933,7 @@ func _apply_status_lights() -> void:
 	if _band_pulse:
 		_band_pulse.kill()
 		_band_pulse = null
+	_apply_ammo_lights()
 	if not shown:
 		return
 	var dead: bool = _status_lights.dead
@@ -913,6 +960,32 @@ func _apply_status_lights() -> void:
 			glow.light_color = PIP_COLOR
 			glow.light_energy = PIP_GLOW_ENERGY
 			glow.visible = lit
+
+
+## An empty bar is hidden outright rather than scaled to nothing: a zero scale is
+## a degenerate basis to the renderer.
+func _apply_ammo_lights() -> void:
+	var shown := not _status_lights.is_empty()
+	var dead: bool = shown and _status_lights.dead
+	if _ammo_bar:
+		var mag: float = _status_lights.mag if shown and not dead else 0.0
+		_ammo_bar.visible = mag > 0.0
+		if mag > 0.0:
+			_ammo_bar.scale.z = minf(mag, 1.0)
+			_set_glow(_ammo_bar_material, _ammo_color(mag), AMMO_LIGHT_ENERGY)
+	var spare: Array = _status_lights.spare_mags if shown and not dead else []
+	for i in _mag_pips.size():
+		_mag_pips[i].visible = shown
+		var fill: float = spare[i] if i < spare.size() else 0.0
+		_set_glow(_mag_pip_materials[i], _ammo_color(fill) if fill > 0.0 else LIGHT_OFF_COLOR,
+			AMMO_LIGHT_ENERGY if fill > 0.0 else 0.0)
+
+
+static func _ammo_color(mag_fraction: float) -> Color:
+	for bracket: Array in AMMO_BRACKETS:
+		if mag_fraction >= bracket[0]:
+			return bracket[1]
+	return AMMO_BRACKETS[-1][1]
 
 
 static func _bracket_color(hp_fraction: float) -> Color:

@@ -127,8 +127,9 @@ func _ready() -> void:
 		stats.sidearm = WeaponPresets.make_sidearm()
 	stowed_ammo = stats.sidearm.effective_mag_size()
 	stowed_reserve = stats.sidearm.effective_reserve()
+	stowed_reserve_mags = stats.sidearm.packed_mags(stowed_reserve)
 	# Host-side changes arrive through these; a client's through _on_replicated.
-	for changed: Signal in [hp_changed, downed, died, revived]:
+	for changed: Signal in [hp_changed, downed, died, revived, ammo_changed]:
 		changed.connect(_refresh_status_lights.unbind(1))
 	_refresh_status_lights()
 	TurnManager.mode_changed.connect(_on_mode_changed)
@@ -154,11 +155,34 @@ func _on_replicated() -> void:
 
 
 ## The suit's status lights (UnitVisual.set_status_lights): the HP bracket on the
-## back, the downs taken on the chest. Squad soldiers only — the rival crew wears
-## the same suit, with them dark.
+## back, the downs taken on the chest, and the primary's magazine and spare mags.
+## Squad soldiers only — the rival crew wears the same suit, with them dark.
 func _refresh_status_lights() -> void:
+	var drawn := stats.sidearm_drawn
+	var mag_size := maxi(1, stats.weapon.effective_mag_size()) if stats.weapon else 1
+	var rounds := stowed_ammo if drawn else ammo
+	var spare_rounds := stowed_reserve if drawn else reserve
+	var spare_mags := stowed_reserve_mags if drawn else reserve_mags
 	visual.set_status_lights(float(current_hp) / maxi(1, stats.max_hp()), down_count,
-		life_state == LifeState.DOWNED, life_state == LifeState.DEAD)
+		life_state == LifeState.DOWNED, life_state == LifeState.DEAD,
+		float(rounds) / mag_size, _spare_mag_fractions(spare_rounds, spare_mags, mag_size))
+
+
+## How full each spare magazine is, fullest first, for the pips. A reserve that is
+## not magazines reads as if it were: loose shells as reloads' worth, the last one
+## part full, and an unlimited reserve as every pip full.
+func _spare_mag_fractions(spare_rounds: int, spare_mags: PackedInt32Array, mag_size: int) -> Array:
+	var fractions := []
+	if spare_rounds < 0:
+		fractions.resize(UnitVisual.MAG_PIP_NODES.size())
+		fractions.fill(1.0)
+	elif spare_mags.is_empty():
+		for i in ceili(float(spare_rounds) / mag_size):
+			fractions.append(minf(float(spare_rounds - i * mag_size) / mag_size, 1.0))
+	else:
+		for mag in spare_mags:
+			fractions.append(float(mag) / mag_size)
+	return fractions
 
 
 func set_mode(new_mode: Mode) -> void:
@@ -727,6 +751,9 @@ func _equip(weapon_id: int, attachment_ids: PackedInt32Array, ammo_id: int) -> v
 	stats.weapon = WeaponPresets.make(weapon_id, attachment_ids, ammo_id)
 	ammo = stats.mag_size
 	reserve = stats.weapon.effective_reserve()
+	# Dealt here too: a new gun can carry the same total in a different mag size,
+	# which `reserve` alone would see as no change.
+	reserve_mags = stats.weapon.packed_mags(reserve)
 	sync_gun_model()
 
 

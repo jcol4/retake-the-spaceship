@@ -4,6 +4,9 @@ extends Node3D
 
 signal hp_changed(unit: Unit)
 signal ap_changed(unit: Unit)
+## The rounds in hand or in reserve changed, whatever changed them, on every peer:
+## a replicated value comes through the same setters. For the model's ammo readout.
+signal ammo_changed(unit: Unit)
 ## The unit left the fight: ACTIVE -> DOWNED, or ACTIVE -> DEAD for a type that
 ## dies outright (GDD §4.4). Kept meaning "out of action" rather than "downed
 ## specifically", because every listener (a squad blackboard releasing claims, a
@@ -124,10 +127,29 @@ func is_owned_by_local_player() -> bool:
 var grid_pos: Vector3i
 var current_hp: int
 var ap: int = 0
-var ammo: int
+var ammo: int:
+	set(value):
+		if value != ammo:
+			ammo = value
+			ammo_changed.emit(self)
 # Spare rounds beyond the loaded magazine. -1 means unlimited (never
-# decremented by do_reload) — see WeaponData.starting_reserve.
-var reserve: int = -1
+# decremented by do_reload) — see WeaponData.starting_reserve. Assigning it means
+# "this many rounds, freshly packed": it re-deals `reserve_mags` into full ones.
+var reserve: int = -1:
+	set(value):
+		if value != reserve:
+			reserve = value
+			var weapon := stats.active_weapon() if stats else null
+			reserve_mags = weapon.packed_mags(value) if weapon else PackedInt32Array()
+			ammo_changed.emit(self)
+## The rounds in each spare magazine, fullest first, empties kept: `reserve` split
+## into what a reload actually swaps. Empty for a reserve that is not magazines
+## (unlimited, or the Shotgun's loose shells), which reloads from `reserve` alone.
+var reserve_mags := PackedInt32Array():
+	set(value):
+		if value != reserve_mags:
+			reserve_mags = value
+			ammo_changed.emit(self)
 
 ## Where a unit stands between fighting and gone (GDD §4.4).
 ##   ACTIVE  in the fight: in the pool, a target, a body that blocks a tile.
@@ -208,6 +230,7 @@ var carried_by_path: NodePath = NodePath()
 ## and each gun keeps its own magazine and reserve (extraction plan 2.5).
 var stowed_ammo: int = 0
 var stowed_reserve: int = 0
+var stowed_reserve_mags := PackedInt32Array()
 
 ## The soldier's own choice of gun (GDD §4.3 "Switch weapon", 1 AP): true = the
 ## pistol. Carrying a body forces the pistol whatever this says
@@ -517,9 +540,10 @@ func _setup_replication() -> void:
 	# additions; `_after_replication` turns the links and life-state changes back
 	# into visuals on the client.
 	for prop in ["global_position", "rotation:y", "current_hp", "ap", "life_state",
-			"ammo", "reserve", "hunkered", "on_overwatch", "flashlight_on",
+			"ammo", "reserve", "reserve_mags", "hunkered", "on_overwatch", "flashlight_on",
 			"downed_hp", "down_count", "carrying_path", "carried_by_path",
-			"stowed_ammo", "stowed_reserve", "inventory_codes", "sidearm_selected"]:
+			"stowed_ammo", "stowed_reserve", "stowed_reserve_mags",
+			"inventory_codes", "sidearm_selected"]:
 		var path := NodePath(".:%s" % prop)
 		config.add_property(path)
 		config.property_set_replication_mode(path, SceneReplicationConfig.REPLICATION_MODE_ALWAYS)
@@ -1494,9 +1518,13 @@ func _swap_weapon_rounds() -> void:
 	ammo = stowed_ammo
 	stowed_ammo = a
 	var r := reserve
+	var m := reserve_mags
 	reserve = stowed_reserve
+	reserve_mags = stowed_reserve_mags  # after `reserve`, which re-deals them
 	stowed_reserve = r
+	stowed_reserve_mags = m
 	ap_changed.emit(self)  # the HUD reads ammo off the same refresh
+	ammo_changed.emit(self)  # the setters fired with the stowed pair half swapped
 
 
 ## Which gun is in hand, from the two things that decide it: carrying a body
@@ -2479,18 +2507,37 @@ func _end_activation_ap() -> void:
 
 func do_reload() -> void:
 	# Coroutine, unlike the other two — callers MUST `await`, or the unit will
-	# still be reloading on screen when its next action resolves. Draws from
-	# `reserve` (spare rounds beyond the loaded mag); reserve < 0 means
-	# unlimited, so it's never decremented — see WeaponData.starting_reserve.
-	var needed := stats.mag_size - ammo
-	var drawn := needed
-	if reserve >= 0:
-		drawn = mini(needed, reserve)
-		reserve -= drawn
-	ammo += drawn
+	# still be reloading on screen when its next action resolves. A weapon on
+	# magazines swaps one; anything else draws from `reserve` (spare rounds beyond
+	# the loaded mag), where reserve < 0 means unlimited, so it's never decremented
+	# — see WeaponData.starting_reserve.
+	if not reserve_mags.is_empty():
+		_swap_magazine()
+	else:
+		var needed := stats.mag_size - ammo
+		var drawn := needed
+		if reserve >= 0:
+			drawn = mini(needed, reserve)
+			reserve -= drawn
+		ammo += drawn
 	is_busy = true
 	await visual.play_action(UnitVisual.RELOAD)
 	is_busy = false
+
+
+## Loads the fullest spare magazine, and the one coming out goes back on the vest
+## with whatever it still holds. No round is lost, so `reserve` moves by exactly
+## what the gun gained. Allowed even when it leaves the gun with less: can_reload
+## asks only for a gun not full and a spare with rounds in it.
+func _swap_magazine() -> void:
+	var mags := reserve_mags
+	var loaded := mags[0]
+	mags[0] = ammo
+	mags.sort()
+	mags.reverse()
+	reserve += ammo - loaded
+	reserve_mags = mags  # after `reserve`, which re-deals them
+	ammo = loaded
 
 
 func toggle_flashlight() -> void:

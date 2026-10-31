@@ -51,6 +51,7 @@ const DATA := {
 	WeaponId.SHOTGUN: {
 		"display_name": "Shotgun", "base_accuracy": 20, "damage": 14,
 		"mag_size": 6, "starting_reserve": 15,  # pump-action: loose shells, not discrete mags (21 total)
+		"loose_reserve": true,
 		"optimal_range": 3, "falloff_rate": 15,
 		"fire_ap_modifier": 0, "reload_ap_modifier": 0, "noise_radius": 5,
 	},
@@ -121,6 +122,7 @@ static func make(id: WeaponId, attachment_ids: PackedInt32Array = PackedInt32Arr
 	w.damage = d["damage"]
 	w.mag_size = d["mag_size"]
 	w.starting_reserve = d["starting_reserve"]
+	w.loose_reserve = d.get("loose_reserve", false)
 	w.optimal_range = d["optimal_range"]
 	w.falloff_rate = d["falloff_rate"]
 	w.fire_ap_modifier = d["fire_ap_modifier"]

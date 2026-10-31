@@ -44,7 +44,24 @@ func _init() -> void:
 		.instantiate()
 	_check(merc_model.find_child("weapon_mount", true, false) != null,
 		"merc carries the weapon_mount node its gun hangs from")
+	for i in range(1, 7):
+		_check(merc_model.find_child("mag_pip_%d" % i, true, false) is MeshInstance3D,
+			"merc carries mag_pip_%d for the spare-magazine readout" % i)
 	merc_model.free()
+	# Every gun a soldier can be issued carries the ammo bar, unrotated, because
+	# UnitVisual drains it along its local Z from an origin at the rear end.
+	for gun_name: StringName in [&"assault_rifle", &"battle_rifle", &"lmg", &"smg", &"shotgun"]:
+		var armed: Node = (load("res://assets/models/guns/%s.glb" % gun_name) as PackedScene) \
+			.instantiate()
+		var bar := armed.find_child("ammo_bar", true, false) as MeshInstance3D
+		_check(bar != null, "%s carries the ammo_bar" % gun_name)
+		if bar:
+			var box := bar.get_aabb()
+			_check(bar.basis.is_equal_approx(Basis.IDENTITY)
+				and is_zero_approx(box.end.z) and box.position.z < 0.0,
+				"%s's bar runs from its origin down the bore" % gun_name)
+			_check(box.position.x > 0.0, "%s's bar is on the gun's right side" % gun_name)
+		armed.free()
 	# The flash and rig light mount on the gun's marker, so any gun a merc can be
 	# handed needs one, or that soldier fires with no flash.
 	var guns := DirAccess.get_files_at("res://assets/models/guns/")
