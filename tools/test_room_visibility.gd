@@ -22,6 +22,7 @@ const RIGHT_ROOM := Vector3i(17, 0, 3)
 
 var _failures := 0
 var _grid: Node
+var _tm: Node
 var _map
 var _player
 var _enemy
@@ -29,7 +30,8 @@ var _enemy
 
 func _initialize() -> void:
 	_grid = root.get_node_or_null("GridManager")
-	_map = load("res://scenes/test_map.tscn").instantiate()
+	_tm = root.get_node_or_null("TurnManager")
+	_map =load("res://scenes/test_map.tscn").instantiate()
 	_map.layout_path = "res://maps/test_deck.txt"
 	root.add_child(_map)
 
@@ -44,6 +46,9 @@ func _initialize() -> void:
 	await process_frame
 
 	_check_gating()
+	_check_generated_corridors()
+	await _check_sight_and_memory()
+	await _check_walk_into_view()
 	await _check_overwatch_survives_fast_forward()
 
 	print("")
@@ -80,18 +85,92 @@ func _check_gating() -> void:
 		"but the room on its far side is not")
 
 
-func _check_overwatch_survives_fast_forward() -> void:
-	# Squad member at the doorway mouth, holding Overwatch, with a clear line down
-	# the row into the middle room. The alien walks that row while UNDRAWN, so its
-	# move is fast-forwarded — and the reserved shot must still go off.
+## A generated deck's links join room to room, skipping the corridor between them,
+## so revealing by `linked_rooms` never drew a corridor there: a merc in the hall
+## off the squad's room fought it undrawn, and so instantly. Seed 1873861863 is
+## the deck that turned it up.
+func _check_generated_corridors() -> void:
+	var gen = load("res://scripts/map_generator.gd")
+	var cfg = load("res://scripts/campaign/contract_offer.gd").config_for(0)
+	var data = gen.generate(1873861863, cfg)
+	var every_corridor_touches_a_room := true
+	# A corridor carved entirely over earlier ones owns no tile at all; it has no
+	# floor to stand on, so nothing to reveal.
+	var owned := {}
+	for pos in data.room_of:
+		owned[data.room_of[pos]] = true
+	for corridor: int in data.corridors:
+		if not owned.has(corridor):
+			continue
+		var rooms: Array = data.touching_regions(corridor).filter(
+			func(i: int) -> bool: return not (i in data.corridors))
+		if rooms.is_empty():
+			every_corridor_touches_a_room = false
+	_check(not data.corridors.is_empty() and every_corridor_touches_a_room,
+		"every generated corridor touches a room it opens onto")
+	var room: int = data.room_index_at(Vector3i(23, 0, 16))
+	var hall: int = data.room_index_at(Vector3i(27, 0, 15))
+	_check(hall in data.corridors and not (hall in data.linked_rooms(room)),
+		"the hall off room %d is not in its links" % room)
+	_check(hall in data.touching_regions(room), "but does touch it")
+
+
+## Beyond the revealed rooms, what a soldier can see is drawn (GDD Sec 10.6), and
+## stays drawn for the rest of the round once seen.
+func _check_sight_and_memory() -> void:
 	_move_to(_player, Vector3i(4, 0, 7))
 	_move_to(_enemy, Vector3i(11, 0, 7))
 	await process_frame
+	_check(not _map._revealed.has(_map.data.room_index_at(Vector3i(11, 0, 7))),
+		"the middle room is not revealed")
+	_check(_grid.has_line_of_sight(_player, _enemy), "but the soldier at the door sees down the row")
+	_check(_enemy.get("_rendered"), "so the alien there is drawn")
 
-	_check(not _enemy.get("_rendered"), "the alien in the middle room is undrawn")
-	_check(_enemy.is_instant(), "so its move will be fast-forwarded")
+	# Out of sight in the right room, but seen this round: still drawn...
+	_move_to(_enemy, RIGHT_ROOM)
+	await process_frame
+	_check(not _map.squad_sees_tile(RIGHT_ROOM), "the right room is out of sight")
+	_check(_enemy.get("_rendered"), "a unit spotted this round stays drawn out of sight")
+	# ...until the round ends with nobody seeing it.
+	_tm.turn_ending.emit(_tm.turn_number)
+	await process_frame
+	_check(not _enemy.get("_rendered"), "and is forgotten at the round's end")
+
+
+## B1: visibility is asked per step, not per frame. An undrawn walk takes no
+## frames, so before that a unit walking into sight crossed the whole way undrawn
+## and appeared at the end of it.
+func _check_walk_into_view() -> void:
+	_move_to(_player, Vector3i(4, 0, 7))
+	var start := Vector3i(7, 0, 2)
+	var path: Array[Vector3i] = []
+	for z in range(3, 8):
+		path.append(Vector3i(7, 0, z))
+	_move_to(_enemy, start)
+	_tm.turn_ending.emit(_tm.turn_number)  # forget the last check's sighting
+	await process_frame
+	_check(not _map.squad_sees_tile(start) and _map.squad_sees_tile(path[-1]),
+		"the walk starts out of sight and ends in it")
+	_check(not _enemy.get("_rendered"), "the alien starts undrawn")
+	var drawn_at: Array = []
+	var record := func(_u) -> void: drawn_at.append(_enemy.get("_rendered"))
+	_enemy.stepped.connect(record)
+	await _enemy.move_along(path)
+	_enemy.stepped.disconnect(record)
+	_check(not drawn_at[0], "its first step, out of sight, stays undrawn")
+	_check(drawn_at[-1], "it is drawn from the step that brings it into sight")
+
+
+func _check_overwatch_survives_fast_forward() -> void:
+	# Squad member at the doorway mouth, holding Overwatch, with a clear line down
+	# the row into the middle room. The alien walks that row — drawn, now that
+	# sight draws it, so the move only fast-forwards headless — and the reserved
+	# shot must go off either way.
+	_move_to(_player, Vector3i(4, 0, 7))
+	_move_to(_enemy, Vector3i(11, 0, 7))
+	await process_frame
 	_check(_grid.has_line_of_sight(_player, _enemy),
-		"but the squad member at the door can see down the row")
+		"the squad member at the door can see down the row")
 
 	_player.on_overwatch = true
 	_player.ammo = maxi(_player.ammo, 1)

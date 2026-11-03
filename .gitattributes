@@ -1,3 +1,6 @@
 *.fbx filter=lfs diff=lfs merge=lfs -text
 *.blend filter=lfs diff=lfs merge=lfs -text
 *.glb filter=lfs diff=lfs merge=lfs -text
+assets/room_tiles/quaternius_scifi/**/*.gltf filter=lfs diff=lfs merge=lfs -text
+assets/room_tiles/quaternius_scifi/**/*.bin  filter=lfs diff=lfs merge=lfs -text
+assets/room_tiles/quaternius_scifi/**/*.png  filter=lfs diff=lfs merge=lfs -text

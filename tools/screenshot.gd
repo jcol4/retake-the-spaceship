@@ -2,7 +2,10 @@ extends SceneTree
 ## Boots the real game, waits, and writes a PNG of the frame. Used to eyeball
 ## model/rig wiring that a headless run can't show.
 ##   godot --path . --script res://tools/screenshot.gd
-## Honours SHOT_PATH and SHOT_DELAY environment variables.
+## Honours SHOT_PATH and SHOT_DELAY environment variables, and SHOT_YAW (quarter
+## turns of the tactical camera, as E presses) to shoot the deck from each side,
+## SHOT_FOCUS ("x,z" cell to centre on) and SHOT_CLEAN (UI off, fill light at
+## that energy) for map art review.
 
 var _elapsed := 0.0
 var _delay := 2.0
@@ -93,6 +96,36 @@ func _process(delta: float) -> bool:
 	# turns it into a coroutine that silently never reaches the save.
 	if not _prepared:
 		_prepared = true
+		if OS.has_environment("SHOT_YAW"):
+			# Quarter turns, as if E were pressed that many times; the extra
+			# second lets the snap tween land before the shot.
+			var rig := root.get_tree().get_first_node_in_group("camera_rig")
+			rig.call("snap_by", int(OS.get_environment("SHOT_YAW")))
+			_delay = _elapsed + 1.0
+			_prepared = false
+			OS.unset_environment("SHOT_YAW")
+			return false
+		if OS.has_environment("SHOT_FOCUS"):
+			# "x,z" grid cell to centre the tactical camera on.
+			var xz := OS.get_environment("SHOT_FOCUS").split(",")
+			var rig := root.get_tree().get_first_node_in_group("camera_rig")
+			rig.call("focus_on", Vector3(float(xz[0]) * 1.5, 0.0, float(xz[1]) * 1.5))
+		if OS.has_environment("SHOT_CLEAN"):
+			# Map art review: every CanvasLayer but PixelView (which draws the
+			# 3D at all) hidden, loadout screen included, plus a fill light so
+			# the deliberately dark deck shows its surfaces.
+			for node in root.find_children("*", "CanvasLayer", true, false):
+				if not (node is PixelView):
+					(node as CanvasLayer).visible = false
+			var fill := DirectionalLight3D.new()
+			root.add_child(fill)
+			fill.rotation_degrees = Vector3(-55.0, 30.0, 0.0)
+			fill.light_energy = float(OS.get_environment("SHOT_CLEAN"))
+			# The whole deck, not just what the squad has mapped (fog of war).
+			var map := root.get_tree().get_first_node_in_group("map")
+			if map != null:
+				map.set("fog_of_war", false)
+				map.call("_apply_fog")
 		if OS.has_environment("SHOT_CLOSEUP"):
 			_closeup()
 		elif OS.has_environment("SHOT_ZOOM"):

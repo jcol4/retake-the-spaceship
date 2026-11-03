@@ -449,6 +449,20 @@ func set_rendered(rendered: bool) -> void:
 		visual.refresh()
 
 
+## Re-asks the map whether this unit is drawn, for the step from `grid_pos` onto
+## `step`, before that step is taken. The map's own pass runs once a frame, and an
+## undrawn walk takes no frames at all — so without this a unit walking into view
+## crossed the whole way in one frame and popped up at the end. Drawn if either
+## end is: the step into sight animates, and so does the step out of it.
+func _refresh_rendered_toward(step: Vector3i) -> void:
+	if is_player_controlled or TurnManager.resolving_tick:
+		return
+	var map := get_tree().get_first_node_in_group("map")
+	if map == null or not map.has_method("unit_visible_at"):
+		return
+	set_rendered(map.unit_visible_at(self, grid_pos) or map.unit_visible_at(self, step))
+
+
 ## Tick playback (plan B.12.2): playback decides who is drawn, slot by slot, from
 ## where each MODEL is. Touches only the sprite, never `_rendered`, which is the
 ## logic's own answer.
@@ -811,6 +825,7 @@ func move_along(path: Array[Vector3i]) -> void:
 		# into the squad's line of sight animate the REST of its move instead of
 		# popping across the deck. The loop already does per-tile work for
 		# lighting and overwatch, so this drops in alongside it.
+		_refresh_rendered_toward(step)
 		var hidden := is_instant()
 		if was_hidden and not hidden:
 			# Handover. Re-assert the stance from the top rather than trying to

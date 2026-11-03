@@ -62,7 +62,9 @@ func _dump(map, yaw: float) -> void:
 		for x in data.size.x:
 			var pos := Vector3i(x, 0, z)
 			if walls.has(pos):
-				if walls[pos].visible:
+				# A cell lists every visual it owns; it reads as hidden only
+				# once all of them are.
+				if walls[pos].any(func(n) -> bool: return n.visible):
 					row += "#"
 				else:
 					row += "~"

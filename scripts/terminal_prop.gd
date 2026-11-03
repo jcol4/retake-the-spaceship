@@ -42,6 +42,47 @@ func setup(at: Vector3i) -> void:
 
 
 func _ready() -> void:
+	_screen_mat = StandardMaterial3D.new()
+	_screen_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	if not _add_kit_visual():
+		_add_box_visual()
+	_label = Label3D.new()
+	_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_label.fixed_size = true
+	_label.font_size = 14
+	_label.outline_size = 5
+	_label.position = Vector3(0, LABEL_HEIGHT, 0)
+	add_child(_label)
+	global_position = GridManager.grid_to_world(tile)
+
+
+## The kit's terminal piece (ModuleCatalog socket "terminal"), sized by its
+## manifest entry to stay inside BODY_SIZE, with its screen surface — the one
+## whose material the manifest names `screen_material` — redrawn in the state
+## colour. Turned to face the first neighbouring tile that exists, since it is
+## operated from there. False when the kit has no terminal.
+func _add_kit_visual() -> bool:
+	var catalog := ModuleCatalog.shared()
+	var p := catalog.pick("terminal", ModuleCatalog.hash_of(["terminal", tile]))
+	if p.is_empty():
+		return false
+	var visual := catalog.instance(p)
+	for side: int in [MapData.Side.SOUTH, MapData.Side.EAST, MapData.Side.NORTH, MapData.Side.WEST]:
+		var step: Vector3i = MapData.SIDE_STEP[side]
+		if GridManager.has_tile(tile + step):
+			visual.rotation.y = atan2(float(step.x), float(step.z))
+			break
+	add_child(visual)
+	var screen_name := String(p.get("screen_material", ""))
+	for mesh: MeshInstance3D in visual.find_children("*", "MeshInstance3D", true, false):
+		for s in mesh.mesh.get_surface_count():
+			var mat := mesh.mesh.surface_get_material(s)
+			if mat != null and mat.resource_name == screen_name:
+				mesh.set_surface_override_material(s, _screen_mat)
+	return true
+
+
+func _add_box_visual() -> void:
 	var body := MeshInstance3D.new()
 	var box := BoxMesh.new()
 	box.size = BODY_SIZE
@@ -55,22 +96,12 @@ func _ready() -> void:
 	var pane := BoxMesh.new()
 	pane.size = SCREEN_SIZE
 	screen.mesh = pane
-	_screen_mat = StandardMaterial3D.new()
-	_screen_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	screen.material_override = _screen_mat
 	# On both broad faces, so it reads from any camera angle without knowing
 	# which way the wall is.
 	screen.position = Vector3(0, BODY_SIZE.y * 0.7, 0)
 	screen.scale = Vector3(1.0, 1.0, BODY_SIZE.z / SCREEN_SIZE.z + 0.2)
 	add_child(screen)
-	_label = Label3D.new()
-	_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	_label.fixed_size = true
-	_label.font_size = 14
-	_label.outline_size = 5
-	_label.position = Vector3(0, LABEL_HEIGHT, 0)
-	add_child(_label)
-	global_position = GridManager.grid_to_world(tile)
 
 
 ## Redraws the screen and label from `rules` (every peer, on every change).

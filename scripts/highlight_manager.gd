@@ -71,8 +71,14 @@ func _ready() -> void:
 func show_move_range(tile_costs: Dictionary, ap_per_tile: int, ap_available: int) -> void:
 	_hide_all(_range_pool)
 	_hide_all(_blast_pool)
+	# Ground nobody has mapped stays dark: a band laid over it would trace the
+	# room's shape. The tiles are still legal to walk to, and the path preview
+	# still answers for the one under the cursor.
+	var map := get_tree().get_first_node_in_group("map")
 	var i := 0
 	for tile: Vector3i in tile_costs:
+		if map != null and not map.is_explored_tile(tile):
+			continue
 		var cost: int = tile_costs[tile] * ap_per_tile
 		# Against the pool, not against the reachable radius: the gradient then
 		# means "fraction of what you have left", which is the question the player

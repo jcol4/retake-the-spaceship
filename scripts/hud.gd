@@ -106,6 +106,24 @@ const PORTRAIT_PARTNER := Color(0.6, 0.6, 0.65)
 ## The tile the unit panel was last drawn for. Out of combat a walk spends no AP, so
 ## nothing else says the context buttons (Loot, Call ship) may have changed.
 var _shown_tile := Vector3i(0, -9999, 0)
+## XCOM-style target bar over the action bar while a shot mode is armed: one
+## skull per hostile in line of sight (hover for the odds), then Confirm once
+## one is picked (PlayerUnit.pick_target / confirm_target). Code-built, since its
+## buttons ARE the target list.
+var _target_bar: VBoxContainer
+var _target_info: Label
+var _confirm_button: Button
+var _skull_row: HBoxContainer
+## Skull button -> the Unit it targets, and the list they were built from.
+var _skulls: Dictionary = {}
+var _skull_targets: Array[Unit] = []
+var _hovered_skull: Unit = null
+var _target_marker: TargetMarker
+## The target list re-checks line of sight, so it is polled on a short clock
+## rather than every frame. Shorter than BODY_LABEL_REFRESH: it follows a click.
+const TARGET_BAR_REFRESH := 0.1
+var _target_bar_clock := 0.0
+const SKULL_SIZE := 44.0
 
 
 func _ready() -> void:
@@ -140,6 +158,7 @@ func _ready() -> void:
 	_build_wait_button()
 	_build_mode_label()
 	_build_portrait_bar()
+	_build_target_bar()
 	TurnManager.unit_selected.connect(_on_unit_activated)
 	TurnManager.mode_changed.connect(_on_mode_changed)
 	TurnManager.clock_changed.connect(func(_s: int, _n: int) -> void: _refresh_mode_label())
@@ -181,6 +200,9 @@ func _on_unit_activated(unit: Unit) -> void:
 		unit.aimed_shot_target_picked.connect(_on_aimed_shot_target_picked)
 	if unit is PlayerUnit and not unit.grenade_target_picked.is_connected(_on_grenade_target_picked):
 		unit.grenade_target_picked.connect(_on_grenade_target_picked)
+	if unit is PlayerUnit and not unit.target_picked.is_connected(_on_target_picked):
+		unit.target_picked.connect(_on_target_picked)
+	_refresh_target_bar()
 
 
 func _on_ap_changed(unit: Unit) -> void:
@@ -486,12 +508,17 @@ func _on_command_rejected(reason: String) -> void:
 
 
 ## Tab walks this player's own standing soldiers (E24), exploration only: in a
-## fight the draw decides who is up.
+## fight the draw decides who is up. With a shot mode armed it walks the targets
+## instead, in either mode, Shift+Tab backwards.
 func _input(event: InputEvent) -> void:
-	if not TurnManager.in_exploration():
-		return
 	var key := event as InputEventKey
 	if key == null or not key.pressed or key.echo or key.keycode != KEY_TAB:
+		return
+	if _target_bar != null and _target_bar.visible and not _skull_targets.is_empty():
+		_cycle_target(-1 if key.shift_pressed else 1)
+		get_viewport().set_input_as_handled()
+		return
+	if not TurnManager.in_exploration():
 		return
 	var squad := TurnManager.own_squad()
 	if squad.is_empty():
@@ -542,6 +569,181 @@ func _set_mode(mode: PlayerUnit.Mode) -> void:
 	var player := _active_player()
 	if player:
 		player.set_mode(mode)
+	_refresh_target_bar()
+
+
+func _build_target_bar() -> void:
+	_target_bar = VBoxContainer.new()
+	_target_bar.name = "TargetBar"
+	_target_bar.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	# Over the portrait bar, which sits over the action bar.
+	_target_bar.offset_top = -236.0
+	_target_bar.offset_bottom = -120.0
+	_target_bar.alignment = BoxContainer.ALIGNMENT_END
+	_target_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_target_bar.visible = false
+	add_child(_target_bar)
+
+	_target_info = Label.new()
+	_target_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_target_info.add_theme_constant_override("outline_size", 6)
+	_target_info.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	_target_info.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_target_bar.add_child(_target_info)
+
+	_confirm_button = Button.new()
+	_confirm_button.name = "Confirm"
+	_confirm_button.text = "Confirm"
+	_confirm_button.focus_mode = Control.FOCUS_NONE
+	_confirm_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_confirm_button.custom_minimum_size = Vector2(140, 0)
+	_confirm_button.visible = false
+	_confirm_button.pressed.connect(_on_confirm_target)
+	_target_bar.add_child(_confirm_button)
+
+	_skull_row = HBoxContainer.new()
+	_skull_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_skull_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_target_bar.add_child(_skull_row)
+
+	_target_marker = TargetMarker.new()
+	add_child(_target_marker)
+
+
+## Rebuilt only when the list of targets changes, so a skull under the cursor is
+## not freed out from under its hover between two polls.
+func _refresh_target_bar() -> void:
+	if _target_bar == null:
+		return
+	var player := _active_player()
+	var armed := player != null and player.is_owned_by_local_player() and not player.is_downed \
+		and not player.is_busy and not TurnManager.mission_over \
+		and player.mode in [PlayerUnit.Mode.SHOOT, PlayerUnit.Mode.AIMED_SHOT, PlayerUnit.Mode.SUPPRESS]
+	var targets: Array[Unit] = []
+	if armed:
+		targets = player.shot_targets()
+	if targets != _skull_targets:
+		_skull_targets = targets
+		for skull in _skulls:
+			skull.queue_free()
+		_skulls.clear()
+		for target in targets:
+			_skulls[_make_skull(target)] = target
+	if armed and player.picked_target != null and not targets.has(player.picked_target):
+		player.pick_target(null)  # died, or slipped out of sight
+	if _hovered_skull != null and not targets.has(_hovered_skull):
+		_hovered_skull = null
+	_target_bar.visible = armed
+	var picked: Unit = player.picked_target if armed else null
+	_target_marker.target = picked
+	_confirm_button.visible = picked != null
+	for skull: Button in _skulls:
+		skull.set_pressed_no_signal(_skulls[skull] == picked)
+		skull.queue_redraw()
+	var shown := _hovered_skull if _hovered_skull != null else picked
+	if shown != null:
+		_target_info.text = _target_line(player, shown)
+	elif not targets.is_empty():
+		_target_info.text = "Pick a target"
+	else:
+		_target_info.text = "No targets in sight"
+
+
+func _make_skull(target: Unit) -> Button:
+	var skull := Button.new()
+	skull.toggle_mode = true
+	skull.focus_mode = Control.FOCUS_NONE
+	skull.custom_minimum_size = Vector2(SKULL_SIZE, SKULL_SIZE)
+	# A child rather than the button's own _draw, so it lands over the panel.
+	var glyph := SkullGlyph.new()
+	glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	glyph.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	glyph.picked = func() -> bool: return skull.button_pressed
+	skull.add_child(glyph)
+	skull.pressed.connect(_on_skull_pressed.bind(target))
+	skull.mouse_entered.connect(_on_skull_hover.bind(target, true))
+	skull.mouse_exited.connect(_on_skull_hover.bind(target, false))
+	_skull_row.add_child(skull)
+	return skull
+
+
+## "Lurker — 64% to hit": the odds the shot would be taken at, read fresh.
+func _target_line(player: PlayerUnit, target: Unit) -> String:
+	var who := target.stats.display_name
+	match player.mode:
+		PlayerUnit.Mode.SUPPRESS:
+			return "%s — suppress (pins them, no roll)" % who
+		PlayerUnit.Mode.AIMED_SHOT:
+			return "%s — %d%% to hit (torso; pick a zone next)" % [who, player.target_hit_chance(target)]
+	return "%s — %d%% to hit" % [who, player.target_hit_chance(target)]
+
+
+func _on_skull_pressed(target: Unit) -> void:
+	var player := _active_player()
+	if player:
+		player.pick_target(target)
+	_refresh_target_bar()
+
+
+## Hovering a skull also puts the map's hit-chance label over that target, so
+## the player can see WHICH alien the skull is.
+func _on_skull_hover(target: Unit, entered: bool) -> void:
+	if entered:
+		_hovered_skull = target
+	elif _hovered_skull == target:
+		_hovered_skull = null
+	var highlights := get_tree().get_first_node_in_group("highlights")
+	if highlights and is_instance_valid(target):
+		highlights.set_hovered_target(target.grid_pos if entered else PlayerUnit.NO_TILE)
+	_refresh_target_bar()
+
+
+## Picks the next skull along (`step` 1 or -1), wrapping; from no pick, the
+## first (or the last, going backwards).
+func _cycle_target(step: int) -> void:
+	var player := _active_player()
+	if player == null:
+		return
+	var at := _skull_targets.find(player.picked_target)
+	if at == -1:
+		at = -1 if step > 0 else 0
+	var next := posmod(at + step, _skull_targets.size())
+	player.pick_target(_skull_targets[next])
+	_refresh_target_bar()
+
+
+func _on_target_picked(_target: Unit) -> void:
+	_refresh_target_bar()
+
+
+func _on_confirm_target() -> void:
+	var player := _active_player()
+	if player == null:
+		return
+	player.confirm_target()
+	_refresh_target_bar()
+
+
+## A skull drawn in code (no icon asset to import): a round cranium over a jaw,
+## dark sockets, and teeth. Bone-white, red once its target is picked.
+class SkullGlyph extends Control:
+	const BONE := Color(0.92, 0.9, 0.84)
+	const PICKED := Color(1.0, 0.25, 0.2)
+	var picked: Callable
+
+	func _draw() -> void:
+		var s := minf(size.x, size.y)
+		var o := (size - Vector2(s, s)) / 2.0
+		var color: Color = PICKED if picked.is_valid() and picked.call() else BONE
+		var dark := Color(0.08, 0.06, 0.06)
+		draw_circle(o + Vector2(0.5, 0.42) * s, 0.3 * s, color)
+		draw_rect(Rect2(o + Vector2(0.32, 0.55) * s, Vector2(0.36, 0.22) * s), color)
+		draw_circle(o + Vector2(0.38, 0.45) * s, 0.085 * s, dark)
+		draw_circle(o + Vector2(0.62, 0.45) * s, 0.085 * s, dark)
+		draw_colored_polygon(PackedVector2Array([o + Vector2(0.5, 0.55) * s,
+			o + Vector2(0.46, 0.63) * s, o + Vector2(0.54, 0.63) * s]), dark)
+		for x: float in [0.41, 0.5, 0.59]:
+			draw_line(o + Vector2(x, 0.68) * s, o + Vector2(x, 0.77) * s, dark, maxf(1.0, s * 0.03))
 
 
 func _on_aimed_shot_target_picked(target: Unit) -> void:
@@ -800,6 +1002,10 @@ func _door_gun_line() -> String:
 
 
 func _process(delta: float) -> void:
+	_target_bar_clock -= delta
+	if _target_bar_clock <= 0.0:
+		_target_bar_clock = TARGET_BAR_REFRESH
+		_refresh_target_bar()
 	_body_label_clock -= delta
 	if _body_label_clock > 0.0:
 		return

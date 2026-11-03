@@ -172,8 +172,9 @@ func _prepare(events: Array, units: Array[Unit], unspawned: Dictionary) -> void:
 			unit.set_display_visible(false)
 
 
-## Who is drawn for this slot (plan B.12.2): a unit whose MODEL is on a revealed
-## tile, or is stepping onto one, so a patrol visibly walks into view and out.
+## Who is drawn for this slot (plan B.12.2): a unit whose MODEL is on a tile the
+## squad can see (MapBuilder.unit_visible_at), or is stepping onto one, so a
+## patrol visibly walks into view and out.
 func _update_visibility(units: Array[Unit], unspawned: Dictionary, map: Node,
 		events: Array, group: Array) -> void:
 	var entering := {}
@@ -184,13 +185,13 @@ func _update_visibility(units: Array[Unit], unspawned: Dictionary, map: Node,
 	for unit in units:
 		if not is_instance_valid(unit) or unspawned.has(unit):
 			continue
-		if map == null or not map.has_method("is_revealed_tile"):
+		if map == null or not map.has_method("unit_visible_at"):
 			unit.set_display_visible(true)
 			continue
 		var here := GridManager.world_to_grid(unit.visual.global_position)
-		var seen: bool = map.is_revealed_tile(here)
+		var seen: bool = map.unit_visible_at(unit, here)
 		if not seen and entering.has(unit):
-			seen = map.is_revealed_tile(entering[unit])
+			seen = map.unit_visible_at(unit, entering[unit])
 		unit.set_display_visible(seen)
 
 

@@ -49,6 +49,11 @@ signal grenade_target_picked(target: Vector3i)
 ## The host refused a command this peer sent (`_reject`). The HUD says why; the
 ## one thing a click can run into that it could not have seen (plan C.2).
 signal command_rejected(reason: String)
+## XCOM-style targeting: in a shot mode a target is picked first (a skull on the
+## HUD, or the enemy itself on the map) and fired at only on Confirm. Local to the
+## clicking peer, like the zone menu — nothing is sent until `confirm_target`.
+## Null when the pick is cleared.
+signal target_picked(target: Unit)
 
 # Sentinel for "the cursor isn't over a walkable tile". Floor -9999 can never
 # collide with a real grid key.
@@ -58,6 +63,8 @@ const NO_TILE := Vector3i(0, -9999, 0)
 const _SIDE_WORD := ["east", "south", "west", "north"]
 
 var mode: Mode = Mode.NONE
+## The hostile picked in a shot mode and awaiting Confirm (`target_picked`).
+var picked_target: Unit = null
 ## Grenades this soldier deployed with. One each in the alpha: enough that the
 ## squad can open a window on the fight's hardest target, not enough to answer
 ## every armored unit on a deck — which is what keeps positioning the primary
@@ -197,6 +204,7 @@ func set_mode(new_mode: Mode) -> void:
 	if exploring and selected and new_mode == Mode.NONE and is_owned_by_local_player():
 		new_mode = Mode.MOVE
 	mode = new_mode
+	pick_target(null)
 	_hover_tile = NO_TILE
 	_preview_path = []
 	_preview_cost = 0
@@ -273,13 +281,46 @@ func _show_targets(highlights: Node) -> void:
 	# only appears once a target is actually picked (Sec 4.2/6.5's VATS menu).
 	var tiles: Array[Vector3i] = []
 	var accuracies: Array[int] = []
-	var action := Combat.ShotAction.SHOOT if mode == Mode.SHOOT else Combat.ShotAction.AIMED_SHOT
-	for enemy in hostiles():
-		if not GridManager.has_line_of_sight(self, enemy):
-			continue
+	for enemy in shot_targets():
 		tiles.append(enemy.grid_pos)
-		accuracies.append(Combat.compute_accuracy(self, enemy, action, Combat.BodyPart.TORSO))
+		accuracies.append(target_hit_chance(enemy))
 	highlights.show_targets(tiles, accuracies)
+
+
+## Every hostile a shot could be put on right now: the line-of-sight test the
+## shot itself enforces. One skull each on the HUD's target bar.
+func shot_targets() -> Array[Unit]:
+	var out: Array[Unit] = []
+	for enemy in hostiles():
+		if GridManager.has_line_of_sight(self, enemy):
+			out.append(enemy)
+	return out
+
+
+## The armed shot's chance against `target`. Aimed Shot quotes the Torso
+## baseline; the per-zone odds are the zone menu's to show.
+func target_hit_chance(target: Unit) -> int:
+	var action := Combat.ShotAction.SHOOT if mode == Mode.SHOOT else Combat.ShotAction.AIMED_SHOT
+	return Combat.compute_accuracy(self, target, action, Combat.BodyPart.TORSO)
+
+
+## Picks (or with null, clears) the target Confirm will fire at. Local only.
+func pick_target(target: Unit) -> void:
+	if target == picked_target:
+		return
+	picked_target = target
+	target_picked.emit(target)
+
+
+## Confirm: the picked target gets the armed action — a shot, a suppression, or
+## for Aimed Shot the zone menu. Validation is `_try_shoot`'s, as for a click.
+func confirm_target() -> void:
+	var target := picked_target
+	if target == null or not is_instance_valid(target) or target.is_downed:
+		pick_target(null)
+		return
+	pick_target(null)
+	_try_shoot(target)
 
 
 func _process(_delta: float) -> void:
@@ -584,13 +625,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		if unit_hit.is_empty():
 			return
 		var unit := _unit_from_collider(unit_hit["collider"])
-		if unit and is_hostile_to(unit):
-			# Called directly rather than via `_issue`: Aimed Shot's branch below
-			# only opens a local zone menu (see `aimed_shot_target_picked`) and
-			# must run on THIS peer, not get routed to the host. The branches
-			# that actually mutate shared state (fire, suppress) issue their own
-			# requests — see `_try_shoot`/`_try_suppress` below.
-			_try_shoot(unit)
+		# A click only PICKS, the same as its skull on the HUD; Confirm fires
+		# (`confirm_target`). Local, like everything before Confirm.
+		if unit and is_hostile_to(unit) and unit in shot_targets():
+			pick_target(unit)
 		return
 	if mode in [Mode.REVIVE, Mode.PICK_UP]:
 		# Ahead of the general raycast, which needs SOMETHING under the cursor:
