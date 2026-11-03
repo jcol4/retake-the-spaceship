@@ -142,7 +142,7 @@ func _combat_turn() -> void:
 		if quarry == null:
 			return
 		var in_range := GridManager.chebyshev_dist(grid_pos, quarry.grid_pos) <= ATTACK_RANGE
-		if in_range and GridManager.has_line_of_sight(self, quarry) and can_shoot():
+		if in_range and has_shot_at(quarry) and can_shoot():
 			# Affordability is checked BEFORE the coin flip and the loop bails when
 			# nothing is affordable, which the old flat 1/2 AP costs never needed:
 			# a snap shot can now cost more than a whole small pool, and without the
@@ -459,6 +459,10 @@ func _on_lighting_changed() -> void:
 	# interrupt is overwatch's job alone (TurnManager.check_overwatch).
 	if is_downed or alert_state == AlertState.COMBAT:
 		return
+	# The host decides awareness; a client recomputes lighting for its own
+	# previews, and must not wake its copy of a unit the host's has not.
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
+		return
 	var lit := LightingManager.flashlight_value(grid_pos)
 	if lit < beam_alert_threshold:
 		return
@@ -547,6 +551,9 @@ func _enter_combat(new_target: Unit, reason: String) -> void:
 	_has_last_known = true
 	_last_contact_turn = TurnManager.turn_number
 	_set_state(AlertState.COMBAT)
+	# Every channel that starts a fight comes through here, so this is the one
+	# place contact with the squad is reported (exploration plan B.3).
+	TurnManager.notify_combat(self, new_target)
 	if was != AlertState.COMBAT:
 		# An empty reason enters combat SILENTLY. For a caller that is already
 		# narrating the whole event itself, a line per unit buries it rather than
@@ -634,7 +641,29 @@ func _set_state(new_state: AlertState) -> void:
 	# it would freeze the player halfway down a corridor for the length of a
 	# scream. Nothing downstream depends on the clip finishing.
 	if was == AlertState.UNAWARE and new_state != AlertState.UNAWARE:
-		visual.play_action(UnitVisual.ALERT_SCREAM)
+		_on_woken()
+	_refresh_label()
+	state_changed.emit(self)
+	# Awareness is decided on the host alone (see `_on_lighting_changed`), so the
+	# label each client reads is handed the result. The scream is already on its
+	# way — UnitVisual mirrors its own actions.
+	if visual.mirrors():
+		for peer_id in SteamLobby.ready_peers:
+			_rpc_show_state.rpc_id(peer_id, new_state)
+
+
+## The performance for leaving UNAWARE (see `_set_state`). SwarmUnit overrides
+## it: a horde screams once, from one body, rather than every body at once.
+func _on_woken() -> void:
+	visual.play_action(UnitVisual.ALERT_SCREAM)
+
+
+## Client-side: the host's awareness change, for the label and the HUD. Skips
+## `_set_state` and the overrides on it: a client never acts on `target`, and
+## the scream and CerberusUnit's status light are mirrored on their own.
+@rpc("authority", "call_remote", "reliable")
+func _rpc_show_state(new_state: AlertState) -> void:
+	alert_state = new_state
 	_refresh_label()
 	state_changed.emit(self)
 

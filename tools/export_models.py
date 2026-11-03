@@ -70,6 +70,11 @@ MODELS = {
     "brawler": "art_src/zombie_anim.blend",
     "worm": "art_src/worm_anims.blend",
     "nest": "art_src/worm_spawn_scaled.blend",
+    # Fodder. Its `run` is built from the merc's by tools/build_civilian_run.py.
+    "civilian": "assets/civilian_cleaned.blend",
+    # Fodder's demo stand-in, built from Mixamo downloads by
+    # tools/build_zombie_mixamo.py. The civilian stays exported as the fallback.
+    "zombie": "art_src/zombie_mixamo.blend",
 }
 ## Game-budget reductions, applied in memory on the way out. The sources were
 ## made for 256 px sprite renders and a Mixamo download, not for a scene with
@@ -84,6 +89,10 @@ MAX_TEXTURE = 2048
 BUDGET = {
     "nest": {"decimate": 0.15, "max_texture": 1024},
     "worm": {"decimate": 0.3, "max_texture": 1024},
+    # Four 4096 px Mixamo maps on a unit that comes in swarms.
+    "civilian": {"max_texture": 1024},
+    # Eight 4096 px Mixamo maps, same reason.
+    "zombie": {"max_texture": 1024},
 }
 
 PILES = {

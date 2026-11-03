@@ -4,6 +4,9 @@ extends Node3D
 
 signal hp_changed(unit: Unit)
 signal ap_changed(unit: Unit)
+## The rounds in hand or in reserve changed, whatever changed them, on every peer:
+## a replicated value comes through the same setters. For the model's ammo readout.
+signal ammo_changed(unit: Unit)
 ## The unit left the fight: ACTIVE -> DOWNED, or ACTIVE -> DEAD for a type that
 ## dies outright (GDD §4.4). Kept meaning "out of action" rather than "downed
 ## specifically", because every listener (a squad blackboard releasing claims, a
@@ -124,10 +127,29 @@ func is_owned_by_local_player() -> bool:
 var grid_pos: Vector3i
 var current_hp: int
 var ap: int = 0
-var ammo: int
+var ammo: int:
+	set(value):
+		if value != ammo:
+			ammo = value
+			ammo_changed.emit(self)
 # Spare rounds beyond the loaded magazine. -1 means unlimited (never
-# decremented by do_reload) — see WeaponData.starting_reserve.
-var reserve: int = -1
+# decremented by do_reload) — see WeaponData.starting_reserve. Assigning it means
+# "this many rounds, freshly packed": it re-deals `reserve_mags` into full ones.
+var reserve: int = -1:
+	set(value):
+		if value != reserve:
+			reserve = value
+			var weapon := stats.active_weapon() if stats else null
+			reserve_mags = weapon.packed_mags(value) if weapon else PackedInt32Array()
+			ammo_changed.emit(self)
+## The rounds in each spare magazine, fullest first, empties kept: `reserve` split
+## into what a reload actually swaps. Empty for a reserve that is not magazines
+## (unlimited, or the Shotgun's loose shells), which reloads from `reserve` alone.
+var reserve_mags := PackedInt32Array():
+	set(value):
+		if value != reserve_mags:
+			reserve_mags = value
+			ammo_changed.emit(self)
 
 ## Where a unit stands between fighting and gone (GDD §4.4).
 ##   ACTIVE  in the fight: in the pool, a target, a body that blocks a tile.
@@ -208,6 +230,7 @@ var carried_by_path: NodePath = NodePath()
 ## and each gun keeps its own magazine and reserve (extraction plan 2.5).
 var stowed_ammo: int = 0
 var stowed_reserve: int = 0
+var stowed_reserve_mags := PackedInt32Array()
 
 ## The soldier's own choice of gun (GDD §4.3 "Switch weapon", 1 AP): true = the
 ## pistol. Carrying a body forces the pistol whatever this says
@@ -245,6 +268,14 @@ var _gear_stowed := false
 ## see a transition arrive and play it (collapse, tint, stand up) — the host plays
 ## its own as it makes them, through the same `_present_life_state`.
 var _shown_life_state: LifeState = LifeState.ACTIVE
+## Client-side: the AP/ammo the HUD was last told about (via `ap_changed`). The
+## synchronizer writes these straight into the vars, which fires nothing, so
+## `_after_replication` compares against this to know when to announce them.
+var _shown_ap_ammo: Vector3i = Vector3i(-1, -1, -1)
+## Client-side: the beam (on, facing) this peer last lit tiles for. The host
+## recomputes the lighting as it turns and walks units; a client only sees the
+## results land, so `_after_replication` recomputes when the beam has moved.
+var _shown_beam: Vector2 = Vector2(-1.0, 0.0)
 ## Collision layer the click/LOS body had before it was hidden by being carried.
 var _body_layer: int = -1
 ## Placeholder "carrying a body" marker on the carrier — see `_show_carry_marker`.
@@ -305,6 +336,25 @@ const SUPPRESSION_BURST_GAP := 3.0
 const SUPPRESSION_BURST_ROUNDS := 3
 var stunned: bool = false  # set by an incoming torso crit; burns this unit's next activation
 var is_busy: bool = false  # animating a move or a shot — reject new orders
+## Set by `cancel_walk`; `move_along` stops at the next tile boundary on it.
+var _walk_cancelled: bool = false
+var _walking: bool = false
+## A new goal for the walk in flight, taken up at its next tile (E9).
+var _redirected: bool = false
+var _redirect_goal: Vector3i
+## `--auto` only: this soldier is thinking against an AP budget (see `_on_the_clock`).
+var auto_budget: bool = false
+## Host-only. AP already spent on the attack that opened a fight from
+## exploration, taken out of this unit's first combat activation (plan B.7, E8).
+var pre_spent_ap: int = 0
+## Host-only. This unit opened the fight with a Suppress, which is its whole
+## first activation: it sits the opening round out of the pool (E21).
+var opening_suppress: bool = false
+## Tick playback (plan B.12.2): while a timeline plays, whether this unit is drawn
+## follows its MODEL's tile rather than its final one, and so does whether its
+## animations play (see is_instant).
+var _display_mode: bool = false
+var _display_visible: bool = true
 ## Turn number this unit last walked on, for motion-based detection (the security
 ## robots' sensors read movement where the aliens read light). -1 so a unit that
 ## has never moved is never mistaken for one that just did.
@@ -349,6 +399,17 @@ var _pending_target: Unit = null
 # result. Decided up front so the pattern is fixed before the first round.
 var _burst_round: int = 0
 var _burst_strays: Array[int] = []
+## Corner peeking (GDD §6.1.2) is cosmetic: the shot resolves from the unit's own
+## tile, and only the model slides this far toward the lean tile to fire, over
+## LEAN_SECONDS each way.
+const LEAN_DISTANCE := 0.55
+const LEAN_SECONDS := 0.15
+## The offset the lean currently adds to `visual.position`. Applied RELATIVE to
+## wherever the visual is, because tick playback owns that position while a
+## timeline plays (it walks the model along the recorded path), and the two must
+## not fight over it.
+var _lean_applied := Vector3.ZERO
+var _lean_tween: Tween = null
 var _name_label: Label3D = null
 var _sync: MultiplayerSynchronizer = null  # co-op only; see _setup_replication
 
@@ -365,6 +426,12 @@ var _sync: MultiplayerSynchronizer = null  # co-op only; see _setup_replication
 ## the log is slated for removal once the game runs smoothly, so suppressing it
 ## would be work spent on something being deleted.
 func is_instant() -> bool:
+	# A tick's AI pass is decided as logic only, every unit alike (plan B.12):
+	# what it looks like is played back afterwards from the recorded timeline.
+	if TurnManager.resolving_tick:
+		return true
+	if _display_mode:
+		return _headless or not _display_visible
 	return _headless or not _rendered
 
 
@@ -374,10 +441,63 @@ func set_rendered(rendered: bool) -> void:
 	if rendered == _rendered:
 		return
 	_rendered = rendered
+	if _display_mode:
+		return  # playback owns the sprite until it ends (end_display)
 	visual.visible = rendered
 	# After `_rendered` is set, so the visual is no longer instant and plays.
 	if rendered:
 		visual.refresh()
+
+
+## Re-asks the map whether this unit is drawn, for the step from `grid_pos` onto
+## `step`, before that step is taken. The map's own pass runs once a frame, and an
+## undrawn walk takes no frames at all — so without this a unit walking into view
+## crossed the whole way in one frame and popped up at the end. Drawn if either
+## end is: the step into sight animates, and so does the step out of it.
+func _refresh_rendered_toward(step: Vector3i) -> void:
+	if is_player_controlled or TurnManager.resolving_tick:
+		return
+	var map := get_tree().get_first_node_in_group("map")
+	if map == null or not map.has_method("unit_visible_at"):
+		return
+	set_rendered(map.unit_visible_at(self, grid_pos) or map.unit_visible_at(self, step))
+
+
+## Tick playback (plan B.12.2): playback decides who is drawn, slot by slot, from
+## where each MODEL is. Touches only the sprite, never `_rendered`, which is the
+## logic's own answer.
+func begin_display() -> void:
+	_display_mode = true
+	_display_visible = _rendered
+
+
+func set_display_visible(on: bool) -> void:
+	if on == _display_visible:
+		return
+	_display_visible = on
+	visual.visible = on
+	if on:
+		visual.refresh()
+
+
+## Puts the sprite back on the unit and back under `_rendered`.
+func end_display() -> void:
+	_display_mode = false
+	visual.position = Vector3.ZERO
+	_lean_applied = Vector3.ZERO
+	visual.rotation = Vector3.ZERO
+	visual.visible = _rendered
+	if _rendered:
+		visual.refresh()
+
+
+## Appends one event about this unit to the tick being decided (plan B.12).
+func _record(kind: String, data: Dictionary = {}) -> void:
+	if not TurnManager.resolving_tick:
+		return
+	data["unit"] = self
+	data["kind"] = kind
+	TurnManager.record(data)
 
 
 func _ready() -> void:
@@ -446,9 +566,10 @@ func _setup_replication() -> void:
 	# additions; `_after_replication` turns the links and life-state changes back
 	# into visuals on the client.
 	for prop in ["global_position", "rotation:y", "current_hp", "ap", "life_state",
-			"ammo", "reserve", "hunkered", "on_overwatch", "flashlight_on",
+			"ammo", "reserve", "reserve_mags", "hunkered", "on_overwatch", "flashlight_on",
 			"downed_hp", "down_count", "carrying_path", "carried_by_path",
-			"stowed_ammo", "stowed_reserve", "inventory_codes", "sidearm_selected"]:
+			"stowed_ammo", "stowed_reserve", "stowed_reserve_mags",
+			"inventory_codes", "sidearm_selected"]:
 		var path := NodePath(".:%s" % prop)
 		config.add_property(path)
 		config.property_set_replication_mode(path, SceneReplicationConfig.REPLICATION_MODE_ALWAYS)
@@ -485,6 +606,22 @@ func _after_replication() -> void:
 	if inventory_codes != ItemPresets.codes_of(inventory):
 		inventory = ItemPresets.items_from(inventory_codes)
 		inventory_changed.emit(self)
+	# The HUD gates every AP-priced button on `ap`, and refreshes on `ap_changed`.
+	# Without this a client's buttons sat on the AP from before the activation's
+	# refill (usually 0, all greyed) until some free action — Flashlight, Face —
+	# happened to call `_refresh` by hand.
+	var ap_ammo := Vector3i(ap, ammo, reserve)
+	if ap_ammo != _shown_ap_ammo:
+		_shown_ap_ammo = ap_ammo
+		ap_changed.emit(self)
+	# Snapped so a turn in progress recomputes a handful of times rather than on
+	# every batch; the settled facing always lands on a fresh value.
+	var beam := Vector2(1.0 if has_flashlight and flashlight_on else 0.0, snappedf(rotation.y, 0.05))
+	if beam != _shown_beam:
+		var was_lit := _shown_beam.x > 0.0
+		_shown_beam = beam
+		if beam.x > 0.0 or was_lit:
+			LightingManager.recompute_dynamic()
 	_on_replicated()
 
 
@@ -520,10 +657,23 @@ func _rpc_sync_grid_pos(new_grid_pos: Vector3i) -> void:
 	GridManager.set_occupant(grid_pos, null)
 	grid_pos = new_grid_pos
 	GridManager.set_occupant(grid_pos, self)
+	# The beam is cast from `grid_pos`, so it has only now arrived where the
+	# host lit it from (see `_shown_beam`).
+	if has_flashlight and flashlight_on:
+		LightingManager.recompute_dynamic()
+
+
+## True for a unit that is drawn only after every unit without it has acted this
+## round, whatever its Initiative (TurnManager). The shambling melee tier
+## (SwarmUnit) overrides it.
+func draws_last() -> bool:
+	return false
 
 
 func begin_activation() -> void:
-	ap = ap_pool()
+	# An attack that opened the fight from exploration is paid for here (E8).
+	ap = ExplorationRules.opening_ap(ap_pool(), pre_spent_ap)
+	pre_spent_ap = 0
 	# Being pinned costs AP before anything else is decided. Floored at 1 rather
 	# than allowed to reach zero: a unit that loses its whole turn to suppression
 	# would make the action strictly better than the stun a torso crit buys, for
@@ -552,16 +702,96 @@ func spend_ap(cost: int) -> void:
 	ap_changed.emit(self)
 
 
+## THE way a player action is paid for (plan A.5). In turn mode it is AP, exactly
+## `spend_ap`. In exploration (GDD §4.7.3) the same price goes on the step clock
+## instead — a soldier's AP price in steps, so no second table exists — and
+## acting is also what lets go of an overwatch held since the last fight (B.8).
+func pay(cost: int) -> void:
+	if _on_the_clock():
+		stand_down()
+		TurnManager.add_steps(cost)
+		ap_changed.emit(self)
+		return
+	spend_ap(cost)
+
+
+## Lets go of an overwatch held out of combat (plan B.8), pose included.
+func stand_down() -> void:
+	if on_overwatch:
+		on_overwatch = false
+		overwatch_reserve = 0
+		settle_idle()
+
+
+## Whether `pay(cost)` is affordable: AP in turn mode, always in exploration,
+## where a price is time rather than a budget.
+func can_afford(cost: int) -> bool:
+	return _on_the_clock() or ap >= cost
+
+
+## Whether this unit's prices go on the step clock. Only a soldier, only out of
+## combat: AI acts inside a tick with AP from `begin_activation`, and its turn loops
+## (`while ap > 0`) rely on AP going down. `auto_budget` puts an `--auto` soldier in
+## the same position, on a synthetic pool per think (main.gd, plan D.1).
+func _on_the_clock() -> bool:
+	return TurnManager.in_exploration() and is_player_controlled and not auto_budget
+
+
+## Stops a walk in flight at the tile it is stepping onto (E7). The arrival tail
+## still runs, so the walker settles, takes cover and emits `moved` as usual.
+func cancel_walk() -> void:
+	if _walking:
+		_walk_cancelled = true
+
+
+func is_walking() -> bool:
+	return _walking
+
+
+## Whether this unit can lean round a corner right now (GDD §6.1.2): only at
+## rest. `_walking` holds for the whole of `move_along`, its per-tile overwatch,
+## suppression and `after_step` checks included, so a walker is neither seen nor
+## sees by leaning, and overwatch fires when it actually walks out past the
+## corner rather than a tile early.
+func can_peek() -> bool:
+	return not _walking and not is_downed
+
+
+## Re-aims a walk in flight at `goal`, from the tile it reaches next (E9). No stop
+## and no skid: the soldier just turns at the boundary. `move_along` does the path.
+func redirect_walk(goal: Vector3i) -> void:
+	if _walking:
+		_redirected = true
+		_redirect_goal = goal
+
+
+## Whether this walker may step onto `tile` right now: on the map, passable, and
+## nobody else standing there. A tile this unit already holds is its own.
+func _can_enter(tile: Vector3i) -> bool:
+	var t: GridTileData = GridManager.get_tile(tile)
+	if t == null or not t.passable:
+		return false
+	return t.occupant == null or t.occupant == self
+
+
 func move_along(path: Array[Vector3i]) -> void:
 	# Walks the path one tile at a time. This is a coroutine — callers MUST
 	# `await` it, or the unit will still be sliding when the next action
-	# resolves. The unit holds no tile mid-walk (only one unit ever moves at a
-	# time), so dying to overwatch part-way leaves no tile wrongly reserved.
+	# resolves.
+	#
+	# Occupancy is claimed PER STEP (plan A.1): the tile ahead is taken as the
+	# unit starts into it, and the one behind let go as it arrives. That used to
+	# be "hold no tile at all and reclaim on arrival", which was only sound while
+	# one unit ever moved at a time — exploration and co-op both break that, and
+	# two walkers crossing must never end up on one square.
 	if path.is_empty():
 		return
-	GridManager.set_occupant(grid_pos, null)
 	last_moved_turn = TurnManager.turn_number
 	is_busy = true
+	_walking = true
+	_walk_cancelled = false
+	_redirected = false
+	TurnManager.register_walk(self)
 	# `walks_only` units (a shambler, say) have no other gait — they walk a
 	# ten-tile path for the same reason they'd walk a one-tile one. Everyone
 	# else runs regardless of distance: the soldier's short-hop walk cycle was
@@ -575,11 +805,34 @@ func move_along(path: Array[Vector3i]) -> void:
 	visual.set_cover_pose(&"")
 	visual.set_stance(UnitVisual.WALK if walking else UnitVisual.RUN)
 	var was_hidden := is_instant()
-	for step in path:
+	var goal: Vector3i = path[-1]
+	var repathed := false
+	var i := 0
+	while i < path.size():
+		var step: Vector3i = path[i]
+		# The goal is closed to anyone but the unit that reserved it (A.2), so a
+		# walker whose last tile somebody else is bound for stops one short.
+		if i == path.size() - 1 and not GridManager.open_destination(step, self):
+			break
+		if not _can_enter(step):
+			# Somebody has stepped into the way since the path was planned (E18).
+			# One fresh route from here, no longer than what is left of this one
+			# in turn mode (it was paid for by the tile); else stop where we stand.
+			if repathed:
+				break
+			repathed = true
+			var cap := 999 if TurnManager.in_exploration() else path.size() - i
+			var fresh := GridManager.find_path(grid_pos, goal, cap)
+			if fresh.is_empty() or fresh[-1] != goal:
+				break
+			path = fresh
+			i = 0
+			continue
 		# Visibility is re-read per tile, which is what makes a unit that walks
 		# into the squad's line of sight animate the REST of its move instead of
 		# popping across the deck. The loop already does per-tile work for
 		# lighting and overwatch, so this drops in alongside it.
+		_refresh_rendered_toward(step)
 		var hidden := is_instant()
 		if was_hidden and not hidden:
 			# Handover. Re-assert the stance from the top rather than trying to
@@ -587,13 +840,25 @@ func move_along(path: Array[Vector3i]) -> void:
 			# picked up mid-stride, a reload cannot.
 			visual.set_stance(UnitVisual.WALK if walking else UnitVisual.RUN)
 		was_hidden = hidden
+		GridManager.set_occupant(step, self)
+		var from_yaw := rotation.y
 		await _step_to(GridManager.grid_to_world(step), speed)
+		# Never a soldier's: their walk is real time, and one finishing the tile it
+		# was on as the tick began is not part of what the tick decided.
+		if not is_player_controlled:
+			_record(ExplorationRules.EV_STEP, {"from": grid_pos, "to": step,
+				"from_yaw": from_yaw, "yaw": rotation.y})
+		GridManager.release_occupant(grid_pos, self)
 		grid_pos = step
+		i += 1
 		# The carried body shares the tile, every tile of the way (GDD §4.4), so
 		# a carrier dropped mid-walk drops it exactly where they fell.
 		_carry_follow()
 		stepped.emit(self)
 		if is_downed:
+			# Downed while stepping (a concurrent shot in exploration): a body
+			# holds no tile, including the one it was claiming.
+			GridManager.release_occupant(grid_pos, self)
 			break
 		_trip_alarm_here()
 		if has_flashlight and flashlight_on:
@@ -609,8 +874,22 @@ func move_along(path: Array[Vector3i]) -> void:
 		await TurnManager.check_overwatch(self)
 		if is_downed:
 			break
+		await TurnManager.after_step(self)
+		if is_downed or _walk_cancelled:
+			break
+		if _redirected:
+			_redirected = false
+			goal = _redirect_goal
+			path = GridManager.find_path(grid_pos, goal, 999)
+			repathed = false
+			i = 0
 	is_busy = false
+	_walking = false
+	_walk_cancelled = false
+	_redirected = false
+	GridManager.release_reservation(self)
 	if is_downed:
+		TurnManager.unregister_walk(self)
 		return  # the collapse is already playing — don't stand it back up
 	# Grid state is settled before the transition plays out: the unit owns its
 	# destination tile from the moment it arrives, and what is left is purely
@@ -632,6 +911,7 @@ func move_along(path: Array[Vector3i]) -> void:
 		# falls through to the plain skid until then.
 		refresh_cover_pose()
 		await visual.play_stance_exit(UnitVisual.RUN_STOP, UnitVisual.IDLE)
+	TurnManager.unregister_walk(self)
 	moved.emit(self)
 
 
@@ -660,6 +940,12 @@ func _step_to(target: Vector3, speed: float) -> void:
 	if dist < 0.001:
 		return
 	if is_instant():
+		# A tick's AI still turns as it walks: its facing is rules state (the
+		# beam it casts) and playback needs it. A hidden unit's never mattered.
+		if TurnManager.resolving_tick:
+			var yaw := _yaw_toward(target)
+			if not is_nan(yaw):
+				rotation.y = yaw
 		global_position = target
 		return
 	var seconds := dist / speed
@@ -705,6 +991,7 @@ func face_toward(world_pos: Vector3) -> void:
 	var yaw := _yaw_toward(world_pos)
 	if is_nan(yaw):
 		return
+	_record(ExplorationRules.EV_TURN, {"from_yaw": rotation.y, "yaw": yaw})
 	if is_instant():
 		rotation.y = yaw
 	else:
@@ -1029,6 +1316,7 @@ func die() -> void:
 ## or dead outright. Host-side game state only; how it LOOKS is
 ## `_present_life_state`, which every peer runs.
 func _leave_fight() -> void:
+	GridManager.release_reservation(self)
 	on_overwatch = false
 	stunned = false
 	hunkered = false
@@ -1054,12 +1342,17 @@ func _set_life_state(new_state: LifeState) -> void:
 	life_state = new_state
 	_shown_life_state = new_state
 	_present_life_state(old)
+	if new_state != LifeState.ACTIVE:
+		TurnManager.notify_unit_down(self)
 
 
 ## How a life-state change LOOKS, on every peer: the collapse, the corpse tint,
 ## standing back up — and the tile it frees or retakes, since every peer keeps
 ## its own occupancy grid.
 func _present_life_state(old: LifeState) -> void:
+	if life_state != LifeState.ACTIVE and old != life_state:
+		_record(ExplorationRules.EV_DOWN, {"dead": life_state == LifeState.DEAD,
+			"was_active": old == LifeState.ACTIVE})
 	if old == LifeState.ACTIVE and life_state != LifeState.ACTIVE:
 		# Bodies hold no tile. Guarded on still being the occupant, because a unit
 		# downed MID-walk holds none (move_along) and somebody else may be there.
@@ -1268,9 +1561,13 @@ func _swap_weapon_rounds() -> void:
 	ammo = stowed_ammo
 	stowed_ammo = a
 	var r := reserve
+	var m := reserve_mags
 	reserve = stowed_reserve
+	reserve_mags = stowed_reserve_mags  # after `reserve`, which re-deals them
 	stowed_reserve = r
+	stowed_reserve_mags = m
 	ap_changed.emit(self)  # the HUD reads ammo off the same refresh
+	ammo_changed.emit(self)  # the setters fired with the stowed pair half swapped
 
 
 ## Which gun is in hand, from the two things that decide it: carrying a body
@@ -1685,7 +1982,7 @@ func do_suppress(target: Unit) -> void:
 	is_busy = true
 	await face_toward(target.global_position)
 	_arm_covering_fire(target)
-	await visual.play_burst(SUPPRESSION_BURST_ROUNDS)
+	await _play_armed_burst(SUPPRESSION_BURST_ROUNDS)
 	_disarm_covering_fire()
 	is_busy = false
 	# Deliberately NOT awaited: the covering fire runs for as long as the
@@ -1708,10 +2005,12 @@ func do_suppress(target: Unit) -> void:
 ## first one is empty — rounds going downrange with no effect is the mechanic.
 ##
 ## Skipped entirely when the unit is off screen or headless (`is_instant`), where
-## there is nobody to show it to and the timer would just burn turn time.
+## there is nobody to show it to and the timer would just burn turn time — unless
+## a co-op client is connected, whose view the host cannot see from here. Nothing
+## waits on this loop, so the host keeping it ticking costs no turn time.
 func _suppression_fire_loop() -> void:
 	while suppressing != null and not is_downed and is_inside_tree():
-		if is_instant():
+		if is_instant() and not visual.mirrors():
 			return
 		await get_tree().create_timer(SUPPRESSION_BURST_GAP).timeout
 		# Re-checked after the wait: three seconds is long enough for the
@@ -1719,7 +2018,7 @@ func _suppression_fire_loop() -> void:
 		if suppressing == null or is_downed or is_busy or not is_inside_tree():
 			return
 		_arm_covering_fire(suppressing)
-		await visual.play_burst(SUPPRESSION_BURST_ROUNDS)
+		await _play_armed_burst(SUPPRESSION_BURST_ROUNDS)
 		_disarm_covering_fire()
 
 
@@ -1919,7 +2218,18 @@ func _injured_arm_count() -> int:
 	return n
 
 
-func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.BodyPart.TORSO, charge_ammo: bool = true) -> Combat.ShotResult:
+## Whether this unit can put a round on `target`: line of sight, and enough
+## penetration to get through every body standing in front of it
+## (Penetration.can_reach). The test for every AIMED shot — Shoot, Aimed Shot,
+## Overwatch — where line of sight alone is the test for Suppress.
+func has_shot_at(target: Unit) -> bool:
+	return Penetration.can_reach(self, target)
+
+
+## `penetrates` is false for suppressing fire, the one shot that does not travel
+## the penetration path (docs/design/systems/penetration §6).
+func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.BodyPart.TORSO,
+		charge_ammo: bool = true, penetrates: bool = true) -> Combat.ShotResult:
 	# Coroutine — callers MUST `await`. Damage lands when the shot animation
 	# finishes, so the target drops in time with the effect, not before it.
 	# Swing onto the target before anything else. The weapon points where the
@@ -1935,14 +2245,20 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	# that paid-for burst rather than costing a fresh one.
 	if charge_ammo:
 		ammo -= 1
-	var result := Combat.resolve_shot(self, target, action, body_part)
+	var result := Penetration.resolve(self, target, action, body_part) if penetrates \
+		else Combat.resolve_shot(self, target, action, body_part)
 	is_busy = true
 	var rounds := randi_range(BURST_MIN, BURST_MAX)
 	_pending_shot = result
 	_pending_target = target
 	_burst_round = 0
 	_burst_strays = _pick_strays(rounds, result.hit)
-	await visual.play_burst(rounds)  # emits `muzzle` once per round
+	# Decided here, on the host, and carried to every client and into the
+	# tick's record: which way, if any, the model leans out to fire.
+	var lean := _lean_step_toward(target)
+	_record(ExplorationRules.EV_SHOT, {"target": target, "hit": result.hit, "crit": result.crit,
+		"rounds": rounds, "strays": PackedInt32Array(_burst_strays), "melee": false, "lean": lean})
+	await _play_armed_burst(rounds, lean)  # emits `muzzle` once per round
 	_pending_shot = null
 	_pending_target = null
 	if result.hit:
@@ -1969,6 +2285,7 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 			result.newly_injured = target.apply_body_part_damage(body_part, raw)
 			if result.stunned:
 				target.stunned = true
+	_land_collateral(result)
 	_report_incoming(target)
 	# Sec 5.4: gunfire is loud, and it leaves brass. The first is what the robot
 	# faction shares with the (deferred) alien sound channel; the second is what
@@ -1977,6 +2294,28 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	SecurityNetwork.report_evidence(grid_pos, SecurityNetwork.Evidence.BRASS)
 	is_busy = false
 	return result
+
+
+## Lands every other body the round was rolled against (Penetration): the same
+## carried-body redirect and armor as a hit on the target, and every one of them
+## — hit or missed — counts as shot at.
+func _land_collateral(result: Combat.ShotResult) -> void:
+	for c: Combat.ShotResult in result.collateral:
+		var body: Unit = c.unit
+		if body == null or not is_instance_valid(body):
+			continue
+		if c.hit:
+			var raw := c.damage
+			var victim := body
+			if body.redirects_hit_to_carried(self, c):
+				victim = body.carrying
+				c.hit_carried = true
+				c.redirect_note = "the round hits %s, slung over %s's shoulder" % [
+					victim.stats.display_name, body.stats.display_name]
+			c.damage = victim.take_damage(raw)
+			c.absorbed = raw - c.damage
+			show_impact(victim.global_position, false)
+		_report_incoming(body)
 
 
 func _pick_strays(rounds: int, hit: bool) -> Array[int]:
@@ -2000,13 +2339,12 @@ func melee_at(target: Unit) -> Combat.ShotResult:
 	# before it. No ammo is spent and nothing travels — the only mark a swing
 	# leaves is the impact flash where it connects.
 	var result := Combat.resolve_melee(self, target)
+	_record(ExplorationRules.EV_SHOT, {"target": target, "hit": result.hit, "crit": result.crit,
+		"rounds": 0, "strays": PackedInt32Array(), "melee": true})
 	is_busy = true
 	await visual.play_action(UnitVisual.MELEE)
 	if result.hit:
-		if not is_instant():
-			var vfx := get_tree().get_first_node_in_group("vfx")
-			if vfx:
-				vfx.impact(target.global_position, result.crit)
+		show_impact(target.global_position, result.crit)
 		var raw := result.damage
 		result.damage = target.take_damage(raw)
 		result.absorbed = raw - result.damage
@@ -2068,7 +2406,7 @@ func _on_muzzle() -> void:
 	# no mark at the target.
 	var lands := _pending_shot != null and _pending_shot.hit and round_index not in _burst_strays
 	var crit := _pending_shot != null and _pending_shot.crit
-	vfx.shot_impact(from, _pending_target.global_position, lands, crit)
+	vfx.shot_impact(from, _pending_target.visual.global_position, lands, crit)
 	# ONCE PER BURST, not once per round — unlike `shot_impact` above, which is
 	# per-round because each round leaves its own separate mark.
 	#
@@ -2083,6 +2421,121 @@ func _on_muzzle() -> void:
 	# ever wanted, the SAMPLE has to change with it — a single crack, not a burst.
 	if round_index == 0:
 		Sfx.play("rifle_fire", from)
+
+
+## Plays the burst armed by `fire_at` or `_arm_covering_fire`, and hands every
+## ready client the same arming. The roll exists only on the host, so without it
+## a client saw the rifle kick and nothing land; with it, the client's own
+## `_on_muzzle` draws the impacts and plays the gunfire, gated on that client's
+## own `is_instant`.
+func _play_armed_burst(rounds: int, lean := Vector3i.ZERO) -> void:
+	if visual.mirrors() and not TurnManager.resolving_tick:
+		var target_path := _pending_target.get_path() if _pending_target else NodePath()
+		var has_shot := _pending_shot != null
+		var hit := has_shot and _pending_shot.hit
+		var crit := has_shot and _pending_shot.crit
+		var strays := PackedInt32Array(_burst_strays)
+		for peer_id in SteamLobby.ready_peers:
+			_rpc_play_armed_burst.rpc_id(peer_id, target_path, rounds, has_shot, hit, crit, strays, lean)
+	await _play_burst_leaning(rounds, lean)
+
+
+## The tile step the model leans along to fire at `target` (GDD §6.1.2), or ZERO
+## when it sees it from its own tile. The step, not the tile: playback applies
+## it to the model wherever the model is drawn at that moment.
+func _lean_step_toward(target: Unit) -> Vector3i:
+	var line := GridManager.sight_line(self, target)
+	if line.is_empty() or line[0] == grid_pos:
+		return Vector3i.ZERO
+	return (line[0] as Vector3i) - grid_pos
+
+
+## `visual.play_burst`, from the model leaned `lean` out: slide out, fire, slide
+## back. Skipped when nothing is drawn (`is_instant`), and when a lean is already
+## running on this model — a second one stacked on it could leave it displaced.
+func _play_burst_leaning(rounds: int, lean: Vector3i) -> void:
+	if lean == Vector3i.ZERO or is_instant() or (_lean_tween != null and _lean_tween.is_running()):
+		await visual.play_burst(rounds, false)
+		return
+	var offset := global_transform.basis.inverse() * (Vector3(lean).normalized() * LEAN_DISTANCE)
+	await _tween_lean(offset)
+	await visual.play_burst(rounds, false)
+	if is_instant():
+		_set_lean(Vector3.ZERO)  # hidden mid-burst: nothing to watch it slide back
+	else:
+		await _tween_lean(Vector3.ZERO)
+
+
+func _tween_lean(to: Vector3) -> void:
+	_lean_tween = create_tween()
+	_lean_tween.tween_method(_set_lean, _lean_applied, to, LEAN_SECONDS)
+	await _lean_tween.finished
+	_lean_tween = null
+
+
+## Moves the model by the change in lean only, never to an absolute spot.
+func _set_lean(offset: Vector3) -> void:
+	visual.position += offset - _lean_applied
+	_lean_applied = offset
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, hit: bool,
+		crit: bool, strays: PackedInt32Array, lean: Vector3i) -> void:
+	# Only what `_on_muzzle` reads; the rest of the result stays on the host.
+	var shot: Combat.ShotResult = null
+	if has_shot:
+		shot = Combat.ShotResult.new()
+		shot.hit = hit
+		shot.crit = crit
+	_pending_shot = shot
+	_pending_target = get_node_or_null(target_path) as Unit if not target_path.is_empty() else null
+	_burst_round = 0
+	_burst_strays.assign(strays)
+	await _play_burst_leaning(rounds, lean)
+	# Unless a later burst took the arming over meanwhile — the suppression-break
+	# case `_disarm_covering_fire` describes.
+	if _pending_shot == shot:
+		_pending_shot = null
+		_pending_target = null
+
+
+## Draws an attack the tick already resolved (exploration plan B.12): the burst
+## with its recorded hit and strays, or the swing, and the target's flinch if it
+## was hit and is still standing. No roll, no damage, no RPC — every peer plays
+## the timeline itself. Coroutine.
+func replay_attack(target: Unit, hit: bool, crit: bool, rounds: int,
+		strays: PackedInt32Array, melee: bool, lean := Vector3i.ZERO) -> void:
+	if melee:
+		await visual.play_action_local(UnitVisual.MELEE)
+		if hit:
+			_show_impact(target.visual.global_position, crit)
+	else:
+		await _rpc_play_armed_burst(target.get_path(), rounds, true, hit, crit, strays, lean)
+	if hit and not target.is_downed:
+		target.visual.play_hit_react_local()
+
+
+## A hit landing at `at` — a swing connecting, a grenade going off. Sent to every
+## ready client as well, each of which shows it only if it can see this unit.
+func show_impact(at: Vector3, crit: bool) -> void:
+	if visual.mirrors() and not TurnManager.resolving_tick:
+		for peer_id in SteamLobby.ready_peers:
+			_rpc_show_impact.rpc_id(peer_id, at, crit)
+	_show_impact(at, crit)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_show_impact(at: Vector3, crit: bool) -> void:
+	_show_impact(at, crit)
+
+
+func _show_impact(at: Vector3, crit: bool) -> void:
+	if is_instant():
+		return
+	var vfx := get_tree().get_first_node_in_group("vfx")
+	if vfx:
+		vfx.impact(at, crit)
 
 
 ## Arms the muzzle hook for a burst that resolves NO shot — suppressing fire.
@@ -2136,10 +2589,12 @@ func do_hunker() -> void:
 ## once it is paid — `_end_activation_ap` forfeits anything left over, same as
 ## it always has.
 func do_overwatch() -> void:
-	on_overwatch = true
 	var cost := action_cost(UnitStats.Action.OVERWATCH)
+	# Paid BEFORE it is set: in exploration paying is acting, and acting lets go
+	# of an overwatch (plan B.8) — this one must survive its own price (E22).
+	pay(cost)
+	on_overwatch = true
 	overwatch_reserve = cost
-	spend_ap(cost)
 	_end_activation_ap()
 	# Holding an angle from behind a crate is a different pose from holding one in
 	# the open. Falls through to the plain hold until `overwatch_hold_low` exists.
@@ -2164,23 +2619,45 @@ func do_overwatch() -> void:
 ## activation on the zero. Routed through `spend_ap` so `ap_changed` still fires
 ## and the HUD greys out immediately.
 func _end_activation_ap() -> void:
+	# Out of combat there is no activation to end, and no AP to forfeit.
+	if _on_the_clock():
+		return
 	spend_ap(ap)
 
 
 func do_reload() -> void:
 	# Coroutine, unlike the other two — callers MUST `await`, or the unit will
-	# still be reloading on screen when its next action resolves. Draws from
-	# `reserve` (spare rounds beyond the loaded mag); reserve < 0 means
-	# unlimited, so it's never decremented — see WeaponData.starting_reserve.
-	var needed := stats.mag_size - ammo
-	var drawn := needed
-	if reserve >= 0:
-		drawn = mini(needed, reserve)
-		reserve -= drawn
-	ammo += drawn
+	# still be reloading on screen when its next action resolves. A weapon on
+	# magazines swaps one; anything else draws from `reserve` (spare rounds beyond
+	# the loaded mag), where reserve < 0 means unlimited, so it's never decremented
+	# — see WeaponData.starting_reserve.
+	if not reserve_mags.is_empty():
+		_swap_magazine()
+	else:
+		var needed := stats.mag_size - ammo
+		var drawn := needed
+		if reserve >= 0:
+			drawn = mini(needed, reserve)
+			reserve -= drawn
+		ammo += drawn
 	is_busy = true
 	await visual.play_action(UnitVisual.RELOAD)
 	is_busy = false
+
+
+## Loads the fullest spare magazine, and the one coming out goes back on the vest
+## with whatever it still holds. No round is lost, so `reserve` moves by exactly
+## what the gun gained. Allowed even when it leaves the gun with less: can_reload
+## asks only for a gun not full and a spare with rounds in it.
+func _swap_magazine() -> void:
+	var mags := reserve_mags
+	var loaded := mags[0]
+	mags[0] = ammo
+	mags.sort()
+	mags.reverse()
+	reserve += ammo - loaded
+	reserve_mags = mags  # after `reserve`, which re-deals them
+	ammo = loaded
 
 
 func toggle_flashlight() -> void:
@@ -2188,5 +2665,6 @@ func toggle_flashlight() -> void:
 	if not has_flashlight:
 		return
 	flashlight_on = not flashlight_on
+	_record(ExplorationRules.EV_LIGHT, {"on": flashlight_on})
 	visual.set_flashlight_enabled(flashlight_on)
 	LightingManager.recompute_dynamic()

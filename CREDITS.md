@@ -28,6 +28,17 @@ downloadable assets is the grey area). This repo is public — if that becomes a
 concern, the fix is a ZapSplat Gold subscription, which drops both the
 attribution requirement and the redistribution restriction.
 
+### Room tiles
+
+**Quaternius — Modular Sci-Fi MegaKit (Standard)** — https://quaternius.com
+
+Licence: CC0 1.0 (public domain). No attribution required, so nothing is added
+to `scripts/credits.gd`; the licence text ships beside the kit as
+`assets/room_tiles/quaternius_scifi/License_Standard.txt`.
+
+Files: `assets/room_tiles/quaternius_scifi/glTF/` (original names) and the
+`Textures/` it uses, mapped to sockets by `quaternius_scifi.json`.
+
 ## Outstanding
 
 - [ ] `assets/title_page.png` is still unreferenced by any scene or script. The

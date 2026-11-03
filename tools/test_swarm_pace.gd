@@ -54,6 +54,7 @@ func _initialize() -> void:
 	await _check_cannot_close_and_swing()
 	await _check_movement_is_flat()
 	await _check_brawler_shares_the_pace()
+	await _check_brute_shares_the_pace()
 	await _check_worm_crawls_one_tile()
 	await _check_worm_feels_footsteps()
 	await _check_mass_trades_the_warning_for_a_gather()
@@ -136,6 +137,21 @@ func _check_brawler_shares_the_pace() -> void:
 		"and is tougher instead (%d vs %d HP)"
 		% [brawler.stats.max_hp(), swarm.stats.max_hp()])
 	_free([swarm, brawler])
+
+
+## The horde's brute is a swarm with more HP and a heavier claw — and only that.
+## Its claw must price the same against the same pool, or the one body a horde
+## leads with would be the one that crosses ground and swings in one draw.
+func _check_brute_shares_the_pace() -> void:
+	var swarm = await _spawn(SWARM, ANCHOR, AlienPresets.swarm("Swarm"))
+	var brute = await _spawn(SWARM, ANCHOR + Vector3i(3, 0, 0), AlienPresets.brute("Brute"))
+	_check(brute.ap_pool() == swarm.ap_pool() and brute.action_cost(MELEE) == swarm.action_cost(MELEE),
+		"a brute keeps the swarm's pool and claw price (%d/%d vs %d/%d AP)"
+		% [brute.ap_pool(), brute.action_cost(MELEE), swarm.ap_pool(), swarm.action_cost(MELEE)])
+	_check(brute.stats.max_hp() > swarm.stats.max_hp() and brute.stats.melee_damage > swarm.stats.melee_damage,
+		"and is tougher and hits harder (%d vs %d HP, %d vs %d dmg)"
+		% [brute.stats.max_hp(), swarm.stats.max_hp(), brute.stats.melee_damage, swarm.stats.melee_damage])
+	_free([swarm, brute])
 
 
 ## The worm is the named exception to flat movement (`WormUnit.move_ap_per_tile`): a

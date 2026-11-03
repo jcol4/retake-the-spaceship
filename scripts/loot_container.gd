@@ -29,7 +29,7 @@ const LABEL_HEIGHT := 1.2
 var tile: Vector3i
 var is_pile := false
 var items: Array[ItemData] = []
-var _mesh: MeshInstance3D
+var _mesh: Node3D  # the kit crate's wrapper, or the placeholder box
 var _label: Label3D
 
 
@@ -46,15 +46,10 @@ func setup(at: Vector3i, codes: PackedStringArray, pile: bool) -> void:
 
 
 func _ready() -> void:
-	_mesh = MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = PILE_SIZE if is_pile else CRATE_SIZE
-	_mesh.mesh = box
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = PILE_COLOR if is_pile else CRATE_COLOR
-	_mesh.material_override = mat
-	_mesh.position = Vector3(0, box.size.y / 2.0, 0)
-	add_child(_mesh)
+	if not is_pile:
+		_add_kit_visual()
+	if _mesh == null:
+		_add_box_visual()
 	_label = Label3D.new()
 	_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_label.fixed_size = true
@@ -64,6 +59,34 @@ func _ready() -> void:
 	add_child(_label)
 	global_position = GridManager.grid_to_world(tile)
 	refresh()
+
+
+## The kit's crate piece (ModuleCatalog socket "crate"), sized by its manifest
+## entry to sit inside CRATE_SIZE, turned by a hash of the tile so every peer
+## draws the same thing. Leaves `_mesh` null when the kit has no crate, and the
+## box is drawn instead.
+func _add_kit_visual() -> void:
+	var catalog := ModuleCatalog.shared()
+	var p := catalog.pick("crate", ModuleCatalog.hash_of(["crate", tile]))
+	if p.is_empty():
+		return
+	var visual := catalog.instance(p)
+	visual.rotation.y = posmod(ModuleCatalog.hash_of(["crate_yaw", tile]), 4) * PI / 2.0
+	add_child(visual)
+	_mesh = visual
+
+
+func _add_box_visual() -> void:
+	var mesh := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = PILE_SIZE if is_pile else CRATE_SIZE
+	mesh.mesh = box
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = PILE_COLOR if is_pile else CRATE_COLOR
+	mesh.material_override = mat
+	mesh.position = Vector3(0, box.size.y / 2.0, 0)
+	add_child(mesh)
+	_mesh = mesh
 
 
 ## Re-reads `items` into the label. Called by LootManager after every change.

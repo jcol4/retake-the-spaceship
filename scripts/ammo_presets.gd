@@ -17,8 +17,10 @@ enum AmmoId {
 const DATA := {
 	AmmoId.STANDARD: {"display_name": "Standard"},
 	# --- Rifle / SMG / LMG (and pistol, once there is one) ---
+	# Penetrator goes through bodies (+20 pen, one bracket on most guns); FMJ
+	# took over its old job as the answer to armor.
 	AmmoId.PENETRATOR: {
-		"display_name": "Penetrator Rounds", "damage_pct_vs_armored": 34,
+		"display_name": "Penetrator Rounds", "penetration": 20,
 	},
 	AmmoId.HOLLOW_POINT: {
 		"display_name": "Hollow Point", "damage_pct_vs_unarmored": 50, "damage_pct_vs_armored": -15,
@@ -27,14 +29,16 @@ const DATA := {
 		"display_name": "Subsonic", "noise_multiplier": 0.7,
 	},
 	AmmoId.FMJ: {
-		"display_name": "FMJ", "accuracy": 2,
+		"display_name": "FMJ", "damage_pct_vs_armored": 34,
 	},
 	# --- Shotgun ---
 	# Slugs trade the spread for reach: optimal range 3 -> 6, but -34% damage
 	# within 4 tiles. The two +% lines stack with that, so a slug at 3 tiles
-	# does +16% to armor and -9% to flesh.
+	# does +16% to armor and -9% to flesh. A slug is one projectile, so it trades
+	# buckshot's splash for Battle Rifle penetration.
 	AmmoId.SLUG: {
 		"display_name": "Slug Rounds", "optimal_range": 3,
+		"penetration": 80, "replaces_splash": true,
 		"damage_pct_vs_armored": 50, "damage_pct_vs_unarmored": 25,
 		"close_damage_pct": -34, "close_range": 4,
 	},

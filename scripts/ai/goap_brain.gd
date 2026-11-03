@@ -259,7 +259,12 @@ func read_state(unit: Unit, target: Unit) -> Dictionary:
 	# target, and bad light may not be.
 	var in_range := has_los \
 		and Combat.compute_accuracy(unit, target, Combat.ShotAction.SHOOT) >= MIN_VIABLE_ACCURACY
-	var covered := not GridManager.covered_sides(unit.grid_pos).is_empty()
+	# Corner cover counts too (GDD §6.1): a wall is not a CoverEdge, so a merc
+	# that took cover at a corner would otherwise read as exposed next activation
+	# and walk off to find cover all over again.
+	var covered: bool = not GridManager.covered_sides(unit.grid_pos).is_empty() \
+		or (target != null \
+			and Combat.defending_cover(target.grid_pos, unit.grid_pos)[0] != MapData.Cover.NONE)
 	# Explicitly typed: `defending_cover` returns an untyped Array, so indexing it
 	# yields a Variant and `:=` has nothing to infer from.
 	var target_behind_cover: bool = target != null \

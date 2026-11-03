@@ -24,7 +24,9 @@ var _floor_height: float
 ## `floor_mat`/`tile_size`/`floor_height` are handed in at construction rather
 ## than read from an autoload, so this node never has to know it's being built
 ## by MapBuilder specifically — it only needs enough to draw one plane per
-## reopened tile that matches the rest of the deck's floor.
+## reopened tile that matches the rest of the deck's floor. A null `floor_mat`
+## means the builder already drew floor under the footprint, so nothing is
+## laid down on destruction.
 func setup(box_footprint: Rect2i, box_deck: int, cover_tier: int, floor_mat: StandardMaterial3D, tile_size: float, floor_height: float) -> void:
 	footprint = box_footprint
 	deck = box_deck
@@ -43,6 +45,8 @@ func on_destroyed() -> void:
 	for child in get_children():
 		child.queue_free()
 	collision_layer = 0
+	if _floor_mat == null:
+		return
 	for z in range(footprint.position.y, footprint.position.y + footprint.size.y):
 		for x in range(footprint.position.x, footprint.position.x + footprint.size.x):
 			_add_floor_quad(_cell_world(x, z))

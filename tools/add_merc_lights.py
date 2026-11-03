@@ -13,6 +13,9 @@ WHAT IT BUILDS
     The game colours it by HP bracket (unit_visual.gd `set_health_lights`).
   * `down_pip_1..3` -- small discs in a row across the right breast, innermost
     first. One lights red per down; the third down kills.
+  * `mag_pip_1..6` -- square tiles in a column of three down each side of the
+    band, numbered from the bottom row, right then left. One per spare magazine,
+    fullest first, coloured by how full it is and dark once empty.
 
 Each is fitted to the armour by raycasting the body in REST pose, lifted a hair
 off the surface, and SKINNED: every vertex copies the bone weights of the body
@@ -43,6 +46,15 @@ BAND_ROWS = 7
 PIP_RISE = 0.17
 PIP_OFFSETS = (0.07, 0.105, 0.14)
 PIP_RADIUS = 0.017
+## Magazine pips: rows bottom first (world Z, centred on the band's height), columns
+## as offsets along the merc's right, leaving a 0.03 gap from the band's 0.035 half
+## width. Narrow enough to read as columns of their own, tall enough to cover two or
+## three pixels at the closest game camera.
+MAG_PIPS = tuple("mag_pip_%d" % i for i in range(1, 7))
+MAG_PIP_ROWS = (1.42, 1.48, 1.54)
+MAG_PIP_COLUMNS = (0.08, -0.08)
+MAG_PIP_WIDTH = 0.03
+MAG_PIP_HEIGHT = 0.05
 ## How far off the armour the lights float, so they never z-fight it.
 LIFT = 0.012
 
@@ -197,10 +209,40 @@ def build_pip(name, tree, kd, body, center, back, right, offset, mat, arm):
     return make_object(name, [to_rest @ v for v in posed], faces, mat, arm), anchor
 
 
+def build_mag_pips(tree, kd, center, back, right, mat, arm):
+    """Flat tiles square to the back like the band, all in one plane: the outermost
+    point of the armour under any of them, plus LIFT. Each box runs back until it
+    meets the armour, so none floats. Following the armour's own slopes instead
+    fanned them out at angles and broke up the rows. All six take the weights of the
+    armour vertex under the band's middle, so the set moves as one piece."""
+    w, h = MAG_PIP_WIDTH / 2, MAG_PIP_HEIGHT / 2
+    corners = [(-w, -h), (w, -h), (w, h), (-w, h)]
+    spots = [(z, offset) for z in MAG_PIP_ROWS for offset in MAG_PIP_COLUMNS]
+    origin = Vector((center.x, center.y, 0.0))
+    depths = []
+    for z, offset in spots:
+        axis = origin + Vector((0, 0, z)) + right * offset
+        hits = [cast(tree, axis + right * a + Vector((0, 0, b)) + back * 1.0, -back)[0]
+                for a, b in corners]
+        depths.append([(hit - origin).dot(back) for hit in hits])
+    plane = max(max(d) for d in depths) + LIFT
+    middle = origin + Vector((0, 0, sum(MAG_PIP_ROWS) / len(MAG_PIP_ROWS)))
+    anchor = kd.find(cast(tree, middle + back * 1.0, -back)[0])[1]
+    faces = [(0, 1, 2, 3), (7, 6, 5, 4), (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0)]
+    built = []
+    for name, (z, offset), depth in zip(MAG_PIPS, spots, depths):
+        axis = origin + Vector((0, 0, z)) + right * offset
+        tile = [axis + right * a + Vector((0, 0, b)) for a, b in corners]
+        outer = [v + back * plane for v in tile]
+        inner = [v + back * (min(depth) - LIFT) for v in tile]
+        built.append((make_object(name, outer + inner, faces, mat, arm), anchor))
+    return built
+
+
 def main():
     arm = bpy.data.objects[ARMATURE]
     body = bpy.data.objects[BODY]
-    for name in (BAND,) + PIPS:
+    for name in (BAND,) + PIPS + MAG_PIPS:
         old = bpy.data.objects.get(name)
         if old is not None:
             bpy.data.objects.remove(old, do_unlink=True)
@@ -223,8 +265,10 @@ def main():
     kd = body_kd(body)
     band_mat = glow("health_band_glow", (0.2, 1.0, 0.8, 1.0))
     pip_mat = glow("down_pip_glow", (1.0, 0.1, 0.08, 1.0))
+    mag_mat = glow("mag_pip_glow", (1.0, 0.95, 0.6, 1.0))
 
     built = [(build_band(tree, center, back, right, band_mat, arm), None)]
+    built += build_mag_pips(tree, kd, center, back, right, mag_mat, arm)
 
     # The pips are fitted on the idle's first frame (see build_pip).
     anim = arm.animation_data

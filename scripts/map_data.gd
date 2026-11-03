@@ -103,6 +103,7 @@ var rooms: Array[Rect2i] = []
 var room_links: Array = []  # [a, b] index pairs into `rooms`
 var corridors: Array[int] = []  # indices into `rooms` that are through-routes
 var room_of: Dictionary = {}  # Vector3i cell pos -> index into `rooms`
+var _touching: Dictionary = {}  # region -> {region: true}; see touching_regions
 
 ## Multi-tile furniture, e.g. a 3x1 table: `[Rect2i footprint, int cover_tier]`
 ## entries. The footprint's cells are Terrain.OBSTACLE (not walkable — see
@@ -629,6 +630,30 @@ func linked_rooms(index: int) -> Array[int]:
 			out.append(link[1])
 		elif link[1] == index:
 			out.append(link[0])
+	return out
+
+
+## Regions sharing a tile edge with `index`, plus `index` itself. Not the same
+## question as `linked_rooms` on a generated deck: MapGenerator's links join
+## ROOM to room (the corridor between them is not in the pair), so a corridor
+## there links to nothing at all, while it physically opens onto both rooms.
+## On a flood-filled deck the two agree. Built once, on first ask — `room_of` is
+## complete by the time anything draws.
+func touching_regions(index: int) -> Array[int]:
+	var out: Array[int] = []
+	if index < 0:
+		return out
+	if _touching.is_empty():
+		for pos: Vector3i in room_of:
+			var a: int = room_of[pos]
+			for side in [Side.EAST, Side.SOUTH]:
+				var b: int = room_of.get(pos + SIDE_STEP[side], -1)
+				if b >= 0 and b != a:
+					_touching.get_or_add(a, {})[b] = true
+					_touching.get_or_add(b, {})[a] = true
+	out.append(index)
+	for other: int in _touching.get(index, {}):
+		out.append(other)
 	return out
 
 

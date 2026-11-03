@@ -99,7 +99,7 @@ func _check_body_follows_carrier() -> void:
 	carrier.pick_up(body)
 	var steps := [0]
 	carrier.stepped.connect(func(_u) -> void: steps[0] += 1)
-	var trail: Array[Vector3i] = [ANCHOR + Vector3i(-1, 0, 0), ANCHOR + Vector3i(-1, 0, -1), ANCHOR + Vector3i(0, 0, -2)]
+	var trail: Array[Vector3i] = [ANCHOR + Vector3i(1, 0, 0), ANCHOR + Vector3i(1, 0, -1), ANCHOR + Vector3i(0, 0, -2)]
 	var seen := []
 	carrier.stepped.connect(func(_u) -> void: seen.append(body.grid_pos == carrier.grid_pos))
 	await carrier.move_along(trail)

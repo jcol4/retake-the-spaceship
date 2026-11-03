@@ -546,9 +546,11 @@ A wall is hidden when **both**:
 Rule 2 is what makes it read as the squad's own field of view rather than as x-ray: an
 empty room has no interior worth opening, so the far side of the deck stays sealed.
 
-Walls fade rather than cut, over `OCCLUSION_FADE`. Two shared materials carry the fade
-rather than one per wall — a yaw snap moves every wall at once, so at most two alphas are
-ever in flight.
+Walls fade rather than cut, over `OCCLUSION_FADE`, by tweening
+`GeometryInstance3D.transparency` on every mesh a wall cell owns — kit face pieces, its
+dark cap-and-sides shell, any door frame it flanks — so multi-material kit art fades the
+same way the placeholder box does, with no material swapped. A piece spanning several
+cells hides only when all of them want it hidden.
 
 **Only the mesh is hidden.** Collision stays live, because line of sight and lighting
 occlusion both raycast layer-1 geometry: a wall you can see past must still be one you

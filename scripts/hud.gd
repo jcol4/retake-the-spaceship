@@ -92,6 +92,38 @@ var _continue_button: Button
 ## Seconds before Continue appears, so a click meant for the last action does not
 ## land on it and skip the roll call unread.
 const CONTINUE_DELAY := 1.0
+## Exploration (GDD §4.7, plan B.11): which loop the mission is in and, out of
+## combat, the step clock. Code-built beside the other late additions.
+var _mode_label: Label
+## The squad, one button per soldier, in both modes (E24). Unit -> Button. Your own
+## select on click (exploration only); a co-op partner's are read-only and greyed;
+## whoever is drawn or selected is tinted.
+var _portrait_bar: HBoxContainer
+var _portraits: Dictionary = {}
+const PORTRAIT_ACTIVE := Color(0.55, 1.0, 0.65)
+const PORTRAIT_DOWN := Color(1.0, 0.45, 0.4)
+const PORTRAIT_PARTNER := Color(0.6, 0.6, 0.65)
+## The tile the unit panel was last drawn for. Out of combat a walk spends no AP, so
+## nothing else says the context buttons (Loot, Call ship) may have changed.
+var _shown_tile := Vector3i(0, -9999, 0)
+## XCOM-style target bar over the action bar while a shot mode is armed: one
+## skull per hostile in line of sight (hover for the odds), then Confirm once
+## one is picked (PlayerUnit.pick_target / confirm_target). Code-built, since its
+## buttons ARE the target list.
+var _target_bar: VBoxContainer
+var _target_info: Label
+var _confirm_button: Button
+var _skull_row: HBoxContainer
+## Skull button -> the Unit it targets, and the list they were built from.
+var _skulls: Dictionary = {}
+var _skull_targets: Array[Unit] = []
+var _hovered_skull: Unit = null
+var _target_marker: TargetMarker
+## The target list re-checks line of sight, so it is polled on a short clock
+## rather than every frame. Shorter than BODY_LABEL_REFRESH: it follows a click.
+const TARGET_BAR_REFRESH := 0.1
+var _target_bar_clock := 0.0
+const SKULL_SIZE := 44.0
 
 
 func _ready() -> void:
@@ -123,6 +155,13 @@ func _ready() -> void:
 	buttons["drop"].pressed.connect(_on_drop)
 	buttons["loot"].pressed.connect(_on_loot)
 	_build_terminal_button()
+	_build_wait_button()
+	_build_mode_label()
+	_build_portrait_bar()
+	_build_target_bar()
+	TurnManager.unit_selected.connect(_on_unit_activated)
+	TurnManager.mode_changed.connect(_on_mode_changed)
+	TurnManager.clock_changed.connect(func(_s: int, _n: int) -> void: _refresh_mode_label())
 	_build_loot_panel()
 	_build_continue_button()
 	LootManager.container_changed.connect(func(_t: Vector3i) -> void: _refresh_loot_panel())
@@ -150,6 +189,9 @@ func _on_unit_activated(unit: Unit) -> void:
 	_hide_grenade_menu()
 	_hide_loot_panel()
 	_refresh(unit)
+	_refresh_portraits()
+	if unit is PlayerUnit and not unit.command_rejected.is_connected(_on_command_rejected):
+		unit.command_rejected.connect(_on_command_rejected)
 	if unit is PlayerUnit and not unit.inventory_changed.is_connected(_on_inventory_changed):
 		unit.inventory_changed.connect(_on_inventory_changed)
 	if unit is PlayerUnit and not unit.ap_changed.is_connected(_on_ap_changed):
@@ -158,6 +200,9 @@ func _on_unit_activated(unit: Unit) -> void:
 		unit.aimed_shot_target_picked.connect(_on_aimed_shot_target_picked)
 	if unit is PlayerUnit and not unit.grenade_target_picked.is_connected(_on_grenade_target_picked):
 		unit.grenade_target_picked.connect(_on_grenade_target_picked)
+	if unit is PlayerUnit and not unit.target_picked.is_connected(_on_target_picked):
+		unit.target_picked.connect(_on_target_picked)
+	_refresh_target_bar()
 
 
 func _on_ap_changed(unit: Unit) -> void:
@@ -205,15 +250,18 @@ func _refresh(unit: Unit) -> void:
 		# AP shows the POOL alongside what's left: the pool is per-soldier now
 		# (Fitness-derived, Sec 4.2), so a bare "AP 5" doesn't say whether that is
 		# a full activation or the tail of one.
-		unit_info.text = "%s  [%s]   %s\nHP %d/%d   AP %d/%d   Ammo %d/%d   Reserve %s\nInitiative %d%s\nFlashlight %s   Standing on %d%% light%s" % [
+		# Out of combat there is no AP to read; the clock is on the mode banner.
+		var ap_text := "" if TurnManager.in_exploration() else "   AP %d/%d" % [player.ap, player.ap_pool()]
+		_shown_tile = player.grid_pos
+		unit_info.text = "%s  [%s]   %s\nHP %d/%d%s   Ammo %d/%d   Reserve %s\nInitiative %d%s\nFlashlight %s   Standing on %d%% light%s" % [
 			player.stats.display_name,
 			UnitStats.UnitClass.keys()[player.stats.unit_class],
 			weapon_name,
-			player.current_hp, player.stats.max_hp(), player.ap, player.ap_pool(),
+			player.current_hp, player.stats.max_hp(), ap_text,
 			player.ammo, player.stats.mag_size, reserve_text,
 			player.stats.initiative(), reserved,
 			"ON" if player.flashlight_on else "OFF",
-			roundi(GridManager.get_tile(player.grid_pos).light_value) if GridManager.has_tile(player.grid_pos) else 0,
+			roundi(LightingManager.display_light(player.grid_pos)),
 			injury_line,
 		]
 	elif unit:
@@ -224,6 +272,9 @@ func _refresh(unit: Unit) -> void:
 	else:
 		unit_info.text = "—"
 	var is_player := player != null
+	# The whole row goes, rather than greying, whenever there is nothing this player
+	# can do: the enemy's activation, or a co-op partner's soldier.
+	$Actions.visible = is_player and not player.is_downed and player.is_owned_by_local_player()
 	# Every price is per-soldier now (Reflexes discounts them, Sec 4.3), so the
 	# buttons carry their own cost rather than the player memorising a fixed
 	# table — the same number the gate below is testing against.
@@ -244,26 +295,34 @@ func _refresh(unit: Unit) -> void:
 		# which one it's spent on), so one count covers both.
 		buttons["grenade"].text = "Grenade (%d)  x%d" % [
 			player.action_cost(UnitStats.Action.GRENADE), player.grenade_charges]
-	buttons["move"].disabled = not is_player or player.ap < player.move_ap_per_tile()
+	buttons["move"].disabled = not is_player or not player.can_afford(player.move_ap_per_tile())
 	buttons["shoot"].disabled = not is_player \
-		or player.ap < player.action_cost(UnitStats.Action.SHOOT) or not player.can_shoot()
+		or not player.can_afford(player.action_cost(UnitStats.Action.SHOOT)) or not player.can_shoot()
 	# Gated on the Torso, the cheapest zone — the per-zone prices are on the menu
 	# itself, where the zone is actually chosen.
 	buttons["aimed_shot"].disabled = not is_player \
-		or player.ap < player.min_aimed_shot_cost() or not player.can_shoot()
+		or not player.can_afford(player.min_aimed_shot_cost()) or not player.can_shoot()
 	buttons["suppress"].disabled = not is_player \
-		or player.ap < player.action_cost(UnitStats.Action.SUPPRESS) or not player.can_suppress()
+		or not player.can_afford(player.action_cost(UnitStats.Action.SUPPRESS)) or not player.can_suppress()
 	buttons["grenade"].disabled = not is_player \
-		or player.ap < player.action_cost(UnitStats.Action.GRENADE) or player.grenade_charges <= 0
-	buttons["hunker"].disabled = not is_player or player.ap < player.action_cost(UnitStats.Action.HUNKER)
+		or not player.can_afford(player.action_cost(UnitStats.Action.GRENADE)) or player.grenade_charges <= 0
+	buttons["hunker"].disabled = not is_player or not player.can_afford(player.action_cost(UnitStats.Action.HUNKER))
 	buttons["overwatch"].disabled = not is_player \
-		or player.ap < player.action_cost(UnitStats.Action.OVERWATCH) or not player.can_shoot()
+		or not player.can_afford(player.action_cost(UnitStats.Action.OVERWATCH)) or not player.can_shoot()
 	buttons["reload"].disabled = not is_player \
-		or player.ap < player.action_cost(UnitStats.Action.RELOAD) or not player.can_reload()
+		or not player.can_afford(player.action_cost(UnitStats.Action.RELOAD)) or not player.can_reload()
 	# Both free actions (Sec 4.2) — no AP gate on either.
 	buttons["face"].disabled = not is_player
 	buttons["flashlight"].disabled = not is_player
 	buttons["end_turn"].disabled = not is_player
+	# Out of combat: no activation to end and nothing to hunker against (E21), and
+	# the one way to pass time without acting (plan B.10).
+	var exploring := TurnManager.in_exploration()
+	buttons["hunker"].visible = not exploring
+	buttons["end_turn"].visible = not exploring
+	buttons["wait"].visible = exploring
+	buttons["wait"].disabled = not is_player
+	buttons["move"].text = "Move" if exploring else "Move (1-2)"
 	# Extraction (GDD §7.3–7.4): SHOWN only where they could work — in a callable
 	# bay, in the square of our landed ship — rather than greyed out everywhere,
 	# since for most of a mission neither applies and two dead buttons are noise.
@@ -283,8 +342,8 @@ func _refresh(unit: Unit) -> void:
 		_label_cost(buttons["call_ship"], "Call ship", player.action_cost(UnitStats.Action.CALL_SHIP))
 		_label_cost(buttons["board"], "Board ship", player.action_cost(UnitStats.Action.BOARD_SHIP))
 		_label_cost(buttons["extract"], "EXTRACT", player.action_cost(UnitStats.Action.EXTRACT))
-		buttons["call_ship"].disabled = player.ap < player.action_cost(UnitStats.Action.CALL_SHIP)
-		buttons["board"].disabled = player.ap < player.action_cost(UnitStats.Action.BOARD_SHIP)
+		buttons["call_ship"].disabled = not player.can_afford(player.action_cost(UnitStats.Action.CALL_SHIP))
+		buttons["board"].disabled = not player.can_afford(player.action_cost(UnitStats.Action.BOARD_SHIP))
 		buttons["extract"].disabled = false
 	# GDD §4.3: primary <-> pistol. Hidden while carrying (the pistol is forced)
 	# and for anyone without a sidearm.
@@ -294,7 +353,7 @@ func _refresh(unit: Unit) -> void:
 		var other: WeaponData = player.stats.weapon if player.stats.sidearm_drawn else player.stats.sidearm
 		_label_cost(buttons["switch"], "Switch to %s" % (other.display_name if other else "weapon"),
 			player.action_cost(UnitStats.Action.SWITCH_WEAPON))
-		buttons["switch"].disabled = player.ap < player.action_cost(UnitStats.Action.SWITCH_WEAPON)
+		buttons["switch"].disabled = not player.can_afford(player.action_cost(UnitStats.Action.SWITCH_WEAPON))
 	# GDD §4.4, same rule as the ship buttons: shown only when there is a body in
 	# reach the action would accept (any player's — cross-player rescue, §7.6),
 	# greyed only on AP. Drop is shown whenever something is carried, and is free.
@@ -306,8 +365,8 @@ func _refresh(unit: Unit) -> void:
 	if is_player:
 		_label_cost(buttons["revive"], "Revive", player.action_cost(UnitStats.Action.REVIVE))
 		_label_cost(buttons["pick_up"], "Pick up", player.action_cost(UnitStats.Action.PICK_UP))
-		buttons["revive"].disabled = player.ap < player.action_cost(UnitStats.Action.REVIVE)
-		buttons["pick_up"].disabled = player.ap < player.action_cost(UnitStats.Action.PICK_UP)
+		buttons["revive"].disabled = not player.can_afford(player.action_cost(UnitStats.Action.REVIVE))
+		buttons["pick_up"].disabled = not player.can_afford(player.action_cost(UnitStats.Action.PICK_UP))
 		buttons["drop"].disabled = false
 	# Extraction plan 3.2, the same rule again: shown when there is something in
 	# reach to take (a crate, a pile, a corpse with anything on it — any player's,
@@ -330,7 +389,143 @@ func _refresh(unit: Unit) -> void:
 		var resume := ObjectiveManager.terminal_rules != null \
 			and ObjectiveManager.terminal_rules.state == TerminalRules.State.PAUSED
 		_label_cost(buttons["terminal"], "Restart terminal" if resume else "Operate terminal", cost)
-		buttons["terminal"].disabled = player.ap < cost
+		buttons["terminal"].disabled = not player.can_afford(cost)
+
+
+## Wait (plan B.10), beside the hud.tscn action buttons like the terminal's.
+func _build_wait_button() -> void:
+	var b := Button.new()
+	b.name = "Wait"
+	b.visible = false
+	$Actions.add_child(b)
+	buttons["wait"] = b
+	b.pressed.connect(func() -> void:
+		var player := _active_player()
+		if player:
+			player._issue(&"try_wait"))
+
+
+func _build_mode_label() -> void:
+	_mode_label = Label.new()
+	_mode_label.name = "ModeLabel"
+	_mode_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	_mode_label.offset_left = -300.0
+	_mode_label.offset_right = 300.0
+	_mode_label.offset_top = 88.0
+	_mode_label.offset_bottom = 116.0
+	_mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mode_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_mode_label.visible = false
+	add_child(_mode_label)
+
+
+func _build_portrait_bar() -> void:
+	_portrait_bar = HBoxContainer.new()
+	_portrait_bar.name = "PortraitBar"
+	_portrait_bar.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	_portrait_bar.offset_top = -116.0
+	_portrait_bar.offset_bottom = -64.0
+	_portrait_bar.alignment = BoxContainer.ALIGNMENT_CENTER
+	# It spans the screen: only the buttons may take a click from the deck.
+	_portrait_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_portrait_bar)
+
+
+## The banner and the clock: "EXPLORING — round 7 · 12 / 20 steps", or just the
+## round in a fight. Also what the Wait button promises.
+func _refresh_mode_label() -> void:
+	if _mode_label == null:
+		return
+	_mode_label.visible = TurnManager.turn_number > 0 and not TurnManager.mission_over
+	if TurnManager.in_exploration():
+		_mode_label.text = "EXPLORING — round %d  ·  %d / %d steps" % [
+			TurnManager.turn_number, TurnManager.steps, TurnManager.STEPS_PER_ROUND]
+	else:
+		_mode_label.text = "COMBAT — round %d" % TurnManager.turn_number
+	buttons["wait"].text = "Wait → round %d" % (TurnManager.turn_number + 1)
+
+
+func _on_mode_changed(_mode: int) -> void:
+	_hide_aimed_shot_menu()
+	_hide_grenade_menu()
+	# The soldiers disarm themselves, but by now none is selected to own the overlay.
+	var highlights := get_tree().get_first_node_in_group("highlights")
+	if highlights:
+		highlights.clear_highlights()
+	_refresh_mode_label()
+	_refresh(TurnManager.active_unit)
+	_refresh_portraits()
+
+
+## One button per soldier on the board, read off replicated state, so a co-op
+## partner's soldiers need no sync of their own (plan C.5). Polled with the body
+## labels; a soldier gone aboard drops off the bar.
+func _refresh_portraits() -> void:
+	if _portrait_bar == null:
+		return
+	var squad: Array[Unit] = []
+	for node in get_tree().get_nodes_in_group("player_units"):
+		var unit := node as Unit
+		if unit:
+			squad.append(unit)
+	squad.sort_custom(func(a: Unit, b: Unit) -> bool: return String(a.name) < String(b.name))
+	for unit: Variant in _portraits.keys():
+		if not is_instance_valid(unit) or not squad.has(unit):
+			_portraits[unit].queue_free()
+			_portraits.erase(unit)
+	for unit in squad:
+		var button: Button = _portraits.get(unit)
+		if button == null:
+			button = Button.new()
+			button.focus_mode = Control.FOCUS_NONE
+			button.pressed.connect(TurnManager.select.bind(unit))
+			_portrait_bar.add_child(button)
+			_portraits[unit] = button
+		var status := ""
+		if unit.life_state == Unit.LifeState.DEAD:
+			status = "DEAD"
+		elif unit.is_downed:
+			status = "DOWN %d/%d" % [unit.downed_hp, unit.downed_bar_max()]
+		else:
+			status = "HP %d/%d" % [unit.current_hp, unit.stats.max_hp()]
+		if unit.carrying != null:
+			status += " +%s" % unit.carrying.stats.display_name
+		button.text = "%s\n%s" % [unit.stats.display_name, status]
+		var mine := unit.is_owned_by_local_player()
+		button.disabled = not mine or unit.is_downed
+		if unit == TurnManager.active_unit:
+			button.modulate = PORTRAIT_ACTIVE
+		elif unit.is_downed:
+			button.modulate = PORTRAIT_DOWN
+		elif not mine:
+			button.modulate = PORTRAIT_PARTNER
+		else:
+			button.modulate = Color.WHITE
+
+
+func _on_command_rejected(reason: String) -> void:
+	_on_extraction_notice(reason, true)
+
+
+## Tab walks this player's own standing soldiers (E24), exploration only: in a
+## fight the draw decides who is up. With a shot mode armed it walks the targets
+## instead, in either mode, Shift+Tab backwards.
+func _input(event: InputEvent) -> void:
+	var key := event as InputEventKey
+	if key == null or not key.pressed or key.echo or key.keycode != KEY_TAB:
+		return
+	if _target_bar != null and _target_bar.visible and not _skull_targets.is_empty():
+		_cycle_target(-1 if key.shift_pressed else 1)
+		get_viewport().set_input_as_handled()
+		return
+	if not TurnManager.in_exploration():
+		return
+	var squad := TurnManager.own_squad()
+	if squad.is_empty():
+		return
+	var at := squad.find(TurnManager.active_unit) if is_instance_valid(TurnManager.active_unit) else -1
+	TurnManager.select(squad[(at + 1) % squad.size()])
+	get_viewport().set_input_as_handled()
 
 
 ## The Hold console's button (Phase 6). Built in code beside the hud.tscn action
@@ -374,6 +569,181 @@ func _set_mode(mode: PlayerUnit.Mode) -> void:
 	var player := _active_player()
 	if player:
 		player.set_mode(mode)
+	_refresh_target_bar()
+
+
+func _build_target_bar() -> void:
+	_target_bar = VBoxContainer.new()
+	_target_bar.name = "TargetBar"
+	_target_bar.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	# Over the portrait bar, which sits over the action bar.
+	_target_bar.offset_top = -236.0
+	_target_bar.offset_bottom = -120.0
+	_target_bar.alignment = BoxContainer.ALIGNMENT_END
+	_target_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_target_bar.visible = false
+	add_child(_target_bar)
+
+	_target_info = Label.new()
+	_target_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_target_info.add_theme_constant_override("outline_size", 6)
+	_target_info.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	_target_info.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_target_bar.add_child(_target_info)
+
+	_confirm_button = Button.new()
+	_confirm_button.name = "Confirm"
+	_confirm_button.text = "Confirm"
+	_confirm_button.focus_mode = Control.FOCUS_NONE
+	_confirm_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_confirm_button.custom_minimum_size = Vector2(140, 0)
+	_confirm_button.visible = false
+	_confirm_button.pressed.connect(_on_confirm_target)
+	_target_bar.add_child(_confirm_button)
+
+	_skull_row = HBoxContainer.new()
+	_skull_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	_skull_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_target_bar.add_child(_skull_row)
+
+	_target_marker = TargetMarker.new()
+	add_child(_target_marker)
+
+
+## Rebuilt only when the list of targets changes, so a skull under the cursor is
+## not freed out from under its hover between two polls.
+func _refresh_target_bar() -> void:
+	if _target_bar == null:
+		return
+	var player := _active_player()
+	var armed := player != null and player.is_owned_by_local_player() and not player.is_downed \
+		and not player.is_busy and not TurnManager.mission_over \
+		and player.mode in [PlayerUnit.Mode.SHOOT, PlayerUnit.Mode.AIMED_SHOT, PlayerUnit.Mode.SUPPRESS]
+	var targets: Array[Unit] = []
+	if armed:
+		targets = player.shot_targets()
+	if targets != _skull_targets:
+		_skull_targets = targets
+		for skull in _skulls:
+			skull.queue_free()
+		_skulls.clear()
+		for target in targets:
+			_skulls[_make_skull(target)] = target
+	if armed and player.picked_target != null and not targets.has(player.picked_target):
+		player.pick_target(null)  # died, or slipped out of sight
+	if _hovered_skull != null and not targets.has(_hovered_skull):
+		_hovered_skull = null
+	_target_bar.visible = armed
+	var picked: Unit = player.picked_target if armed else null
+	_target_marker.target = picked
+	_confirm_button.visible = picked != null
+	for skull: Button in _skulls:
+		skull.set_pressed_no_signal(_skulls[skull] == picked)
+		skull.queue_redraw()
+	var shown := _hovered_skull if _hovered_skull != null else picked
+	if shown != null:
+		_target_info.text = _target_line(player, shown)
+	elif not targets.is_empty():
+		_target_info.text = "Pick a target"
+	else:
+		_target_info.text = "No targets in sight"
+
+
+func _make_skull(target: Unit) -> Button:
+	var skull := Button.new()
+	skull.toggle_mode = true
+	skull.focus_mode = Control.FOCUS_NONE
+	skull.custom_minimum_size = Vector2(SKULL_SIZE, SKULL_SIZE)
+	# A child rather than the button's own _draw, so it lands over the panel.
+	var glyph := SkullGlyph.new()
+	glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	glyph.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	glyph.picked = func() -> bool: return skull.button_pressed
+	skull.add_child(glyph)
+	skull.pressed.connect(_on_skull_pressed.bind(target))
+	skull.mouse_entered.connect(_on_skull_hover.bind(target, true))
+	skull.mouse_exited.connect(_on_skull_hover.bind(target, false))
+	_skull_row.add_child(skull)
+	return skull
+
+
+## "Lurker — 64% to hit": the odds the shot would be taken at, read fresh.
+func _target_line(player: PlayerUnit, target: Unit) -> String:
+	var who := target.stats.display_name
+	match player.mode:
+		PlayerUnit.Mode.SUPPRESS:
+			return "%s — suppress (pins them, no roll)" % who
+		PlayerUnit.Mode.AIMED_SHOT:
+			return "%s — %d%% to hit (torso; pick a zone next)" % [who, player.target_hit_chance(target)]
+	return "%s — %d%% to hit" % [who, player.target_hit_chance(target)]
+
+
+func _on_skull_pressed(target: Unit) -> void:
+	var player := _active_player()
+	if player:
+		player.pick_target(target)
+	_refresh_target_bar()
+
+
+## Hovering a skull also puts the map's hit-chance label over that target, so
+## the player can see WHICH alien the skull is.
+func _on_skull_hover(target: Unit, entered: bool) -> void:
+	if entered:
+		_hovered_skull = target
+	elif _hovered_skull == target:
+		_hovered_skull = null
+	var highlights := get_tree().get_first_node_in_group("highlights")
+	if highlights and is_instance_valid(target):
+		highlights.set_hovered_target(target.grid_pos if entered else PlayerUnit.NO_TILE)
+	_refresh_target_bar()
+
+
+## Picks the next skull along (`step` 1 or -1), wrapping; from no pick, the
+## first (or the last, going backwards).
+func _cycle_target(step: int) -> void:
+	var player := _active_player()
+	if player == null:
+		return
+	var at := _skull_targets.find(player.picked_target)
+	if at == -1:
+		at = -1 if step > 0 else 0
+	var next := posmod(at + step, _skull_targets.size())
+	player.pick_target(_skull_targets[next])
+	_refresh_target_bar()
+
+
+func _on_target_picked(_target: Unit) -> void:
+	_refresh_target_bar()
+
+
+func _on_confirm_target() -> void:
+	var player := _active_player()
+	if player == null:
+		return
+	player.confirm_target()
+	_refresh_target_bar()
+
+
+## A skull drawn in code (no icon asset to import): a round cranium over a jaw,
+## dark sockets, and teeth. Bone-white, red once its target is picked.
+class SkullGlyph extends Control:
+	const BONE := Color(0.92, 0.9, 0.84)
+	const PICKED := Color(1.0, 0.25, 0.2)
+	var picked: Callable
+
+	func _draw() -> void:
+		var s := minf(size.x, size.y)
+		var o := (size - Vector2(s, s)) / 2.0
+		var color: Color = PICKED if picked.is_valid() and picked.call() else BONE
+		var dark := Color(0.08, 0.06, 0.06)
+		draw_circle(o + Vector2(0.5, 0.42) * s, 0.3 * s, color)
+		draw_rect(Rect2(o + Vector2(0.32, 0.55) * s, Vector2(0.36, 0.22) * s), color)
+		draw_circle(o + Vector2(0.38, 0.45) * s, 0.085 * s, dark)
+		draw_circle(o + Vector2(0.62, 0.45) * s, 0.085 * s, dark)
+		draw_colored_polygon(PackedVector2Array([o + Vector2(0.5, 0.55) * s,
+			o + Vector2(0.46, 0.63) * s, o + Vector2(0.54, 0.63) * s]), dark)
+		for x: float in [0.41, 0.5, 0.59]:
+			draw_line(o + Vector2(x, 0.68) * s, o + Vector2(x, 0.77) * s, dark, maxf(1.0, s * 0.03))
 
 
 func _on_aimed_shot_target_picked(target: Unit) -> void:
@@ -386,11 +756,12 @@ func _on_aimed_shot_target_picked(target: Unit) -> void:
 	# player cannot choose between zones without seeing both numbers. Zones the
 	# remaining pool cannot cover are disabled rather than hidden — knowing the
 	# head was 7 AP away is the information that shapes the NEXT activation.
+	var through := Penetration.through_penalty(player, target)
 	for part in body_part_buttons:
-		var acc := Combat.compute_accuracy(player, target, Combat.ShotAction.AIMED_SHOT, part)
+		var acc := clampi(Combat.compute_accuracy(player, target, Combat.ShotAction.AIMED_SHOT, part) - through, 1, 99)
 		var cost := player.aimed_shot_cost(part)
 		body_part_buttons[part].text = "%s — %d AP (%d%%)" % [Combat.body_part_name(part), cost, acc]
-		body_part_buttons[part].disabled = player.ap < cost
+		body_part_buttons[part].disabled = not player.can_afford(cost)
 	aimed_shot_menu.visible = true
 
 
@@ -547,7 +918,7 @@ func _refresh_loot_panel() -> void:
 		_hide_loot_panel()
 		return
 	var cost := player.action_cost(UnitStats.Action.LOOT)
-	var can_take := player.ap >= cost and player.has_free_slot()
+	var can_take := player.can_afford(cost) and player.has_free_slot()
 	for source in player.loot_sources():
 		_loot_rows.add_child(_loot_heading(source.loot_name()))
 		var items: Array = source.loot_items()
@@ -632,11 +1003,17 @@ func _door_gun_line() -> String:
 
 
 func _process(delta: float) -> void:
+	_target_bar_clock -= delta
+	if _target_bar_clock <= 0.0:
+		_target_bar_clock = TARGET_BAR_REFRESH
+		_refresh_target_bar()
 	_body_label_clock -= delta
 	if _body_label_clock > 0.0:
 		return
 	_body_label_clock = BODY_LABEL_REFRESH
 	_refresh_body_labels()
+	_refresh_portraits()
+	_refresh_exploration_selection()
 	# Polled on the same clock for the same reason as the body labels: a client
 	# hears no `downed` for the nest or `inventory_changed` for a squadmate's
 	# corpse until replication lands, and the line is one cheap string.
@@ -646,6 +1023,20 @@ func _process(delta: float) -> void:
 	# client learns those through replication rather than any signal it hears.
 	if ExtractionManager.is_active():
 		_refresh_hangar_markers()
+
+
+## Out of combat, on the same poll: the soldier this peer had selected may have gone
+## down or aboard (plan C.5), and one that walked somewhere new may have new things
+## in reach. Compared first, because `_refresh` rebuilds an open loot panel.
+func _refresh_exploration_selection() -> void:
+	if not TurnManager.in_exploration() or TurnManager.mission_over:
+		return
+	if not is_instance_valid(TurnManager.active_unit) or TurnManager.active_unit.is_downed \
+			or TurnManager.active_unit.aboard:
+		TurnManager.reselect_local()
+		return
+	if TurnManager.active_unit.grid_pos != _shown_tile:
+		_refresh(TurnManager.active_unit)
 
 
 ## One label per body: "Okafor ▮▮▮▯▯ 12/20 ●○" in red while downed (the bar, its
@@ -952,6 +1343,7 @@ func _on_mission_ended(result: MissionResult) -> void:
 		end_details.visible = true
 	_hide_loot_panel()
 	radio_banner.visible = false
+	$Actions.visible = false
 	for key in buttons:
 		buttons[key].disabled = true
 	_reveal_continue()

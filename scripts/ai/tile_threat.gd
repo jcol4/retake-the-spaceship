@@ -36,17 +36,16 @@ static func watchers(unit: Unit) -> Array[Unit]:
 ## not of wherever a watcher's current target stands, since an overwatch shot
 ## fires on whoever walks into the covered angle, not on one pre-decided unit.
 ##
-## Explicit world points via `GridManager.has_clear_line`, the same pattern
-## `Flank._best_tile` already uses to test a CANDIDATE tile's line to the
-## target — `GridManager.has_line_of_sight` only works from a unit's OWN
-## current position, which is no help for "would this tile I have not moved to
-## yet be seen".
+## Asked by tile via `GridManager.tiles_have_sight`, the same call
+## `Flank._best_tile` uses to test a CANDIDATE tile's line to the target —
+## `GridManager.has_line_of_sight` only works from a unit's OWN current
+## position, which is no help for "would this tile I have not moved to yet be
+## seen". A watcher at rest leans round its corner (GDD §6.1.2); the unit
+## crossing the tile is moving, so it does not.
 static func is_covered(tile: Vector3i, watcher_list: Array[Unit]) -> bool:
 	if watcher_list.is_empty():
 		return false
-	var to := GridManager.grid_to_world(tile) + Vector3(0, 0.9, 0)
 	for watcher: Unit in watcher_list:
-		var from := GridManager.grid_to_world(watcher.grid_pos) + Vector3(0, 1.4, 0)
-		if GridManager.has_clear_line(watcher, from, to):
+		if GridManager.tiles_have_sight(watcher, watcher.grid_pos, tile, watcher.can_peek(), false):
 			return true
 	return false

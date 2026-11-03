@@ -39,6 +39,11 @@ const PRIMARY_IDS: Array[WeaponId] = [
 # is how many tiles the gunfire carries — all 5 (the old flat value) until tuned.
 # Attachments (AttachmentPresets) stack onto every column here.
 #
+# penetration is percentile (Penetration, docs/design/systems/penetration):
+# every 25 is one more body a round passes through, and the unfloored remainder
+# sets how much damage it keeps doing so. Battle Rifle > LMG > Assault Rifle >
+# SMG > Pistol. The Shotgun has none and splashes instead.
+#
 # No move_multiplier column any more — see WeaponData for why it was retired
 # rather than re-expressed against the granular AP economy.
 const DATA := {
@@ -47,30 +52,36 @@ const DATA := {
 		"mag_size": 3, "starting_reserve": 15,  # 6 mags total (18 shots)
 		"optimal_range": 999, "falloff_rate": 0,
 		"fire_ap_modifier": 0, "reload_ap_modifier": 0, "noise_radius": 5,
+		"penetration": 45,
 	},
 	WeaponId.SHOTGUN: {
 		"display_name": "Shotgun", "base_accuracy": 20, "damage": 14,
 		"mag_size": 6, "starting_reserve": 15,  # pump-action: loose shells, not discrete mags (21 total)
+		"loose_reserve": true,
 		"optimal_range": 3, "falloff_rate": 15,
 		"fire_ap_modifier": 0, "reload_ap_modifier": 0, "noise_radius": 5,
+		"penetration": 0, "splash": true,  # buckshot; Slug Rounds swap it to penetration
 	},
 	WeaponId.SMG: {
 		"display_name": "SMG", "base_accuracy": 35, "damage": 6,
 		"mag_size": 4, "starting_reserve": 20,  # 6 mags total (24 shots)
 		"optimal_range": 6, "falloff_rate": 6,
 		"fire_ap_modifier": 0, "reload_ap_modifier": 0, "noise_radius": 5,
+		"penetration": 30,
 	},
 	WeaponId.LMG: {
 		"display_name": "LMG", "base_accuracy": 28, "damage": 9,
 		"mag_size": 6, "starting_reserve": 12,  # 3 mags total (18 shots)
 		"optimal_range": 999, "falloff_rate": 0,
 		"fire_ap_modifier": 0, "reload_ap_modifier": 0, "noise_radius": 5,
+		"penetration": 60,
 	},
 	WeaponId.BATTLE_RIFLE: {
 		"display_name": "Battle Rifle", "base_accuracy": 35, "damage": 10,
 		"mag_size": 3, "starting_reserve": 12,  # 5 mags total (15 shots)
 		"optimal_range": 999, "falloff_rate": 0,
 		"fire_ap_modifier": 0, "reload_ap_modifier": 0, "noise_radius": 5,
+		"penetration": 80,
 	},
 	# PLACEHOLDER numbers (extraction plan A5), gameplay-first: the pistol exists
 	# because carrying a body leaves one hand free (GDD §4.4), and what it has to
@@ -85,6 +96,7 @@ const DATA := {
 		"mag_size": 8, "starting_reserve": 16,  # 3 mags total (24 shots)
 		"optimal_range": 6, "falloff_rate": 8,
 		"fire_ap_modifier": 0, "reload_ap_modifier": 0, "noise_radius": 4,
+		"penetration": 25,
 	},
 }
 
@@ -121,11 +133,14 @@ static func make(id: WeaponId, attachment_ids: PackedInt32Array = PackedInt32Arr
 	w.damage = d["damage"]
 	w.mag_size = d["mag_size"]
 	w.starting_reserve = d["starting_reserve"]
+	w.loose_reserve = d.get("loose_reserve", false)
 	w.optimal_range = d["optimal_range"]
 	w.falloff_rate = d["falloff_rate"]
 	w.fire_ap_modifier = d["fire_ap_modifier"]
 	w.reload_ap_modifier = d["reload_ap_modifier"]
 	w.noise_radius = d["noise_radius"]
+	w.penetration = d.get("penetration", 0)
+	w.splash = d.get("splash", false)
 	for aid in attachment_ids:
 		if AttachmentPresets.DATA.has(aid) and AttachmentPresets.fits(aid, id):
 			w.set_attachment(AttachmentPresets.make(aid))

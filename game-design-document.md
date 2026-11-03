@@ -1,7 +1,8 @@
 # Retake the Spaceship — Game Design Document
 
-*Draft v2.1 (2026-10-13) — a turn-based extraction tactics game. v2.1 adds exploration mode and
-much bigger decks (§4.7), on paper only so far.*
+*Draft v2.2 (2026-10-28) — a turn-based extraction tactics game. v2.1 added exploration mode and
+much bigger decks (§4.7). v2.2 settles exploration mode's open rules: wait, the opening action,
+the clock's edge cases, and co-op. Still on paper only.*
 
 > **v2.0 is a rewrite, not a patch.** v1.1 had accumulated a dozen "⚠️ SUPERSEDED" callouts that
 > pointed at other documents for the live rule. Those rules are now stated here directly, and the
@@ -211,6 +212,16 @@ Detail: [`docs/design/factions/contractors/weapons/`](docs/design/factions/contr
 
 - **Fixed magazine plus a limited mission reserve.** An empty magazine means Reload before firing.
   Running out of reserve is a real way for a long mission to go wrong.
+- **The reserve is separate magazines, not a pool of rounds.** Reload loads the fullest spare and
+  the one coming out goes back on the vest with whatever it still holds, so no round is lost. Any
+  swap is allowed while the gun isn't full and a spare has rounds, even one that leaves the gun
+  with less. Magazine attachments enlarge every magazine rather than changing how many are carried.
+  The Shotgun is the exception: a tube fed from a pool of loose shells. Unlimited weapons (robots,
+  aliens, the door gun) have no magazines to swap.
+- **Ammo reads off the model.** A bar on the primary's right side drains from the barrel toward the
+  grip, and a pip per spare magazine sits beside the health band on the back, fullest at the bottom.
+  Both use the same colours for how full a magazine is: 70% and up pale yellow, 35% and up orange,
+  below that red, and empty shows nothing lit.
 - **Attachments** (underbarrel, optic, muzzle, magazine and so on) and **ammo types** modify
   accuracy, damage, noise, visibility and AP. They are fitted on the pre-mission loadout screen.
   Attachments are designed as **tiered loot** (§7.5).
@@ -350,10 +361,17 @@ is turn-based only when there is a fight. Out of combat, soldiers move and act f
 - **Detection is checked every step** of a free walk, with the ordinary light and sound rules
   (§5, §11.2). A soldier who is spotted **stops on that tile** and turn mode starts. Any other walk
   in progress stops too, including the other co-op player's.
-- **Attacking starts combat.** Shooting or throwing at an enemy from exploration mode is the
-  opening action, Fallout-style: the shot resolves, then turn mode begins.
-- **Opening round:** a fresh round with the **normal weighted initiative draw**. No surprise
-  round, and no free first activation for either side.
+- **Attacking starts combat.** Shooting, an aimed shot, throwing, melee or Suppress at an enemy
+  from exploration mode is the opening action, Fallout-style: it resolves, then turn mode begins.
+  - **The opening action is paid for.** Its AP comes off the attacker's first activation.
+  - **An opening Suppress is the suppressor's whole first activation.** Suppress ends the
+    activation it is used in, so the suppressor sits out the opening round's draw. The pin holds
+    through that round and lifts at their next activation, as in turn mode.
+- **Opening round:** the **normal weighted initiative draw**. No surprise round, and no free first
+  activation for either side.
+  - **Contact costs no time by itself.** The round in progress becomes the opening round: no
+    round passes when turn mode starts, so a downed soldier doesn't bleed and the ship countdown
+    doesn't drop just for being spotted. Steps already walked that round are dropped.
 - **Who is in the pool:** the squad, plus every unit **near the fight** (within a radius of a
   soldier, or already in COMBAT). Distant units are left out and keep acting on the clock between
   rounds (§4.7.3), so a round on a deck with dozens of enemies doesn't wait on AI half a map away.
@@ -361,6 +379,9 @@ is turn-based only when there is a fight. Out of combat, soldiers move and act f
 - **Turn mode ends** once **no hostile has been in COMBAT with the squad for one full round**:
   every hunter has died or lost track (dropped to ALERT or UNAWARE). Exploration mode resumes at
   the start of the next round.
+  - **Activation-scoped states clear when combat ends:** hunker down, suppression (both the
+    pinned unit and the suppressor) and stun. None of them can carry into the next fight.
+  - **Overwatch is the exception:** it carries over, per §4.7.4.
 
 #### 4.7.3 The exploration clock
 
@@ -371,6 +392,8 @@ of combat, a round is measured in **distance walked**:
 - **20 steps = 1 round.** Every tile walked by **any** soldier is one step, and all soldiers' steps
   add to one shared counter. Scouting with one soldier is cheap. Shuffling four soldiers
   separately costs four times as much.
+  - **A wounded leg costs more steps.** A tile costs what it costs in AP (§4.2.1): 2 steps with
+    one injured leg, 3 with two. A limping soldier burns the squad's clock faster.
 - **Actions cost steps equal to their AP price** (loot 1 per item, pick up 2, revive 3, operate
   terminal 2, call ship 1, board 1, switch weapon 1), so stripping a room or reviving in a
   bleed-out race still costs time. Reload and doors stay cheap at their AP price, and actions that
@@ -379,8 +402,20 @@ of combat, a round is measured in **distance walked**:
   unit not in combat takes its normal UNAWARE/ALERT turn**: patrols walk, merc crews work their job,
   robots sweep, ALERT enemies investigate. A patrol can walk into the squad this way, which starts
   combat.
-- **Standing still costs nothing.** Thinking is free. A *wait* action (spend steps to let a ship
-  arrive or a patrol pass) is likely needed. *TBD.*
+  - **An action always lands before the round it crosses.** At 19 steps, a revive (3) resolves
+    first, then the round passes, and the counter carries the remainder (2). A revive that started
+    in time arrives in time.
+  - **Walks pause for the round.** Soldiers walking when the counter reaches 20 stop at the next
+    tile while the enemies take their turns, then carry on. If those turns start a fight, any
+    enemies yet to act lose their turn and simply join the opening round.
+  - **The enemies' turns play out together.** They are decided one at a time, in order, but shown
+    at once, so a round of patrols doesn't hold the squad up one unit at a time. Their
+    flashlights sweep along the paths they walk, and they come into view or leave it where
+    their path crosses the edge of what the squad can see.
+- **Standing still costs nothing.** Thinking is free.
+- **Wait:** one press passes time to the start of the next round. It is how a squad lets a ship
+  arrive, holds a terminal, or lets a patrol pass. Pressing it again waits another round. Waiting
+  isn't acting, so it never breaks a soldier's overwatch.
 - **Reference speeds at 20 steps a round:** a 150-tile crossing is about 8 rounds. Carrying a
   downed soldier (about 5 rounds of bleed) reaches roughly 100 tiles.
 
@@ -388,16 +423,30 @@ of combat, a round is measured in **distance walked**:
 
 - **Movement:** select any of the player's soldiers, in any order, and send them to any reachable
   tile. No AP, no distance cap. Individual control only for now; no group or follow moves.
+  - **Selecting:** click the soldier in the world or in the squad portrait bar, or cycle with
+    Tab. The portrait bar shows in both modes.
+  - **Redirecting:** a new order for a soldier who is still walking takes over at the next tile.
+  - **The move preview** shows the path to the cursor and its cost in steps and rounds. There's
+    no reachable-area overlay out of combat.
 - **Free actions (no AP, but steps per §4.7.3):** loot, doors, flashlight, reload, switch weapon,
   revive, pick up, drop, call ship, board, operate terminal. Extract is also available (§7.4) once
   valid.
-- **Overwatch** can be set in exploration mode. It holds **until it fires or that soldier moves or
-  acts**, so a squad can lay an ambush and reposition others around it. A triggered overwatch shot
-  is an attack and starts combat.
+- **Not available out of combat:** Hunker Down, which protects against nothing until a fight
+  starts. Every attack, Suppress included, starts combat (§4.7.2).
+- **Overwatch** can be set in exploration mode, at its AP price in steps. It holds **until it
+  fires or that soldier moves or acts**, so a squad can lay an ambush and reposition others around
+  it. Waiting doesn't break it. A triggered overwatch shot is an attack and starts combat.
 - **Stealth:** no separate sneak stance. The flashlight and the dark are the stealth tools (§5.2,
   §11.2).
 - **Co-op:** both players free-move their own soldiers **at the same time**. The host puts the
   moves in order, keeps the one shared step counter, and stops both players when combat starts.
+  - **A destination is claimed when it is ordered.** Sending a soldier to a tile the other
+    player's soldier is already headed for is refused ("tile taken").
+  - **Either player can wait**, and it takes effect at once for both. Walks in progress pause for
+    the round like any other.
+  - **The portrait bar** shows the partner's soldiers too, greyed and not selectable.
+
+Build plan: [`EXPLORATION_PLAN.md`](EXPLORATION_PLAN.md).
 
 ---
 
@@ -453,6 +502,10 @@ fixtures. **Muzzle flashes emit no gameplay light.** They are a visual effect on
   - **Edge cover** sits on the boundary between two tiles (XCOM-style). It is used on
     hand-authored maps.
   - **Block cover** occupies tiles (1×1 up to 3×2). The generator places it.
+- **Corner cover:** anything that blocks sight (a wall, a wreck, a landed ship) sitting flush
+  against the side a shot comes from is **heavy cover** that can't be destroyed. It doesn't apply
+  to a shooter on a higher deck, who looks down over the wall. Walls are not cover edges, so
+  standing beside one doesn't put a unit into its cover pose.
 - Cover only applies when the shot comes through it (see Flanking, §6.2).
 
 ### 6.1.1 Destructible Cover **[built]**
@@ -462,6 +515,37 @@ fixtures. **Muzzle flashes emit no gameplay light.** They are a visual effect on
   (multiplier TBD).
 - **At 0 HP, cover becomes impassable rubble.** It gives no protection and blocks movement, so
   fights reshape the map.
+
+### 6.1.2 Corner Peeking **[built]**
+
+A unit flush against the end of a wall can lean past it to see round the corner, and enemies can
+see and target it along that same line.
+
+1. **When a unit can lean.** All three must hold:
+   - Something that blocks sight sits flush against one side of the unit's tile.
+   - The tile beside the unit, along that blocker, is open floor. Only the map is checked, so a
+     unit standing there doesn't matter.
+   - The blocker does not carry on past that tile, so the wall ends at the unit.
+
+   So there is no lean halfway along a wall and none in an inside corner. A unit beside a doorway
+   leans into the doorway.
+   ```
+   . . . E    # = wall, U = unit, L = lean tile
+   # # # .    U→E is blocked by the wall's end
+   . . U L    L→E is clear, so U sees E and E sees U
+   ```
+2. **Symmetric.** Whatever a unit can see by leaning can see it and target it.
+3. **Past the corner only.** A lean only counts toward targets strictly beyond the blocker's near
+   face. It is not an extra tile of vision in every direction.
+4. **Squadmates don't block.** A squadmate standing on the lean tile does not stop the lean.
+5. **Only at rest.** A moving unit has no lean, whether it is looking or being looked at.
+   Overwatch fires when the unit actually walks out past the corner, not one tile early. A watcher
+   standing still at a corner does lean.
+6. **Corner cover.** The wall a unit leans past is also its cover: heavy, indestructible, and not
+   from a higher deck (§6.1).
+7. **The lean is cosmetic.** The shot is resolved from the unit's own tile, so range, elevation
+   and the cover it presents are unchanged. The model slides about 0.55 m toward the lean tile
+   over about 0.15 s, fires, and slides back.
 
 ### 6.2 Flanking **[built]**
 
@@ -720,6 +804,18 @@ most of the time should go to fights.
   enemies with hangars and objectives rather than area. Settle this by measuring, not on paper
   (§12.1).
 
+**Baseline on today's decks (2026-10-30), before retuning.** Headless `--auto-campaign=4`, one
+unseeded run of each mode, every mission extracted. The bot is not a player, so read these as
+"rounds still pass at about the old rate", not as playtime.
+
+| Mode | Rounds per mission | Of which out of combat | Contacts per mission |
+|---|---|---|---|
+| Exploration | 24, 26, 24, 27 | 10, 2, 2, 11 | 1, 1, 1, 2 |
+| `--turn-mode` | 17, 31, 22, 27 | none | none |
+
+Steps per round is still the initial 20. Tuning it against a human playtest is open
+(`EXPLORATION_PLAN.md` D.4).
+
 ---
 
 ## 8. Setting & Tone
@@ -806,7 +902,9 @@ Free to toggle (0 AP). Closed doors block LOS, light and sound.
 
 ### 10.6 Line of Sight & Visibility **[built]**
 
-- Raycast LOS with multiple sample points per unit.
+- Raycast LOS against map geometry: one ray from the seer's eye (1.4 m) to the target's chest
+  (0.9 m). When that is blocked, the same ray is tried from the seer's lean tiles, then to the
+  target's, then between both (corner peeking, §6.1.2).
 - **Shared team vision.**
 - Recomputed on state changes (movement, doors, deaths), never per frame.
 - **Rendering is gated by room**, not per-unit raycast. Enemies render in rooms the squad can see
@@ -1030,7 +1128,8 @@ Fodder. Range, falloff and minimum range are TBD.
 - **Enemy count vs mission length:** same density on a 9× deck, or dormant rooms, or scaling with
   hangars and objectives? Measure with `--auto` once exploration mode exists.
 - **Pool radius:** how near the fight a unit must be to join the turn-mode pool (§4.7.2).
-- **Wait action:** how a squad spends steps on purpose (waiting for a ship, letting a patrol pass).
+- ~~**Wait action:** how a squad spends steps on purpose.~~ Settled (2026-10-28): one press waits
+  to the next round (§4.7.3).
 - **Clock rate:** 20 steps per round is the starting value; tune against bleed-out, merc leave
   rounds and nest spawns.
 - **Group moves:** individual control only for now. A follow or formation move may be wanted
@@ -1066,16 +1165,18 @@ Fodder. Range, falloff and minimum range are TBD.
 8. **Merc extraction AI and hangar contention.** **[built]**
 
 **Next: exploration mode and big decks (§4.7, §7.7).** In this order, so free movement can be
-played on today's deck sizes before anything grows:
+played on today's deck sizes before anything grows. Steps 9 and 10 are planned together in
+[`EXPLORATION_PLAN.md`](EXPLORATION_PLAN.md): the groundwork co-op needs is built into step 9.
 
-9. **Exploration mode on current decks:**
-   - the mode switch (enter on squad combat, leave after one quiet round);
+9. **Exploration mode on current decks:** **[built; not yet human-playtested or retuned]**
+   - the mode switch (enter on squad combat, leave after one quiet round, or at once when the last kill leaves nothing fighting the squad or alert nearby);
    - free movement and free actions;
    - the step clock driving every round timer and the non-combat AI;
    - per-step detection and interrupts;
    - overwatch carried into combat;
    - attack-to-start.
 10. **Co-op exploration:** simultaneous free moves, host-ordered, with the shared step counter.
+    **[built; the two-instance Steam checklist has not been run]**
 11. **Performance for big decks:** lighting, pathfinding, wall collision, nearby-only detection, and
     the near-the-fight pool.
 12. **Big decks:** 3× sizes, 4–6 hangars, same-density enemies, same-total loot. Then measure

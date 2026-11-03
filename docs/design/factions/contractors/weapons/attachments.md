@@ -90,7 +90,7 @@ Ergo Stock
 ### Rifle/Pistol/SMG/LMG
 
 Penetrator Rounds
-+34% damage versus armored targets
++20 penetration (see [penetration](../../../systems/penetration/README.md))
 
 Hollow Point
 +50% damage versus unarmored targets
@@ -100,11 +100,12 @@ Subsonic
 -30% detection range
 
 FMJ
-+3 tiles optimal range
++34% damage versus armored targets (Penetrator's old job, moved here when penetration arrived)
 
 ### Shotgun
 
 Slug Rounds
+Replaces buckshot's splash with Battle Rifle penetration (80)
 +3 tiles optimal range (3 -> 6)
 -34% damage within 4 tiles
 +50% damage versus armored targets

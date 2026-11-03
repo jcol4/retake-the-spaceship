@@ -488,10 +488,7 @@ func _hostile_on(pos: Vector3i) -> Unit:
 func _trample(target: Unit) -> void:
 	var result := Combat.resolve_melee(self, target)
 	if result.hit:
-		if not is_instant():
-			var vfx := get_tree().get_first_node_in_group("vfx")
-			if vfx:
-				vfx.impact(target.global_position, result.crit)
+		show_impact(target.global_position, result.crit)
 		var raw := result.damage
 		result.damage = target.take_damage(raw)
 		result.absorbed = raw - result.damage

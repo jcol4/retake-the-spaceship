@@ -12,7 +12,12 @@ extends Resource
 # budget is mag_size + starting_reserve. -1 means unlimited (the default, so
 # non-roster weapons like the alien's inline WeaponData in `main.gd` keep the
 # old infinite-reload behavior unless they opt into a finite reserve).
+# A finite reserve is carried as whole magazines (see `packed_mags`), this number
+# over mag_size being how many, unless `loose_reserve` is set.
 @export var starting_reserve: int = -1
+# Loose rounds rather than magazines: a tube fed by hand (the Shotgun), where a
+# reload tops up from one pool of shells and there is no magazine to swap.
+@export var loose_reserve: bool = false
 # Weapon-specific range falloff, stacked on top of Combat's global distance
 # curve (Sec 6.5). No penalty at or within `optimal_range`; beyond it, accuracy
 # drops an extra `falloff_rate`% per tile. Default (999/0) means "no weapon-
@@ -39,6 +44,14 @@ extends Resource
 # the old flat value every gun used; it can't be named here (see
 # Unit.gunfire_noise_radius), so keep the two in step by hand.
 @export var noise_radius: int = 5
+
+# Percentile penetration, 0-100: how many bodies a round passes through and how
+# much damage it keeps doing so (Penetration). 0 for a non-roster weapon unless
+# its builder sets one — the Spitter's spit does not penetrate.
+@export var penetration: int = 0
+# Buckshot: no line penetration, a hit splashes into the tiles around the target
+# instead (Penetration.splash_tiles). A mod with `replaces_splash` turns it off.
+@export var splash: bool = false
 
 # --- Attachments and ammo (design doc `weapons/attachments.md`) --------------
 # One attachment per slot, null for empty, plus one ammo type (null = Standard).
@@ -178,7 +191,27 @@ func effective_mag_size() -> int:
 func effective_reserve() -> int:
 	if starting_reserve < 0:
 		return starting_reserve  # unlimited stays unlimited
-	return maxi(0, starting_reserve + _bonus(&"reserve"))
+	var spare := maxi(0, starting_reserve + _bonus(&"reserve"))
+	if loose_reserve or mag_size <= 0:
+		return spare
+	# The count of magazines comes from the base size, so a mod that enlarges the
+	# magazine enlarges every spare one too rather than carrying fewer of them.
+	return ceili(float(spare) / mag_size) * effective_mag_size()
+
+
+## `rounds` as spare magazines, fullest first: as many full ones as it makes, then
+## whatever is left over. Empty for a reserve that is not magazines: unlimited, or
+## loose rounds.
+func packed_mags(rounds: int) -> PackedInt32Array:
+	var mags := PackedInt32Array()
+	var size := effective_mag_size()
+	if rounds <= 0 or loose_reserve or size <= 0:
+		return mags
+	for _i in rounds / size:
+		mags.append(size)
+	if rounds % size > 0:
+		mags.append(rounds % size)
+	return mags
 
 
 func effective_optimal_range() -> int:
@@ -189,6 +222,21 @@ func effective_falloff_rate() -> int:
 	if falloff_rate <= 0:
 		return falloff_rate  # no falloff to reduce, and a bonus can't create one
 	return maxi(0, falloff_rate + _bonus(&"falloff_rate"))
+
+
+# --- Penetration ---
+
+func effective_penetration() -> int:
+	return clampi(penetration + _bonus(&"penetration"), 0, 100)
+
+
+func effective_splash() -> bool:
+	if not splash:
+		return false
+	for m in mods():
+		if m.replaces_splash:
+			return false
+	return true
 
 
 # --- AP ---

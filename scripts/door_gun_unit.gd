@@ -115,6 +115,13 @@ func los_exclusions() -> Array[RID]:
 	return out
 
 
+## Never leans (GDD §6.1.2): it is bolted to the hull, and the ship blocker
+## leaves its corner open on purpose, so a lean there would be a second, wider
+## view the mount was never meant to have.
+func can_peek() -> bool:
+	return false
+
+
 func _init() -> void:
 	# EnemyUnit's constructor has already run (aliens' faction, no flashlight);
 	# CONTRACTORS is only the default here — `make` sets the calling crew's.
@@ -187,6 +194,7 @@ static func make_stats(display_name: String = "Door gun") -> UnitStats:
 	w.mag_size = WEAPON_MAG
 	w.starting_reserve = -1
 	w.noise_radius = WEAPON_NOISE
+	w.penetration = 60  # a mounted heavy gun: LMG tier (docs/design/systems/penetration)
 	stats.weapon = w
 	return stats
 
@@ -240,7 +248,7 @@ func _top_up() -> void:
 func targets_in_reach() -> Array[Unit]:
 	var out: Array[Unit] = []
 	for unit in hostiles():
-		if covers(unit.grid_pos) and GridManager.has_line_of_sight(self, unit):
+		if covers(unit.grid_pos) and has_shot_at(unit):
 			out.append(unit)
 	return out
 

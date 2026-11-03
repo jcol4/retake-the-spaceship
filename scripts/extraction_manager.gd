@@ -882,6 +882,7 @@ func _add_blocker(index: int) -> void:
 	var body := Dropship.make_blocker(map.cell_to_world(h.pad_center), h.ramp_side)
 	map.add_child(body)
 	_blockers[index] = body
+	GridManager.invalidate_sight_cache()
 	_relight()
 
 
@@ -893,11 +894,13 @@ func _remove_blocker(index: int) -> void:
 		# is recomputed before then.
 		(body as StaticBody3D).collision_layer = 0
 		body.queue_free()
+		GridManager.invalidate_sight_cache()
 		_relight()
 
 
 ## Lighting is a set of raycasts against layer 1, so a blocker arriving or
-## leaving changes which tiles each fixture reaches. The physics space takes a
+## leaving changes which tiles each fixture reaches (and, for the same reason,
+## which tile edges block sight — the cache cleared alongside each call). The physics space takes a
 ## new or retired body on its next step, hence the wait for one before the
 ## recompute. Headless rules tests have no map and never get here.
 func _relight() -> void:

@@ -153,6 +153,8 @@ static func _make_weapon(spec) -> WeaponData:
 	# would be an attrition mechanic, and this faction's pressure is explicitly
 	# positional rather than attritional — it fields no reinforcements either.
 	w.starting_reserve = -1
+	# LMG tier (docs/design/systems/penetration).
+	w.penetration = 60
 	return w
 
 

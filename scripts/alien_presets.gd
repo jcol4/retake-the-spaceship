@@ -29,6 +29,25 @@ extends RefCounted
 ## not a rebalance of it.
 
 
+## FODDER-ONLY ROSTER (2026-11-02). While true, every alien a deck places — the
+## ranged ENEMY glyph the generator drops, brawlers, hunters, worms, swarms — is
+## spawned as a Fodder horde instead (main.gd `_spawn_hordes`), and a nest's
+## spawn activation coughs up a burst of Fodder rather than rolling its table.
+## The other types' code, scenes and map glyphs are untouched: flip this back to
+## false and every deck spawns exactly what it always did.
+const FODDER_ONLY := true
+
+## A horde's head count. One per compartment, however many alien glyphs the
+## room holds, so a hand-authored deck that clustered six swarm markers gets one
+## horde there rather than six.
+const HORDE_MIN := 5
+const HORDE_MAX := 8
+
+## The brute's body is this much bigger than a regular's, so the one that takes
+## work reads across the room before anyone has to shoot it to find out.
+const BRUTE_SCALE := 1.2
+
+
 ## The iteration-1 ranged alien (`EnemyUnit`'s own stat block).
 static func ranged(display_name: String) -> UnitStats:
 	var stats := UnitStats.new()
@@ -84,7 +103,11 @@ static func swarm(display_name: String) -> UnitStats:
 	stats.reflexes = 40
 	stats.fitness = 10
 	stats.luck = 15
-	stats.base_hp = randi_range(15, 20)  # -> 15-20 HP: still the tier that takes work
+	# 6-8 HP: one or two rifle hits. In a horde the attrition is the COUNT, not
+	# the body — each kill has to feel like ground gained against five more. The
+	# one that takes work is the brute (below), one per horde. Was 15-20 while
+	# Fodder came singly.
+	stats.base_hp = randi_range(6, 8)
 	# stats.weapon stays null — no ranged weapon at all (Sec 11.4); the
 	# weapon_base_accuracy/weapon_damage/mag_size getters all read 0 from that.
 	stats.melee_base_accuracy = 45
@@ -125,12 +148,28 @@ static func hunter(display_name: String) -> UnitStats:
 	return stats
 
 
+## The horde's anchor: one per group, the body that holds the line while the
+## regulars wrap around. The swarm's block with HP and claw moved and nothing
+## else — same Reflexes 40, so the same 5 AP claw against the same 6 AP pool, and
+## the close-OR-swing warning survives (test_swarm_pace.gd checks it does).
+##
+## 18-22 HP is three or four rifle hits, against a regular's one or two. Claw 5
+## is a rifle round's worth: of the bodies in contact, this is the one to kill
+## first.
+static func brute(display_name: String) -> UnitStats:
+	var stats := swarm(display_name)
+	stats.base_hp = randi_range(18, 22)
+	stats.melee_damage = 5
+	return stats
+
+
 ## The swarm's block with two numbers moved, which is the whole design: same
 ## senses, same reflexes, same pace, same lowest-on-the-board initiative, same
 ## absent weapon. What changes is how long it takes to put down and what it costs
 ## to let one reach you.
 ##
-## 29-33 HP is roughly DOUBLE the swarm's 15-20: a swarm dies inside one soldier's
+## 29-33 HP was roughly DOUBLE the swarm's old 15-20 (the horde regular is 6-8
+## now; the brute, 18-22, is the closer comparison): a swarm dies inside one soldier's
 ## activation, a brawler does not. That number lives in `base_hp` now rather than
 ## in Fitness, which is exactly what lets the two share an identical pool — a
 ## brawler is TOUGHER than a swarm, not faster, and while HP and pace were the
@@ -141,7 +180,7 @@ static func hunter(display_name: String) -> UnitStats:
 ## brawler in contact is a problem to solve this turn rather than a tax to absorb.
 static func brawler(display_name: String) -> UnitStats:
 	var stats := swarm(display_name)
-	stats.base_hp = randi_range(28, 32)  # -> 29-33 HP, still double the swarm
+	stats.base_hp = randi_range(28, 32)  # -> 29-33 HP
 	stats.melee_damage = 6
 	return stats
 

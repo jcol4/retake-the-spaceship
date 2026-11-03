@@ -150,6 +150,15 @@ const VARIANT_LOOP_TIME := {
 	&"brawler": {WALK: 1.6},
 	# 0.75 m/s crosses its one tile a turn in two seconds — one cycle.
 	&"worm": {WALK: 2.0},
+	# The civilian runs the merc's stride (tools/build_civilian_run.py) at a
+	# third of his 4.5 m/s, so a third of the cadence keeps the feet planted.
+	&"civilian": {RUN: 3 * 2 * FOOTSTEP_GAP},
+	# The Mixamo zombie (tools/build_zombie_mixamo.py). Its run covers ~1.8 m a
+	# cycle, so 1.5 m/s is 1.2 s. The rest are its clips' own lengths, or close:
+	# the neck bite is 4.2 s authored, and every Fodder swing in a horde is played
+	# one after another, so it is sped up to 2 s rather than shown whole. Not
+	# loops, but `_duration` reads any pose from this table.
+	&"zombie": {RUN: 1.2, IDLE: 4.0, MELEE: 2.0, DOWNED: 3.0, ALERT_SCREAM: 2.8},
 }
 
 ## Crossfade between poses, in seconds. Short: the game's actions are brisk and
@@ -203,6 +212,11 @@ const COVER_HIGH := &"high"
 		model_scale = value
 		if _model:
 			_model.scale = Vector3.ONE * model_scale
+
+## Where in every LOOPING clip (idle, run...) this unit starts, as a fraction of
+## the clip. One-shots always play from their first frame. A horde sets it per
+## body so a room of the same model does not breathe and stride in lockstep.
+var loop_phase: float = 0.0
 
 ## Whether this character carries the rig-mounted light (Sec 5.2). Aliens do not.
 @export var has_light: bool = true
@@ -327,6 +341,7 @@ func _ready() -> void:
 		_build_light()
 	if LightingManager:
 		LightingManager.lighting_changed.connect(_apply_floor)
+		LightingManager.display_lighting_changed.connect(_apply_floor)
 
 
 ## Whether playback should resolve with no time on the clock. Delegated to the
@@ -367,6 +382,8 @@ func _build_model() -> void:
 	_band_glow = null
 	_down_pips.clear()
 	_pip_glows.clear()
+	_ammo_bar = null
+	_mag_pips.clear()
 	_pose_root = null
 	_status_material = null
 	_floor_materials.clear()
@@ -527,11 +544,17 @@ func _mount_flash() -> void:
 ## brings every material in at metallic 0.5 on a packed metal/roughness map —
 ## the source .blends leave Metallic unplugged — which laid a grey sheen over
 ## pale surfaces that the sprite renders never had.
+##
+## The roughness map is dropped too. The only models that carry one are the
+## Mixamo ones (zombie, civilian, nest), and theirs is the Glossiness map wired
+## in as roughness — the inverse — so matte skin rendered near-mirror and blew
+## out to white under any nearby light. Without it the material's own roughness
+## (1.0 on those) holds: fully matte, which is what that skin should read as.
 func _dress_surfaces(root: Node) -> void:
 	for node in root.find_children("*", "MeshInstance3D", true, false):
 		var mesh := node as MeshInstance3D
 		if mesh.mesh == null or mesh == _muzzle or mesh == _health_band \
-				or mesh in _down_pips:
+				or mesh in _down_pips or mesh == _ammo_bar or mesh in _mag_pips:
 			continue
 		mesh.layers |= CHARACTER_LAYER
 		for s in mesh.mesh.get_surface_count():
@@ -542,6 +565,7 @@ func _dress_surfaces(root: Node) -> void:
 			mat.albedo_color *= faction_tint
 			mat.metallic = 0.0
 			mat.metallic_texture = null
+			mat.roughness_texture = null
 			_add_floor(mat)
 			mat.next_pass = _outline_for(mat)
 			mesh.set_surface_override_material(s, mat)
@@ -578,8 +602,12 @@ func _add_floor(mat: BaseMaterial3D) -> void:
 func _apply_floor() -> void:
 	var lit := 0.0
 	if _unit:
-		var tile: GridTileData = GridManager.get_tile(_unit.get("grid_pos"))
-		lit = clampf(tile.light_value / 100.0, 0.0, 1.0) if tile else 0.0
+		# The tile the MODEL stands on, read through the display layer: during a
+		# tick's playback the model is not where the unit's root already is.
+		var tile: Vector3i = _unit.get("grid_pos")
+		if LightingManager.is_displaying():
+			tile = GridManager.world_to_grid(global_position)
+		lit = clampf(LightingManager.display_light(tile) / 100.0, 0.0, 1.0)
 	var energy := MIN_BRIGHTNESS * (1.0 - lit) if darkness_floor else 0.0
 	for mat in _floor_materials:
 		mat.emission_energy_multiplier = energy
@@ -703,7 +731,18 @@ func aim_direction() -> Vector3:
 	return -global_transform.basis.z.normalized()
 
 
+## Whether the rig light is drawn on right now — what the display layer casts
+## from during playback, where `flashlight_on` is already the final answer.
+func light_shown() -> bool:
+	return _light_on
+
+
 func set_flashlight_enabled(on: bool) -> void:
+	_mirror(&"_rpc_set_flashlight_enabled", [on])
+	_set_flashlight_enabled(on)
+
+
+func _set_flashlight_enabled(on: bool) -> void:
 	_light_on = on
 	if _light:
 		_light.visible = on
@@ -744,6 +783,32 @@ const GLOW_BONE := "chest"
 const PIP_GLOW_ENERGY := 0.0875
 const PIP_GLOW_RANGE := 0.375
 const PIP_GLOW_OFFSET := 0.04
+## THE AMMO READOUT. A bar on the primary's right side (tools/add_gun_ammo_bars.py)
+## that drains toward the stock, and a pip on the back per spare magazine
+## (tools/add_merc_lights.py), fullest at the bottom and dark once empty. Bar and
+## pips share AMMO_BRACKETS, so a colour means the same amount in either. Always
+## the primary: a soldier with the sidearm out still holds the primary's model,
+## which is the gun the bar is on.
+const AMMO_BAR_NODE := "ammo_bar"
+const MAG_PIP_NODES: Array[String] = [
+	"mag_pip_1", "mag_pip_2", "mag_pip_3", "mag_pip_4", "mag_pip_5", "mag_pip_6",
+]
+## [magazine fraction at or above which, colour], highest first. The cuts put
+## every size of magazine through all three: a 3-round mag reads pale yellow,
+## orange, red, then an empty bar shows nothing.
+const AMMO_BRACKETS := [
+	[0.7, Color(1.0, 0.92, 0.55)],  # pale yellow
+	[0.35, Color(1.0, 0.48, 0.05)],  # orange
+	[0.0, Color(1.0, 0.1, 0.05)],  # red
+]
+## At 1.0 rather than LIGHT_ENERGY: the environment has no tonemapper, so anything
+## brighter clips, which would turn the orange yellow and the pale yellow white.
+const AMMO_LIGHT_ENERGY := 1.0
+
+var _ammo_bar: MeshInstance3D = null
+var _ammo_bar_material: StandardMaterial3D = null
+var _mag_pips: Array[MeshInstance3D] = []
+var _mag_pip_materials: Array[StandardMaterial3D] = []
 
 var _health_band: MeshInstance3D = null
 var _band_glow: OmniLight3D = null
@@ -760,10 +825,14 @@ var _status_lights: Dictionary = {}
 
 ## Shows the status lights. `hp_fraction` picks the band's bracket while the
 ## soldier is up; downed, the band pulses red instead, and dead it goes dark.
-## `downs` lights that many pips. Cheap to call on every change: an unchanged
-## state is ignored, so a running pulse is not restarted.
-func set_status_lights(hp_fraction: float, downs: int, downed: bool, dead: bool) -> void:
-	var state := {"hp": hp_fraction, "downs": downs, "downed": downed, "dead": dead}
+## `downs` lights that many pips. `mag_fraction` sets the ammo bar, and
+## `spare_mags` holds how full each spare magazine is, fullest first, one pip each;
+## dead, both go dark. Cheap to call on every change: an unchanged state is
+## ignored, so a running pulse is not restarted.
+func set_status_lights(hp_fraction: float, downs: int, downed: bool, dead: bool,
+		mag_fraction: float, spare_mags: Array) -> void:
+	var state := {"hp": hp_fraction, "downs": downs, "downed": downed, "dead": dead,
+		"mag": mag_fraction, "spare_mags": spare_mags}
 	if state == _status_lights:
 		return
 	_status_lights = state
@@ -791,6 +860,20 @@ func _find_status_lights(inst: Node) -> void:
 			_down_pips.append(pip)
 			_pip_materials.append(mat)
 			_pip_glows.append(_build_glow(pip, PIP_GLOW_RANGE, PIP_GLOW_OFFSET))
+	_ammo_bar = inst.find_child(AMMO_BAR_NODE, true, false) as MeshInstance3D
+	_ammo_bar_material = null
+	if _ammo_bar:
+		_ammo_bar_material = _glow_material()
+		_ammo_bar.material_override = _ammo_bar_material
+	_mag_pips.clear()
+	_mag_pip_materials.clear()
+	for node_name in MAG_PIP_NODES:
+		var pip := inst.find_child(node_name, true, false) as MeshInstance3D
+		if pip:
+			var mat := _glow_material()
+			pip.material_override = mat
+			_mag_pips.append(pip)
+			_mag_pip_materials.append(mat)
 	_apply_status_lights()
 
 
@@ -868,6 +951,7 @@ func _apply_status_lights() -> void:
 	if _band_pulse:
 		_band_pulse.kill()
 		_band_pulse = null
+	_apply_ammo_lights()
 	if not shown:
 		return
 	var dead: bool = _status_lights.dead
@@ -894,6 +978,32 @@ func _apply_status_lights() -> void:
 			glow.light_color = PIP_COLOR
 			glow.light_energy = PIP_GLOW_ENERGY
 			glow.visible = lit
+
+
+## An empty bar is hidden outright rather than scaled to nothing: a zero scale is
+## a degenerate basis to the renderer.
+func _apply_ammo_lights() -> void:
+	var shown := not _status_lights.is_empty()
+	var dead: bool = shown and _status_lights.dead
+	if _ammo_bar:
+		var mag: float = _status_lights.mag if shown and not dead else 0.0
+		_ammo_bar.visible = mag > 0.0
+		if mag > 0.0:
+			_ammo_bar.scale.z = minf(mag, 1.0)
+			_set_glow(_ammo_bar_material, _ammo_color(mag), AMMO_LIGHT_ENERGY)
+	var spare: Array = _status_lights.spare_mags if shown and not dead else []
+	for i in _mag_pips.size():
+		_mag_pips[i].visible = shown
+		var fill: float = spare[i] if i < spare.size() else 0.0
+		_set_glow(_mag_pip_materials[i], _ammo_color(fill) if fill > 0.0 else LIGHT_OFF_COLOR,
+			AMMO_LIGHT_ENERGY if fill > 0.0 else 0.0)
+
+
+static func _ammo_color(mag_fraction: float) -> Color:
+	for bracket: Array in AMMO_BRACKETS:
+		if mag_fraction >= bracket[0]:
+			return bracket[1]
+	return AMMO_BRACKETS[-1][1]
 
 
 static func _bracket_color(hp_fraction: float) -> Color:
@@ -951,6 +1061,90 @@ func _duration(pose: StringName) -> float:
 	return ONE_SHOT_TIME.get(pose, FALLBACK_TIME.get(pose, DEFAULT_FALLBACK_TIME))
 
 
+# --- Co-op mirroring ---------------------------------------------------------
+#
+# Every action resolves on the host alone (PlayerUnit._issue), and the unit's
+# synchronizer streams only where it is, never what it is doing — so a client's
+# copy slid across the deck in idle and never fired, reloaded or flinched. Each
+# public driver below therefore forwards itself to every ready client before it
+# plays here, and the client runs the local-only `_` version, which is what the
+# drivers call among themselves too so a nested call is never sent twice.
+#
+# Sent BEFORE the host's own `_instant` check: whether the HOST can see the unit
+# says nothing about whether a client can, and the client answers that for
+# itself through its own `_instant`.
+
+
+## True on the host of a co-op session — the only peer that sends.
+func mirrors() -> bool:
+	return multiplayer.has_multiplayer_peer() and multiplayer.is_server() \
+			and not SteamLobby.ready_peers.is_empty()
+
+
+## Per ready peer rather than a broadcast, for the reason the unit's
+## synchronizer starts hidden: a client that has not built this node yet cannot
+## resolve the path. See SteamLobby.ready_peers.
+func _mirror(rpc_method: StringName, args: Array = []) -> void:
+	if not mirrors():
+		return
+	for peer_id in SteamLobby.ready_peers:
+		callv(&"rpc_id", [peer_id, rpc_method] + args)
+
+
+## A one-shot (an action, a flinch, a burst) is not sent while a tick is being
+## decided: nothing plays on the host then either, and the whole tick reaches
+## clients afterwards as one timeline (exploration plan C.9). State — stance,
+## cover family, lamp, status light — still goes, since nothing replays it.
+func _mirror_one_shot(rpc_method: StringName, args: Array = []) -> void:
+	if TurnManager.resolving_tick:
+		return
+	_mirror(rpc_method, args)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_set_cover_pose(family: StringName) -> void:
+	_set_cover_pose(family)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_set_stance(stance: StringName) -> void:
+	_set_stance(stance)
+
+
+# The client's await-free copies of the coroutines: nothing on a client waits on
+# them, the host's own pacing already spaces the calls out.
+@rpc("authority", "call_remote", "reliable")
+func _rpc_play_action(action: StringName) -> void:
+	_play_action(action)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_play_hit_react() -> void:
+	_play_hit_react()
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_play_stance_exit(action: StringName, next: StringName) -> void:
+	_play_stance_exit(action, next)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_play_burst(rounds: int) -> void:
+	_play_burst(rounds)
+
+
+# Idempotent, so the copy a client also sets for itself off the replicated
+# `flashlight_on` and `life_state` costs nothing.
+@rpc("authority", "call_remote", "reliable")
+func _rpc_set_flashlight_enabled(on: bool) -> void:
+	_set_flashlight_enabled(on)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_set_status_color(color: Color) -> void:
+	_set_status_color(color)
+
+
 # --- Playback ----------------------------------------------------------------
 
 
@@ -958,6 +1152,11 @@ func _duration(pose: StringName) -> float:
 ## the cover BONUS is a property of the tile edge the shot crosses, never of
 ## what the unit is doing on screen.
 func set_cover_pose(family: StringName) -> void:
+	_mirror(&"_rpc_set_cover_pose", [family])
+	_set_cover_pose(family)
+
+
+func _set_cover_pose(family: StringName) -> void:
 	if family == _cover:
 		return
 	_cover = family
@@ -965,6 +1164,11 @@ func set_cover_pose(family: StringName) -> void:
 
 
 func set_stance(stance: StringName) -> void:
+	_mirror(&"_rpc_set_stance", [stance])
+	_set_stance(stance)
+
+
+func _set_stance(stance: StringName) -> void:
 	# Recorded even when a one-shot is mid-flight; play_action hands back to
 	# whatever the stance has become rather than to what it was on entry.
 	_stance = stance
@@ -981,6 +1185,15 @@ func play_action(action: StringName) -> void:
 	# Coroutine — callers MUST await, or the next game action resolves while this
 	# one is still on screen. Shooting does NOT come through here — see
 	# play_burst — so nothing here emits `muzzle`.
+	#
+	# DOWNED is not sent: a client plays its own collapse off the replicated
+	# `life_state` (Unit._present_life_state), and a second copy would restart it.
+	if action != DOWNED:
+		_mirror_one_shot(&"_rpc_play_action", [action])
+	await _play_action(action)
+
+
+func _play_action(action: StringName) -> void:
 	if _instant():
 		# Still recorded, so a unit killed out of sight is a body when it next
 		# comes into view.
@@ -1018,27 +1231,45 @@ func _settle_dead() -> void:
 ## victim's reaction, so missing art costs NO time here. Skipped rather than
 ## stacked when another one-shot is already on screen.
 func play_hit_react() -> void:
+	_mirror_one_shot(&"_rpc_play_hit_react")
+	await _play_hit_react()
+
+
+func _play_hit_react() -> void:
 	if _instant() or _action != &"" or not (_authored and _has_any(HIT_REACT)):
 		return
-	await play_action(HIT_REACT)
+	await _play_action(HIT_REACT)
 
 
 ## Plays a one-shot that bridges the current stance into `next`, then settles
 ## there. Coroutine — callers MUST await. Missing art costs NO time: it falls
 ## straight through to the stance, a hard cut rather than a mysterious pause.
 func play_stance_exit(action: StringName, next: StringName) -> void:
+	_mirror_one_shot(&"_rpc_play_stance_exit", [action, next])
+	await _play_stance_exit(action, next)
+
+
+func _play_stance_exit(action: StringName, next: StringName) -> void:
 	if _instant() or not _has_any(action):
-		set_stance(next)
+		_set_stance(next)
 		return
 	# Recorded WITHOUT playing it, so the exit animation is what shows; the tail
 	# of play_action then settles into whatever _stance has become.
 	_stance = next
-	await play_action(action)
+	await _play_action(action)
 
 
-func play_burst(rounds: int) -> void:
+func play_burst(rounds: int, mirror: bool = true) -> void:
 	# Coroutine — callers MUST await. Weapon comes up, fires `rounds` rounds on a
 	# fixed cadence, holds, then hands back to the stance. One `muzzle` per round.
+	# `mirror` false is for a caller that sends the burst itself, with what each
+	# round hits — see Unit._play_armed_burst.
+	if mirror:
+		_mirror_one_shot(&"_rpc_play_burst", [rounds])
+	await _play_burst(rounds)
+
+
+func _play_burst(rounds: int) -> void:
 	if _instant():
 		for _i in rounds:
 			muzzle.emit()
@@ -1115,8 +1346,57 @@ func _play(base: StringName, restart: bool = false) -> void:
 		var length := player.get_animation(pose).length
 		var speed := length / duration if duration > 0.0 and length > 0.01 else 1.0
 		player.play(pose, blend, speed)
-		if restart or _phases[i] != 0.0:
-			player.seek(_phases[i] * length, true)
+		var phase := _phases[i] + (loop_phase if pose in LOOPING else 0.0)
+		if restart or phase != 0.0:
+			player.seek(fposmod(phase, 1.0) * length, true)
+
+
+# --- Tick playback (exploration plan B.12) --------------------------------------
+#
+# Local-only entry points for TickPlayback, which runs the same timeline on every
+# peer by itself — so none of these mirror. The rules already happened; these
+# only draw them.
+
+
+func set_stance_local(stance: StringName) -> void:
+	_set_stance(stance)
+
+
+func set_cover_pose_local(family: StringName) -> void:
+	_set_cover_pose(family)
+
+
+func set_lamp_local(on: bool) -> void:
+	_set_flashlight_enabled(on)
+
+
+func play_action_local(action: StringName) -> void:
+	await _play_action(action)
+
+
+func play_hit_react_local() -> void:
+	_play_hit_react()
+
+
+## Undoes, for the screen only, a collapse the tick already decided, so playback
+## can show it at its slot: back on its feet if it went down this tick
+## (`was_active`), or still the downed body if it only died, untinted either way.
+func replay_reset(was_active: bool) -> void:
+	set_dead_tint(false)
+	if was_active:
+		_action = &""
+		_stance = IDLE
+		_play(IDLE, true)
+
+
+## The collapse at its slot: down if it was standing, and the corpse tint if this
+## was a death. Coroutine.
+func replay_down(was_active: bool, dead: bool) -> void:
+	if was_active:
+		_set_flashlight_enabled(false)
+		await _play_action(DOWNED)
+	if dead:
+		set_dead_tint(true)
 
 
 # --- Idle behaviour ----------------------------------------------------------
@@ -1166,7 +1446,14 @@ func _fidget_loop() -> void:
 ## readability: a machine's posture cannot be read off its body language the way
 ## an alien's can, so the state is a colour instead. A no-op for a character with
 ## no status part.
+## Mirrored like the poses: what drives it (a robot's alert state, its EMP timer)
+## lives on the host alone.
 func set_status_color(color: Color) -> void:
+	_mirror(&"_rpc_set_status_color", [color])
+	_set_status_color(color)
+
+
+func _set_status_color(color: Color) -> void:
 	_status_color = color
 	if _status_material:
 		_status_material.albedo_color = color

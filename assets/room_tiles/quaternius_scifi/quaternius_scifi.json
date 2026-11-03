@@ -1,0 +1,53 @@
+{
+	"kit": "quaternius_scifi",
+	"source": "Quaternius Modular Sci-Fi MegaKit, Standard tier (CC0). Measured with tools/inventory_kit.gd.",
+	"notes": [
+		"Kit grid is 4 m and walls are 3.0 m, so the kit-wide scale is 0.75 across and 1.0 up: a wall piece becomes 2 tiles (3.0 m) long and stays 3.0 m tall.",
+		"A piece's transform is scale, then pitch (degrees, about +X), then yaw (degrees, about +Y), then offset (metres, socket space). At rotation 0 its room side faces +Z and its origin is on the socket.",
+		"wall_light pieces are the kit's ceiling light panels stood up on a wall: pitch -90 turns their lit underside (-Y) to face the room (+Z), and offset x centres them on the socket, which MapBuilder puts on the wall face at lamp height. width is the panel's length along the wall, so a doorway lamp can pick one that clears the door frame.",
+		"Kit walls sit on the x = -2 edge of their 4 m tile with the room on +X, hence yaw -90 and offset z 1.5 (the scaled 2 m half-tile).",
+		"tiles is a wall piece's length along its run. squash marks the pieces that may be squeezed to 50% to fill a 1-tile run.",
+		"opening is a door frame's clear width and top in kit metres, and outer_width its full width: MapBuilder scales a frame across so the opening spans the DOOR run.",
+		"per_cell places that many copies in a 2x2 grid inside each footprint cell.",
+		"Left out after screenshots: Platform_Metal2, Platform_3Plates and Platform_CenterPlate read as flat grey squares at one tile; WallWindow_Straight's glass imports opaque white; WallAstra_Straight_Flat reads as bare white slabs beside the banded walls; Door_Frame_Square clears only 2.10 m at 0.6 height."
+	],
+	"scale": [0.75, 1.0, 0.75],
+	"textures": "Textures",
+	"materials": {
+		"MI_Trim_01": {"albedo": "T_Trim_01_BaseColor_Red.png", "orm": "T_Trim_01_ORM.png", "normal": "T_Trim_01_Normal.png"},
+		"MI_Trim_01_Floor": {"albedo": "T_Trim_01_BaseColor_Red.png", "orm": "T_Trim_01_ORM.png", "normal": "T_Trim_01_Normal.png"},
+		"MI_Trim_01_Stairs": {"albedo": "T_Trim_01_BaseColor_Red.png", "orm": "T_Trim_01_ORM.png", "normal": "T_Trim_01_Normal.png"},
+		"MI_Trim_02": {"albedo": "T_Trim_02_BaseColor_Red.png", "orm": "T_Trim_02_ORM.png", "normal": "T_Trim_02_Normal.png"},
+		"MI_Trim_02_Rails": {"albedo": "T_Trim_02_BaseColor_Red.png", "orm": "T_Trim_02_ORM.png", "normal": "T_Trim_02_Normal.png"},
+		"MI_Trim_02_Floor": {"albedo": "T_Trim_02_BaseColor.png", "orm": "T_Trim_02_ORM.png", "normal": "T_Trim_02_Normal.png"},
+		"MI_Trim_02_Variation": {"albedo": "T_Trim_02_BaseColor.png", "orm": "T_Trim_02_ORM.png", "normal": "T_Trim_02_Normal.png"},
+		"MI_Trim_03": {"albedo": "T_Trim_03_BaseColor.png", "orm": "T_Trim_03_ORM.png", "normal": "T_Trim_03_Normal.png"},
+		"MI_Trim_03_Cables": {"albedo": "T_Trim_03_Cables.png", "orm": "T_Trim_03_ORM.png", "normal": "T_Trim_03_Normal.png"},
+		"MI_Trim_03_Cables_Blue": {"albedo": "T_Trim_03_Cables.png", "orm": "T_Trim_03_ORM.png", "normal": "T_Trim_03_Normal.png"},
+		"MI_Trim_03_Dark": {"albedo": "T_Trim_03_Cables.png", "orm": "T_Trim_03_ORM.png", "normal": "T_Trim_03_Normal.png"},
+		"MI_PaddedWall": {"albedo": "T_PaddedWall_BaseColor.png", "orm": "T_PaddedWall_ORM.png", "normal": "T_PaddedWall_Normal.png"},
+		"MI_Decal_Grey": {"albedo": "T_Decals.png"},
+		"MI_Decal_Red": {"albedo": "T_Decals.png"},
+		"M_Decal_Screen": {"albedo": "T_Decals.png"},
+		"M_Decal_White": {"albedo": "T_Decals.png"}
+	},
+	"pieces": [
+		{"id": "wall_band", "file": "glTF/Walls/WallBand_Straight.gltf", "socket": "wall_face", "tiles": 2, "yaw": -90, "offset": [0, 0, 1.5], "weight": 5, "squash": true},
+
+		{"id": "wall_lamp_small", "file": "glTF/Props/Prop_Light_Small.gltf", "socket": "wall_light", "scale": [1.0, 1.0, 1.0], "pitch": -90, "offset": [0.43, 0, 0.04], "width": 0.861, "weight": 2},
+		{"id": "wall_lamp_wide", "file": "glTF/Props/Prop_Light_Wide.gltf", "socket": "wall_light", "scale": [1.0, 1.0, 1.0], "pitch": -90, "offset": [0.66, 0, 0.04], "width": 1.32, "weight": 1},
+
+		{"id": "floor_metal", "file": "glTF/Platforms/Platform_Metal.gltf", "socket": "floor", "scale": [0.375, 0.375, 0.375], "weight": 6},
+		{"id": "floor_stair", "file": "glTF/Platforms/Platform_DarkPlates.gltf", "socket": "stair_floor", "scale": [0.375, 0.375, 0.375], "weight": 1},
+
+		{"id": "door_frame_a", "file": "glTF/Platforms/Door_Frame_A.gltf", "socket": "door_frame", "scale": [1.0, 0.595, 0.75], "opening": [3.513, 3.834], "outer_width": 4.871, "weight": 2},
+		{"id": "door_frame_tall", "file": "glTF/Platforms/Door_Frame_SquareTall.gltf", "socket": "door_frame", "scale": [1.0, 0.6, 0.75], "opening": [2.732, 4.338], "outer_width": 4.844, "weight": 1},
+
+		{"id": "cover_crate_light", "file": "glTF/Props/Prop_Crate3.gltf", "socket": "cover_light", "scale": [1.0, 1.0, 1.0], "offset": [0, 0.5, 0], "weight": 2},
+		{"id": "cover_barrels_light", "file": "glTF/Props/Prop_Barrel_Large.gltf", "socket": "cover_light", "scale": [0.9, 0.9, 0.9], "per_cell": 4, "weight": 1},
+		{"id": "cover_crate_heavy", "file": "glTF/Props/Prop_Crate4.gltf", "socket": "cover_heavy", "scale": [1.249, 1.249, 1.249], "offset": [0, 0.7, 0], "weight": 1},
+
+		{"id": "loot_chest", "file": "glTF/Props/Prop_Chest.gltf", "socket": "crate", "scale": [0.73, 0.73, 0.73], "weight": 1},
+		{"id": "terminal_computer", "file": "glTF/Props/Prop_Computer.gltf", "socket": "terminal", "scale": [0.69, 0.69, 0.69], "screen_material": "M_Decal_Screen", "weight": 1}
+	]
+}

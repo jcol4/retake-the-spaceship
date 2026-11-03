@@ -67,7 +67,8 @@ func _combat_turn() -> void:
 ## behind a crate is an answer to one and an invitation to the other.
 func _breach_cover(quarry: Unit) -> void:
 	var defence := Combat.defending_cover(grid_pos, quarry.grid_pos)
-	if defence[0] == MapData.Cover.NONE:
+	# Corner cover (defence[2]) is a bulkhead; there is nothing to breach.
+	if defence[0] == MapData.Cover.NONE or defence[2]:
 		return
 	GridManager.damage_cover_edge(quarry.grid_pos, defence[1], BREACH_DAMAGE)
 	action_logged.emit("%s BREACHES the cover in front of %s" % [

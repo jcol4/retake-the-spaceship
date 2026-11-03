@@ -90,9 +90,9 @@ func _check_bare_weapon_is_unchanged() -> void:
 
 
 func _check_flat_bonuses_stack() -> void:
-	var w = _make(W.ASSAULT_RIFLE, [A.VERTICAL_GRIP, A.MUZZLE_BRAKE, A.EXTENDED_MAG], M.FMJ)
-	_check(w.effective_accuracy() == w.base_accuracy + 12,
-		"grip + brake + FMJ = +12 accuracy (got %+d)" % (w.effective_accuracy() - w.base_accuracy))
+	var w = _make(W.ASSAULT_RIFLE, [A.VERTICAL_GRIP, A.MUZZLE_BRAKE, A.EXTENDED_MAG])
+	_check(w.effective_accuracy() == w.base_accuracy + 10,
+		"grip + brake = +10 accuracy (got %+d)" % (w.effective_accuracy() - w.base_accuracy))
 	_check(w.effective_mag_size() == w.mag_size + 1, "extended mag adds 1 round")
 	var stats = _stats_with(w)
 	_check(stats.weapon_base_accuracy == w.effective_accuracy(),
@@ -154,9 +154,14 @@ func _check_damage_percents_add() -> void:
 
 
 func _check_armored_ammo() -> void:
+	# FMJ took over Penetrator's old job when penetration arrived; Penetrator now
+	# adds pen only (docs/design/systems/penetration).
+	var fmj = _make(W.ASSAULT_RIFLE, [], M.FMJ)
+	_check(fmj.damage_percent(true, 5) == 34 and fmj.damage_percent(false, 5) == 0,
+		"FMJ: +34% vs armored, nothing vs unarmored")
 	var pen = _make(W.ASSAULT_RIFLE, [], M.PENETRATOR)
-	_check(pen.damage_percent(true, 5) == 34 and pen.damage_percent(false, 5) == 0,
-		"penetrator: +34% vs armored, nothing vs unarmored")
+	_check(pen.damage_percent(true, 5) == 0 and pen.effective_penetration() == pen.penetration + 20,
+		"penetrator: +20 pen, no damage change")
 	var hp = _make(W.ASSAULT_RIFLE, [], M.HOLLOW_POINT)
 	_check(hp.damage_percent(true, 5) == -15 and hp.damage_percent(false, 5) == 50,
 		"hollow point: -15% vs armored, +50% vs unarmored")

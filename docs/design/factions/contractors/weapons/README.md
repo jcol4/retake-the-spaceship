@@ -48,9 +48,9 @@ screen) and never replenished mid-mission:
 
 - **Mag size** — how many shots (Shoot/Aimed Shot/Overwatch, each costs 1 round regardless of
   action type) the weapon holds before it needs a Reload.
-- **Reserve** — spare rounds carried beyond the loaded mag. Reload draws `mag_size − current_ammo`
-  rounds from it, or whatever's left if that's less — so the last reload of a mission can come up
-  short rather than always topping off fully.
+- **Reserve** — spare magazines carried beyond the loaded one. Reload loads the fullest and puts the
+  one coming out back with whatever it still holds, so no round is lost, and late in a mission a
+  reload can load a part-used mag rather than a full one.
 - **Total** — mag size + reserve. The real per-mission ammo budget; this is the number that
   actually differentiates a "sustain" weapon (SMG, 24) from a "scarce" one (Battle Rifle, 15).
 
@@ -59,11 +59,12 @@ Reload disables, and Shoot/Aimed Shot/Overwatch all require `can_shoot()` (`ammo
 three lock out too. No emergency reserve, no resupply — ammo discipline is a real mission-length
 resource, not just a reload-timer.
 
-Most weapons carry their reserve as whole mags (Assault Rifle: 5 spare mags of 3 = 15). The
-**Shotgun is the deliberate exception**: it's pump-action, so instead of discrete mags it has a
-loose reserve of 15 individual shells. Mechanically this is the same `reserve` number just not an
-exact multiple of `mag_size` (6) — so its last reload or two of a mission can top off the tube
-short of a full 6, which reads as "scrounging the last shells" rather than "swap to a fresh mag."
+Most weapons carry their reserve as whole mags (Assault Rifle: 5 spare mags of 3 = 15), held per mag
+in `Unit.reserve_mags`. A magazine attachment enlarges all of them, so an Extended Mag on that rifle
+is 5 spare mags of 4 = 20. The **Shotgun is the deliberate exception**: it's pump-action, so instead
+of discrete mags it has a loose reserve of 15 individual shells (`WeaponData.loose_reserve`), and its
+last reload or two of a mission can top off the tube short of a full 6, which reads as "scrounging
+the last shells" rather than "swap to a fresh mag."
 
 ## Implementation
 
