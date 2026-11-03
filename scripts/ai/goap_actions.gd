@@ -242,7 +242,6 @@ class Flank extends GoapAction:
 		var watcher_list := TileThreat.watchers(unit)
 		var best := {}
 		var best_score := 1 << 30
-		var aim := target.global_position + Vector3(0, 0.9, 0)
 		for tile: Vector3i in costs:
 			var steps: int = costs[tile]
 			# Cheap tests first, on the RAW step count — a valid lower bound on this
@@ -256,8 +255,10 @@ class Flank extends GoapAction:
 				continue
 			if Combat.defending_cover(tile, target.grid_pos)[0] != MapData.Cover.NONE:
 				continue
-			if not GridManager.has_clear_line(
-					unit, GridManager.grid_to_world(tile) + Vector3(0, 1.4, 0), aim):
+			# The flanker will be at rest on the tile when it shoots, so it may
+			# lean from it; the target leans if it is at rest now (GDD §6.1.2).
+			if not GridManager.tiles_have_sight(
+					unit, tile, target.grid_pos, true, target.can_peek()):
 				continue
 			var score := steps
 			if TileThreat.is_covered(tile, watcher_list):
@@ -343,7 +344,10 @@ class DestroyCover extends GoapAction:
 		var board: SquadBlackboard = ctx.get("blackboard")
 		if board and not board.can_claim(SquadBlackboard.Role.COVER_BREAKER, unit):
 			return false
-		return Combat.defending_cover(unit.grid_pos, target.grid_pos)[0] != MapData.Cover.NONE
+		# Corner cover is a wall (defence[2]), and there is no shooting a wall
+		# out: offered anyway, a cover-breaker would fire at it every activation.
+		var defence := Combat.defending_cover(unit.grid_pos, target.grid_pos)
+		return defence[0] != MapData.Cover.NONE and not defence[2]
 
 	func ap_cost(unit: Unit, _ctx: Dictionary) -> int:
 		return unit.action_cost(UnitStats.Action.SHOOT)
@@ -353,7 +357,7 @@ class DestroyCover extends GoapAction:
 		if target == null or target.is_downed:
 			return false
 		var defence := Combat.defending_cover(unit.grid_pos, target.grid_pos)
-		if defence[0] == MapData.Cover.NONE:
+		if defence[0] == MapData.Cover.NONE or defence[2]:
 			return false
 		var board: SquadBlackboard = ctx.get("blackboard")
 		if board:

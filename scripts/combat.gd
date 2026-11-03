@@ -147,6 +147,7 @@ class ShotResult:
 	var cover_side: int = -1
 	var cover_type: int = MapData.Cover.NONE  # tier that applied, before this shot
 	var cover_broken: bool = false  # this shot knocked that tier down
+	var cover_structural: bool = false  # the cover was a wall (corner cover), which takes no damage
 	var had_cover: bool = false
 	var flanked: bool = false
 	var crit: bool = false
@@ -186,7 +187,15 @@ static func target_in_cover(shooter, result: ShotResult) -> bool:
 
 
 ## Which edge of the target's tile, if any, this shot has to cross — as
-## [MapData.Cover tier, MapData.Side], or [NONE, -1] when the target is exposed.
+## [MapData.Cover tier, MapData.Side, structural], or [NONE, -1, false] when the
+## target is exposed.
+##
+## `structural` is corner cover (GDD §6.1): a sight-blocker — a wall, a wreck, a
+## landed ship — flush against the side the shot comes from is HEAVY cover that
+## nothing can destroy, so callers that damage cover skip it. It does not apply
+## from a higher deck, which looks down over the wall. Walls are deliberately not
+## registered as CoverEdges: edges also drive the cover pose and snap_to_cover,
+## which would crouch every unit standing next to one.
 ##
 ## Replaces the old 60-degree dot-product flank heuristic (Sec 6.2). Cover
 ## direction is discrete now, so this is a lookup rather than an estimate: take
@@ -200,6 +209,7 @@ static func target_in_cover(shooter, result: ShotResult) -> bool:
 static func defending_cover(shooter_pos: Vector3i, target_pos: Vector3i) -> Array:
 	var best_type := MapData.Cover.NONE
 	var best_side := -1
+	var best_structural := false
 	var dx := signi(shooter_pos.x - target_pos.x)
 	var dz := signi(shooter_pos.z - target_pos.z)
 	var sides: Array[int] = []
@@ -209,13 +219,19 @@ static func defending_cover(shooter_pos: Vector3i, target_pos: Vector3i) -> Arra
 		sides.append(MapData.Side.SOUTH if dz > 0 else MapData.Side.NORTH)
 	for side in sides:
 		var t := GridManager.cover_type_on(target_pos, side)
+		var structural := shooter_pos.y <= target_pos.y \
+			and GridManager.sight_blocked_on(target_pos, side)
+		if structural:
+			t = MapData.Cover.HEAVY
 		# HEAVY sorts above LIGHT sorts above NONE in the enum, so the comparison
 		# is the tier comparison. Strictly greater, so on a tie the x edge wins
-		# and the result is deterministic.
-		if t > best_type:
+		# and the result is deterministic — except that a wall beats a prop of
+		# the same tier, since the wall is the one that will still be there.
+		if t > best_type or (t == best_type and structural and not best_structural):
 			best_type = t
 			best_side = side
-	return [best_type, best_side]
+			best_structural = structural
+	return [best_type, best_side, best_structural]
 
 
 static func cover_penalty(cover_type: int) -> int:
@@ -375,9 +391,12 @@ static func resolve_shot(shooter, target, action: ShotAction, body_part: int = B
 		result.cover_tile = target.grid_pos
 		result.cover_side = defence[1]
 		result.cover_type = defence[0]
-		var left := GridManager.damage_cover_edge(
-			target.grid_pos, defence[1], shooter.stats.weapon_damage)
-		result.cover_broken = left != defence[0]
+		result.cover_structural = defence[2]
+		# A wall is not a crate: corner cover is never chewed at.
+		if not result.cover_structural:
+			var left := GridManager.damage_cover_edge(
+				target.grid_pos, defence[1], shooter.stats.weapon_damage)
+			result.cover_broken = left != defence[0]
 	return result
 
 

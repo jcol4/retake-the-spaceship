@@ -248,8 +248,9 @@ func _play_turn(unit: Unit, yaw: float) -> void:
 
 
 ## A shot or a swing that already resolved: the shooter's model turns onto where
-## the target's model is, the burst plays with the recorded hit and strays, and
-## the target flinches if it was hit and still stands.
+## the target's model is, the burst plays with the recorded hit, strays and lean
+## round a corner (GDD §6.1.2), and the target flinches if it was hit and still
+## stands. The lean moves the model relative to where this playback put it.
 func _play_shot(unit: Unit, e: Dictionary) -> void:
 	var target := e.get("target") as Unit
 	if target == null or not is_instance_valid(target):
@@ -257,7 +258,8 @@ func _play_shot(unit: Unit, e: Dictionary) -> void:
 	var delta := target.visual.global_position - unit.visual.global_position
 	if absf(delta.x) > 0.001 or absf(delta.z) > 0.001:
 		await _play_turn(unit, snappedf(atan2(-delta.x, -delta.z), PI / 4.0))
-	await unit.replay_attack(target, e["hit"], e["crit"], e["rounds"], e["strays"], e["melee"])
+	await unit.replay_attack(target, e["hit"], e["crit"], e["rounds"], e["strays"], e["melee"],
+		e.get("lean", Vector3i.ZERO))
 
 
 ## Hands every model back to its unit: re-zeroed on the root, drawn by the

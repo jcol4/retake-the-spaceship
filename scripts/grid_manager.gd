@@ -4,6 +4,10 @@ extends Node
 
 const TILE_SIZE := 1.5
 const FLOOR_HEIGHT := 3.0  # world-space Y per grid floor level
+## Where sight is sampled on a standing unit, above its tile: a seer looks from
+## its eye, a target is seen at its chest.
+const EYE_HEIGHT := 1.4
+const CHEST_HEIGHT := 0.9
 
 var tiles: Dictionary = {}  # Vector3i -> GridTileData
 # Extra adjacency for stairs: Vector3i -> Array[Vector3i] (both directions added)
@@ -25,6 +29,18 @@ var _floors: Dictionary = {}
 ## the same square while neither has arrived yet. Host-side, like every move.
 var _reservations: Dictionary = {}
 var _reserved_tile: Dictionary = {}
+## The node whose world `sight_blocked_on` raycasts in. Set by MapBuilder.build:
+## the question is about the map, so it is asked in the map's world rather than
+## of whichever unit happened to ask.
+var world_node: Node3D = null
+## `sight_blocked_on` answers: Vector4i(x, deck, z, side) -> bool. Layer-1
+## geometry only changes when a deck is built or a ship blocker comes and goes,
+## so these are cleared then (`clear`, `invalidate_sight_cache`) and otherwise kept.
+var _sight_cache: Dictionary = {}
+## Physics frame the cache was last cleared on. A body added or removed reaches
+## the physics space only on the next step, so an answer read before then may be
+## about the old geometry and is returned but not kept.
+var _sight_cache_since: int = -1
 
 
 func clear() -> void:
@@ -33,6 +49,13 @@ func clear() -> void:
 	_floors.clear()
 	_reservations.clear()
 	_reserved_tile.clear()
+	invalidate_sight_cache()
+
+
+## Forgets every `sight_blocked_on` answer. Call when layer-1 geometry changes.
+func invalidate_sight_cache() -> void:
+	_sight_cache.clear()
+	_sight_cache_since = Engine.get_physics_frames()
 
 
 func add_tile(pos: Vector3i, world_pos: Vector3) -> GridTileData:
@@ -456,21 +479,133 @@ func is_melee_adjacent(a: Vector3i, b: Vector3i) -> bool:
 
 
 func has_line_of_sight(shooter: Node3D, target: Node3D) -> bool:
-	# Single ray shooter-eye -> target-center, blocked only by map geometry
-	# (collision layer 1). Multi-sample LOS (Sec 10.6) deferred.
-	var from := shooter.global_position + Vector3(0, 1.4, 0)
-	var to := target.global_position + Vector3(0, 0.9, 0)
+	return not sight_line(shooter, target).is_empty()
+
+
+## The line `seer` sees `target` along, as [seer_tile, target_tile] — the tiles
+## the two ends are sampled from, either of which may be a lean tile rather than
+## the unit's own (GDD §6.1.2) — or [] when there is none.
+##
+## Rays run eye (EYE_HEIGHT) to chest (CHEST_HEIGHT), blocked only by map
+## geometry (collision layer 1). The straight line is tried first, from where the
+## two units actually are; then the seer leaning, then the target leaning, then
+## both. A lean is only ever a way PAST its corner (`_leans_toward`), and only a
+## unit at rest leans (`can_peek`), so this is symmetric: whatever a unit sees by
+## leaning sees it back along the same line.
+##
+## Duck-typed on `grid_pos` and `can_peek()`, so a headless tool's stand-in node
+## works, and so does any non-Unit: it has no lean.
+func sight_line(seer: Node3D, target: Node3D) -> Array:
 	# Either end may be standing ON a piece of geometry that must not block its
 	# own sightlines — a door gun on its landed ship's hull (extraction plan
 	# Phase 5, GDD §7.2): the hull blocks sight for everyone else in the bay, but
 	# the gun sits on top of it. `los_exclusions` is a Unit virtual, [] for almost
 	# everything.
 	var exclude: Array[RID] = []
-	if shooter.has_method("los_exclusions"):
-		exclude.append_array(shooter.los_exclusions())
+	if seer.has_method("los_exclusions"):
+		exclude.append_array(seer.los_exclusions())
 	if target.has_method("los_exclusions"):
 		exclude.append_array(target.los_exclusions())
-	return has_clear_line(shooter, from, to, exclude)
+	return _sight_between(seer, _tile_of(seer), _tile_of(target),
+		seer.global_position + Vector3(0, EYE_HEIGHT, 0),
+		target.global_position + Vector3(0, CHEST_HEIGHT, 0),
+		_peeks(seer), _peeks(target), exclude)
+
+
+## `sight_line` for tiles nobody need be standing on yet — the AI asking whether
+## a CANDIDATE tile would see, or be seen from, somewhere. `from_peeks` and
+## `to_peeks` say whether each end may lean. `ref` is any node in the world.
+func tiles_have_sight(ref: Node3D, from_tile: Vector3i, to_tile: Vector3i,
+		from_peeks := false, to_peeks := false) -> bool:
+	return not _sight_between(ref, from_tile, to_tile,
+		grid_to_world(from_tile) + Vector3(0, EYE_HEIGHT, 0),
+		grid_to_world(to_tile) + Vector3(0, CHEST_HEIGHT, 0),
+		from_peeks, to_peeks).is_empty()
+
+
+func _sight_between(ref: Node3D, from_tile: Vector3i, to_tile: Vector3i, eye: Vector3,
+		chest: Vector3, from_peeks: bool, to_peeks: bool, exclude: Array[RID] = []) -> Array:
+	if has_clear_line(ref, eye, chest, exclude):
+		return [from_tile, to_tile]
+	var from_leans := _leans_toward(from_tile, to_tile) if from_peeks else []
+	var to_leans := _leans_toward(to_tile, from_tile) if to_peeks else []
+	var lean_eye := Vector3(0, EYE_HEIGHT, 0)
+	var lean_chest := Vector3(0, CHEST_HEIGHT, 0)
+	for lean: Vector3i in from_leans:
+		if has_clear_line(ref, grid_to_world(lean) + lean_eye, chest, exclude):
+			return [lean, to_tile]
+	for lean: Vector3i in to_leans:
+		if has_clear_line(ref, eye, grid_to_world(lean) + lean_chest, exclude):
+			return [from_tile, lean]
+	for a: Vector3i in from_leans:
+		for b: Vector3i in to_leans:
+			if has_clear_line(ref, grid_to_world(a) + lean_eye, grid_to_world(b) + lean_chest, exclude):
+				return [a, b]
+	return []
+
+
+func _tile_of(node: Node3D) -> Vector3i:
+	return node.grid_pos if "grid_pos" in node else world_to_grid(node.global_position)
+
+
+func _peeks(node: Node3D) -> bool:
+	return node.has_method("can_peek") and node.can_peek()
+
+
+## The lean tiles of `pos` that count toward `other` — rule 3 of §6.1.2: a lean
+## is a look PAST its corner, so it only helps toward a tile strictly beyond the
+## blocker's near face, never as an extra tile of vision in every direction.
+func _leans_toward(pos: Vector3i, other: Vector3i) -> Array:
+	var out: Array = []
+	for peek: Array in peek_tiles(pos):
+		var step: Vector3i = MapData.SIDE_STEP[peek[1]]
+		var past := (other.x - pos.x) * step.x + (other.z - pos.z) * step.z
+		if past > 0:
+			out.append(peek[0])
+	return out
+
+
+## Where a unit on `pos` can lean out to see round a corner (GDD §6.1.2), as
+## [lean_tile, side] pairs, `side` being the side of `pos` the blocker is on.
+## All three must hold:
+##   - something that blocks sight sits flush against that side of `pos`;
+##   - the tile beside `pos` along the blocker is open floor — the MAP only, as
+##     `_corner_is_open` reads it, so a squadmate standing there doesn't stop it;
+##   - the blocker does not carry on past that tile: the wall ends at the unit.
+## So there is no lean halfway along a wall and none in an inside corner, and a
+## unit beside a doorway leans into the doorway.
+func peek_tiles(pos: Vector3i) -> Array:
+	var out: Array = []
+	# Leaning is something done from open floor. A unit placed inside a wall
+	# cell (tests do this) would otherwise "lean" out of solid geometry.
+	if not _corner_is_open(pos):
+		return out
+	for side: int in [MapData.Side.EAST, MapData.Side.SOUTH, MapData.Side.WEST, MapData.Side.NORTH]:
+		if not sight_blocked_on(pos, side):
+			continue
+		for along: int in [(side + 1) % 4, (side + 3) % 4]:
+			var lean: Vector3i = pos + MapData.SIDE_STEP[along]
+			if _corner_is_open(lean) and not sight_blocked_on(lean, side):
+				out.append([lean, side])
+	return out
+
+
+## Whether something that blocks sight sits flush against `side` of `pos`: an
+## eye-height ray from the tile's centre one tile toward that neighbour hits
+## layer 1 — walls, wrecks and a landed ship's blocker, everything line of sight
+## treats as solid. Read by corner peeking and by corner cover (Combat.defending_cover).
+func sight_blocked_on(pos: Vector3i, side: int) -> bool:
+	var key := Vector4i(pos.x, pos.y, pos.z, side)
+	if _sight_cache.has(key):
+		return _sight_cache[key]
+	if world_node == null or not is_instance_valid(world_node) or not world_node.is_inside_tree():
+		return false
+	var from := grid_to_world(pos) + Vector3(0, EYE_HEIGHT, 0)
+	var to := from + Vector3(MapData.SIDE_STEP[side]) * TILE_SIZE
+	var blocked := not has_clear_line(world_node, from, to)
+	if Engine.get_physics_frames() > _sight_cache_since:
+		_sight_cache[key] = blocked
+	return blocked
 
 
 func has_clear_line(from_node: Node3D, from: Vector3, to: Vector3, exclude: Array[RID] = []) -> bool:

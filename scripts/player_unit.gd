@@ -533,7 +533,8 @@ func _resolve_frag_throw(target: Vector3i) -> void:
 		# the blast rather than on a shooter — whichever side of the victim's
 		# tile faces the explosion is the side that eats the cover-breaker bonus.
 		var defence := Combat.defending_cover(target, victim.grid_pos)
-		if defence[0] != MapData.Cover.NONE:
+		# Except corner cover (defence[2]): a wall takes no damage.
+		if defence[0] != MapData.Cover.NONE and not defence[2]:
 			GridManager.damage_cover_edge(victim.grid_pos, defence[1], FRAG_DAMAGE)
 		caught += 1
 		if victim.is_downed:

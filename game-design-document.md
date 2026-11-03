@@ -502,6 +502,10 @@ fixtures. **Muzzle flashes emit no gameplay light.** They are a visual effect on
   - **Edge cover** sits on the boundary between two tiles (XCOM-style). It is used on
     hand-authored maps.
   - **Block cover** occupies tiles (1×1 up to 3×2). The generator places it.
+- **Corner cover:** anything that blocks sight (a wall, a wreck, a landed ship) sitting flush
+  against the side a shot comes from is **heavy cover** that can't be destroyed. It doesn't apply
+  to a shooter on a higher deck, who looks down over the wall. Walls are not cover edges, so
+  standing beside one doesn't put a unit into its cover pose.
 - Cover only applies when the shot comes through it (see Flanking, §6.2).
 
 ### 6.1.1 Destructible Cover **[built]**
@@ -511,6 +515,37 @@ fixtures. **Muzzle flashes emit no gameplay light.** They are a visual effect on
   (multiplier TBD).
 - **At 0 HP, cover becomes impassable rubble.** It gives no protection and blocks movement, so
   fights reshape the map.
+
+### 6.1.2 Corner Peeking **[built]**
+
+A unit flush against the end of a wall can lean past it to see round the corner, and enemies can
+see and target it along that same line.
+
+1. **When a unit can lean.** All three must hold:
+   - Something that blocks sight sits flush against one side of the unit's tile.
+   - The tile beside the unit, along that blocker, is open floor. Only the map is checked, so a
+     unit standing there doesn't matter.
+   - The blocker does not carry on past that tile, so the wall ends at the unit.
+
+   So there is no lean halfway along a wall and none in an inside corner. A unit beside a doorway
+   leans into the doorway.
+   ```
+   . . . E    # = wall, U = unit, L = lean tile
+   # # # .    U→E is blocked by the wall's end
+   . . U L    L→E is clear, so U sees E and E sees U
+   ```
+2. **Symmetric.** Whatever a unit can see by leaning can see it and target it.
+3. **Past the corner only.** A lean only counts toward targets strictly beyond the blocker's near
+   face. It is not an extra tile of vision in every direction.
+4. **Squadmates don't block.** A squadmate standing on the lean tile does not stop the lean.
+5. **Only at rest.** A moving unit has no lean, whether it is looking or being looked at.
+   Overwatch fires when the unit actually walks out past the corner, not one tile early. A watcher
+   standing still at a corner does lean.
+6. **Corner cover.** The wall a unit leans past is also its cover: heavy, indestructible, and not
+   from a higher deck (§6.1).
+7. **The lean is cosmetic.** The shot is resolved from the unit's own tile, so range, elevation
+   and the cover it presents are unchanged. The model slides about 0.55 m toward the lean tile
+   over about 0.15 s, fires, and slides back.
 
 ### 6.2 Flanking **[built]**
 
@@ -867,7 +902,9 @@ Free to toggle (0 AP). Closed doors block LOS, light and sound.
 
 ### 10.6 Line of Sight & Visibility **[built]**
 
-- Raycast LOS with multiple sample points per unit.
+- Raycast LOS against map geometry: one ray from the seer's eye (1.4 m) to the target's chest
+  (0.9 m). When that is blocked, the same ray is tried from the seer's lean tiles, then to the
+  target's, then between both (corner peeking, §6.1.2).
 - **Shared team vision.**
 - Recomputed on state changes (movement, doors, deaths), never per frame.
 - **Rendering is gated by room**, not per-unit raycast. Enemies render in rooms the squad can see

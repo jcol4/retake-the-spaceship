@@ -115,6 +115,13 @@ func los_exclusions() -> Array[RID]:
 	return out
 
 
+## Never leans (GDD §6.1.2): it is bolted to the hull, and the ship blocker
+## leaves its corner open on purpose, so a lean there would be a second, wider
+## view the mount was never meant to have.
+func can_peek() -> bool:
+	return false
+
+
 func _init() -> void:
 	# EnemyUnit's constructor has already run (aliens' faction, no flashlight);
 	# CONTRACTORS is only the default here — `make` sets the calling crew's.

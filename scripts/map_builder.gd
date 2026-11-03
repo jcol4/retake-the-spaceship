@@ -169,6 +169,9 @@ func build(map_data: MapData) -> void:
 	_fading_in = []
 	_fade_tween = null
 	GridManager.clear()
+	# Corner peeking and corner cover ask the map's own world whether a tile
+	# edge blocks sight (GridManager.sight_blocked_on).
+	GridManager.world_node = self
 	# Ahead of the per-cell pass: a run or a door span has to be recognised as a
 	# whole before any of its cells are visited individually, or there is no
 	# "whole" left to chunk into fixed-length modules — see _build_wall_runs.

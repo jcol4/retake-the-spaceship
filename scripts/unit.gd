@@ -399,6 +399,17 @@ var _pending_target: Unit = null
 # result. Decided up front so the pattern is fixed before the first round.
 var _burst_round: int = 0
 var _burst_strays: Array[int] = []
+## Corner peeking (GDD §6.1.2) is cosmetic: the shot resolves from the unit's own
+## tile, and only the model slides this far toward the lean tile to fire, over
+## LEAN_SECONDS each way.
+const LEAN_DISTANCE := 0.55
+const LEAN_SECONDS := 0.15
+## The offset the lean currently adds to `visual.position`. Applied RELATIVE to
+## wherever the visual is, because tick playback owns that position while a
+## timeline plays (it walks the model along the recorded path), and the two must
+## not fight over it.
+var _lean_applied := Vector3.ZERO
+var _lean_tween: Tween = null
 var _name_label: Label3D = null
 var _sync: MultiplayerSynchronizer = null  # co-op only; see _setup_replication
 
@@ -459,6 +470,7 @@ func set_display_visible(on: bool) -> void:
 func end_display() -> void:
 	_display_mode = false
 	visual.position = Vector3.ZERO
+	_lean_applied = Vector3.ZERO
 	visual.rotation = Vector3.ZERO
 	visual.visible = _rendered
 	if _rendered:
@@ -713,6 +725,15 @@ func cancel_walk() -> void:
 
 func is_walking() -> bool:
 	return _walking
+
+
+## Whether this unit can lean round a corner right now (GDD §6.1.2): only at
+## rest. `_walking` holds for the whole of `move_along`, its per-tile overwatch,
+## suppression and `after_step` checks included, so a walker is neither seen nor
+## sees by leaning, and overwatch fires when it actually walks out past the
+## corner rather than a tile early.
+func can_peek() -> bool:
+	return not _walking and not is_downed
 
 
 ## Re-aims a walk in flight at `goal`, from the tile it reaches next (E9). No stop
@@ -2198,9 +2219,12 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	_pending_target = target
 	_burst_round = 0
 	_burst_strays = _pick_strays(rounds, result.hit)
+	# Decided here, on the host, and carried to every client and into the
+	# tick's record: which way, if any, the model leans out to fire.
+	var lean := _lean_step_toward(target)
 	_record(ExplorationRules.EV_SHOT, {"target": target, "hit": result.hit, "crit": result.crit,
-		"rounds": rounds, "strays": PackedInt32Array(_burst_strays), "melee": false})
-	await _play_armed_burst(rounds)  # emits `muzzle` once per round
+		"rounds": rounds, "strays": PackedInt32Array(_burst_strays), "melee": false, "lean": lean})
+	await _play_armed_burst(rounds, lean)  # emits `muzzle` once per round
 	_pending_shot = null
 	_pending_target = null
 	if result.hit:
@@ -2347,7 +2371,7 @@ func _on_muzzle() -> void:
 ## a client saw the rifle kick and nothing land; with it, the client's own
 ## `_on_muzzle` draws the impacts and plays the gunfire, gated on that client's
 ## own `is_instant`.
-func _play_armed_burst(rounds: int) -> void:
+func _play_armed_burst(rounds: int, lean := Vector3i.ZERO) -> void:
 	if visual.mirrors() and not TurnManager.resolving_tick:
 		var target_path := _pending_target.get_path() if _pending_target else NodePath()
 		var has_shot := _pending_shot != null
@@ -2355,13 +2379,52 @@ func _play_armed_burst(rounds: int) -> void:
 		var crit := has_shot and _pending_shot.crit
 		var strays := PackedInt32Array(_burst_strays)
 		for peer_id in SteamLobby.ready_peers:
-			_rpc_play_armed_burst.rpc_id(peer_id, target_path, rounds, has_shot, hit, crit, strays)
+			_rpc_play_armed_burst.rpc_id(peer_id, target_path, rounds, has_shot, hit, crit, strays, lean)
+	await _play_burst_leaning(rounds, lean)
+
+
+## The tile step the model leans along to fire at `target` (GDD §6.1.2), or ZERO
+## when it sees it from its own tile. The step, not the tile: playback applies
+## it to the model wherever the model is drawn at that moment.
+func _lean_step_toward(target: Unit) -> Vector3i:
+	var line := GridManager.sight_line(self, target)
+	if line.is_empty() or line[0] == grid_pos:
+		return Vector3i.ZERO
+	return (line[0] as Vector3i) - grid_pos
+
+
+## `visual.play_burst`, from the model leaned `lean` out: slide out, fire, slide
+## back. Skipped when nothing is drawn (`is_instant`), and when a lean is already
+## running on this model — a second one stacked on it could leave it displaced.
+func _play_burst_leaning(rounds: int, lean: Vector3i) -> void:
+	if lean == Vector3i.ZERO or is_instant() or (_lean_tween != null and _lean_tween.is_running()):
+		await visual.play_burst(rounds, false)
+		return
+	var offset := global_transform.basis.inverse() * (Vector3(lean).normalized() * LEAN_DISTANCE)
+	await _tween_lean(offset)
 	await visual.play_burst(rounds, false)
+	if is_instant():
+		_set_lean(Vector3.ZERO)  # hidden mid-burst: nothing to watch it slide back
+	else:
+		await _tween_lean(Vector3.ZERO)
+
+
+func _tween_lean(to: Vector3) -> void:
+	_lean_tween = create_tween()
+	_lean_tween.tween_method(_set_lean, _lean_applied, to, LEAN_SECONDS)
+	await _lean_tween.finished
+	_lean_tween = null
+
+
+## Moves the model by the change in lean only, never to an absolute spot.
+func _set_lean(offset: Vector3) -> void:
+	visual.position += offset - _lean_applied
+	_lean_applied = offset
 
 
 @rpc("authority", "call_remote", "reliable")
 func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, hit: bool,
-		crit: bool, strays: PackedInt32Array) -> void:
+		crit: bool, strays: PackedInt32Array, lean: Vector3i) -> void:
 	# Only what `_on_muzzle` reads; the rest of the result stays on the host.
 	var shot: Combat.ShotResult = null
 	if has_shot:
@@ -2372,7 +2435,7 @@ func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, h
 	_pending_target = get_node_or_null(target_path) as Unit if not target_path.is_empty() else null
 	_burst_round = 0
 	_burst_strays.assign(strays)
-	await visual.play_burst(rounds, false)
+	await _play_burst_leaning(rounds, lean)
 	# Unless a later burst took the arming over meanwhile — the suppression-break
 	# case `_disarm_covering_fire` describes.
 	if _pending_shot == shot:
@@ -2385,13 +2448,13 @@ func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, h
 ## was hit and is still standing. No roll, no damage, no RPC — every peer plays
 ## the timeline itself. Coroutine.
 func replay_attack(target: Unit, hit: bool, crit: bool, rounds: int,
-		strays: PackedInt32Array, melee: bool) -> void:
+		strays: PackedInt32Array, melee: bool, lean := Vector3i.ZERO) -> void:
 	if melee:
 		await visual.play_action_local(UnitVisual.MELEE)
 		if hit:
 			_show_impact(target.visual.global_position, crit)
 	else:
-		await _rpc_play_armed_burst(target.get_path(), rounds, true, hit, crit, strays)
+		await _rpc_play_armed_burst(target.get_path(), rounds, true, hit, crit, strays, lean)
 	if hit and not target.is_downed:
 		target.visual.play_hit_react_local()
 
