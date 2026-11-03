@@ -45,7 +45,10 @@ class Config:
 
 	# Spawns (minimal — enough for a playable demo, not full mission scripting).
 	var player_spawn_count := 4
-	var enemy_room_chance := 0.6  # per non-spawn room, chance it gets an enemy
+	# Per non-spawn room, chance it gets an enemy. Lower under the fodder-only
+	# roster, where an enemy room means a whole horde (main.gd `_spawn_hordes`):
+	# fewer, bigger encounters, with empty rooms between to fall back through.
+	var enemy_room_chance := 0.35 if AlienPresets.FODDER_ONLY else 0.6
 
 	# Hangars (GDD §7.2): 3–4 per deck, scaled by deck area — see `_hangar_count`.
 	# Zero for both turns hangars off entirely, which gives back the old

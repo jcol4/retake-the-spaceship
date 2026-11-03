@@ -76,6 +76,9 @@ var steps: int = 0
 ## round it crossed ticks (E6).
 var _ticks_queued: int = 0
 var _ticking: bool = false
+## `may_act`'s answer while a tick runs. A pause rather than a no: the host holds a
+## client's order until `tick_finished` instead of dropping it (E5).
+const TICKING := "the round is ticking"
 ## True while a tick's AI pass is being decided: every unit resolves as logic
 ## only (Unit.is_instant), and `record` collects what each one did for playback.
 var resolving_tick: bool = false
@@ -146,7 +149,7 @@ func may_act(unit: Unit, peer_id: int, method: StringName = &"") -> String:
 	# passing, not that soldier doing something.
 	var redirect := method == &"_try_move" and unit.is_walking()
 	if _ticking and not redirect:
-		return "the round is ticking"
+		return TICKING
 	if unit.is_busy and not redirect and method != &"try_wait":
 		return "busy"
 	return ""
@@ -364,17 +367,7 @@ func _draw_next() -> void:
 			return
 		_start_turn()
 		return
-	# Weighted random without replacement — roulette wheel on Initiative.
-	var total := 0.0
-	for unit in pool:
-		total += unit.stats.initiative()
-	var roll := randf() * total
-	var drawn: Unit = pool[-1]
-	for unit in pool:
-		roll -= unit.stats.initiative()
-		if roll < 0.0:
-			drawn = unit
-			break
+	var drawn := _roulette(_eligible(pool))
 	pool.erase(drawn)
 	active_unit = drawn
 	drawn.begin_activation()
@@ -393,7 +386,11 @@ func _draw_next() -> void:
 		print("[NET] host syncing active_unit -> %s (%s)" % [drawn.stats.display_name, drawn.get_path()])
 		_rpc_sync_active_unit.rpc(drawn.get_path())
 	if drawn is EnemyUnit:
-		await drawn.take_turn()  # animated moves — must finish before the next draw
+		var mates := _horde_mates(drawn)
+		if not mates.is_empty():
+			await _horde_turn(drawn, mates)
+		else:
+			await drawn.take_turn()  # animated moves — must finish before the next draw
 		if mission_over:
 			return
 		active_unit = null
@@ -467,7 +464,7 @@ func check_suppression_break(mover: Unit) -> void:
 		return
 	watcher.release_suppression()
 	# No ammo charge: the 3 rounds for this shot were already paid in do_suppress.
-	var result: Combat.ShotResult = await watcher.fire_at(mover, Combat.ShotAction.SHOOT, Combat.BodyPart.TORSO, false)
+	var result: Combat.ShotResult = await watcher.fire_at(mover, Combat.ShotAction.SHOOT, Combat.BodyPart.TORSO, false, false)
 	_log("SUPPRESSING FIRE! %s breaks cover — %s fires (%d%% acc): %s" % [
 		mover.stats.display_name, watcher.stats.display_name,
 		result.accuracy, Combat.describe(result),
@@ -492,7 +489,7 @@ func check_overwatch(mover: Unit) -> void:
 		# a reserved angle covers what its owner would shoot at, and nothing else.
 		if not watcher.is_hostile_to(mover):
 			continue
-		if not watcher.can_shoot() or not GridManager.has_line_of_sight(watcher, mover):
+		if not watcher.can_shoot() or not watcher.has_shot_at(mover):
 			continue
 		watcher.on_overwatch = false  # the reserved shot is spent
 		# A shot involving the squad is contact whether or not the target lives to
@@ -537,6 +534,13 @@ func _rpc_request_end_activation(unit_path: NodePath) -> void:
 	if why != "":
 		push_warning("TurnManager: rejected end_activation from peer %d for %s — %s" % [
 			sender, unit.stats.display_name, why])
+		return
+	# Through the soldier rather than straight to `_finish_activation`: a
+	# client's copy has no `is_busy` (it is not replicated), so a press mid-reload
+	# arrives here, and the soldier's own end_activation holds it until the
+	# action lands instead of drawing the next unit over the animation.
+	if unit.has_method(&"end_activation"):
+		unit.call(&"end_activation")
 		return
 	_finish_activation(unit)
 
@@ -829,6 +833,104 @@ func _tick() -> void:
 		_check_end_conditions()
 
 
+## The rest of `unit`'s horde still waiting in the pool (SwarmUnit.horde_id),
+## taken OUT of it: a horde is drawn once and acts as one. Empty for anything
+## that is not in a horde, or whose horde has already acted this round.
+func _horde_mates(unit: Unit) -> Array[Unit]:
+	var mates: Array[Unit] = []
+	var swarm := unit as SwarmUnit
+	if swarm == null or swarm.horde_id == "":
+		return mates
+	for other in pool:
+		var mate := other as SwarmUnit
+		if mate != null and mate != swarm and mate.horde_id == swarm.horde_id and not mate.is_downed:
+			mates.append(mate)
+	for mate in mates:
+		pool.erase(mate)
+	return mates
+
+
+## A horde's activation: every body decided one at a time as logic only and
+## recorded — the tick's machinery (plan B.12), borrowed for one draw — then
+## played back as a pack (TickPlayback.play_horde): everyone walks at once, a
+## beat apart, and the blows land one after another. `drawn` has already had
+## `begin_activation`; the mates get theirs here.
+##
+## Decided NEAREST THE PREY FIRST, so the front of the pack is out of the way
+## before the back plans its route. A body still boxed in by its mates waits
+## (SwarmUnit._move_toward) and is tried again once the others have moved —
+## pass after pass, while anybody is still getting somewhere. Only then does a
+## body that is truly stuck fall back to the plain route: round the pack, or
+## nowhere. Without this a horde opening a fight from its huddle left the bodies
+## in the middle standing a whole round.
+func _horde_turn(drawn: Unit, mates: Array[Unit]) -> void:
+	var pack: Array[SwarmUnit] = [drawn as SwarmUnit]
+	for mate in mates:
+		if not is_instance_valid(mate) or mate.is_downed or not mate.is_inside_tree():
+			continue
+		mate.begin_activation()
+		if mate.stunned:
+			mate.stunned = false
+			mate.ap = 0
+			_log("%s is STUNNED and loses their turn!" % mate.stats.display_name)
+			continue
+		pack.append(mate as SwarmUnit)
+	pack.sort_custom(func(a: SwarmUnit, b: SwarmUnit) -> bool:
+		return _distance_to_prey(a) < _distance_to_prey(b))
+	for body in pack:
+		body.in_horde_turn = true
+		body.waiting = false
+	resolving_tick = true
+	_timeline.clear()
+	for body in pack:
+		if mission_over:
+			break
+		await body.take_turn()
+	var progress := true
+	while progress and not mission_over:
+		progress = false
+		for body in pack:
+			if not _take_waiting(body):
+				continue
+			var before := body.ap
+			await body._combat_turn()
+			progress = progress or body.ap < before
+	for body in pack:
+		if is_instance_valid(body):
+			body.in_horde_turn = false
+	for body in pack:
+		if _take_waiting(body) and not mission_over:
+			await body._combat_turn()  # truly stuck: the plain route, round or nowhere
+	for body in pack:
+		if is_instance_valid(body):
+			body.waiting = false
+	resolving_tick = false
+	var events := _timeline.duplicate()
+	_timeline.clear()
+	if _playback == null:
+		_playback = TickPlayback.new()
+	await _playback.play_host(events, get_tree(), true)
+
+
+## How far `body` is from what it is after: its target in a fight, the point it
+## is investigating otherwise, and last of all when it has neither.
+func _distance_to_prey(body: SwarmUnit) -> int:
+	if body.target != null and is_instance_valid(body.target):
+		return GridManager.chebyshev_dist(body.grid_pos, body.target.grid_pos)
+	if body._has_last_known:
+		return GridManager.chebyshev_dist(body.grid_pos, body.last_known_pos)
+	return 1 << 20
+
+
+## Whether `body` stopped behind its pack and can still act on another try —
+## clearing the flag, since the caller is about to give it that try.
+func _take_waiting(body: SwarmUnit) -> bool:
+	if not is_instance_valid(body) or body.is_downed or not body.waiting or body.ap <= 0:
+		return false
+	body.waiting = false
+	return true
+
+
 ## Every non-player unit's turn for a tick, in weighted-initiative order (plan
 ## B.2, B.12). Decided ONE AT A TIME as logic only — the same instant path a
 ## hidden unit takes — and recorded, then played back together. Stops early if
@@ -866,19 +968,33 @@ func _initiative_order(units: Array[Unit]) -> Array[Unit]:
 	var rest := units.duplicate()
 	var out: Array[Unit] = []
 	while not rest.is_empty():
-		var total := 0.0
-		for unit in rest:
-			total += unit.stats.initiative()
-		var roll := randf() * total
-		var drawn: Unit = rest[-1]
-		for unit in rest:
-			roll -= unit.stats.initiative()
-			if roll < 0.0:
-				drawn = unit
-				break
+		var drawn := _roulette(_eligible(rest))
 		rest.erase(drawn)
 		out.append(drawn)
 	return out
+
+
+## Who may be drawn next: everyone, unless some of them `draws_last` — then only
+## the rest, until the rest are gone. The shambling tier is a LAST TIER rather
+## than a low Initiative, so a horde never acts ahead of a soldier however the
+## wheel lands, and the player always moves before the bodies close.
+func _eligible(units: Array[Unit]) -> Array[Unit]:
+	var first: Array[Unit] = []
+	first.assign(units.filter(func(u: Unit) -> bool: return not u.draws_last()))
+	return first if not first.is_empty() else units
+
+
+## One roulette-wheel pick on Initiative. `units` must not be empty.
+func _roulette(units: Array[Unit]) -> Unit:
+	var total := 0.0
+	for unit in units:
+		total += unit.stats.initiative()
+	var roll := randf() * total
+	for unit in units:
+		roll -= unit.stats.initiative()
+		if roll < 0.0:
+			return unit
+	return units[-1]
 
 
 ## Appends one event to the tick being decided (plan B.12). A no-op outside a
@@ -903,6 +1019,15 @@ func _rpc_play_tick(wire: Array) -> void:
 	if _playback == null:
 		_playback = TickPlayback.new()
 	await _playback.play(TickPlayback.from_wire(wire, get_tree().root), get_tree())
+
+
+## A horde's activation, played on a client from the host's timeline — the
+## horde counterpart of `_rpc_play_tick`.
+@rpc("authority", "call_remote", "reliable")
+func _rpc_play_horde(wire: Array) -> void:
+	if _playback == null:
+		_playback = TickPlayback.new()
+	await _playback.play_horde(TickPlayback.from_wire(wire, get_tree().root), get_tree())
 
 
 ## An enemy just entered COMBAT against `target` (EnemyUnit._enter_combat, the

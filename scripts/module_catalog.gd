@@ -138,6 +138,7 @@ func _load_manifests() -> void:
 			p.path = kit_dir + String(entry.file)
 			p.weight = int(entry.get("weight", 1))
 			var basis := Basis(Vector3.UP, deg_to_rad(float(entry.get("yaw", 0.0)))) \
+				* Basis(Vector3.RIGHT, deg_to_rad(float(entry.get("pitch", 0.0)))) \
 				* Basis.from_scale(_vec(entry.scale) if entry.has("scale") else kit_scale)
 			p.transform = Transform3D(basis, _vec(entry.get("offset", [0, 0, 0])))
 			if _by_id.has(p.id):

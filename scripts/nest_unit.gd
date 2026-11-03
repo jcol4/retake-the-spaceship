@@ -29,6 +29,10 @@ extends EnemyUnit
 ## and never loses a turn (no senses to stun, nothing it does costs AP).
 const SPAWN_INTERVAL := 3
 
+## How many Fodder one spawn activation produces under AlienPresets.FODDER_ONLY.
+const SPAWN_BURST_MIN := 2
+const SPAWN_BURST_MAX := 3
+
 ## What a nest can produce. SPITTER is in the table because the design's table
 ## has it; it is not built (GDD §11.6), so `roll_spawn_kind` resolves it through
 ## BUILT_FALLBACK — plan 3.3: "fall back to a Fodder roll for its 20%".
@@ -77,11 +81,19 @@ func take_turn() -> void:
 	activations += 1
 	if activations % SPAWN_INTERVAL != 0:
 		return
-	var tile := free_spawn_tile()
-	if tile == NO_SPAWN_TILE:
-		action_logged.emit("%s heaves, but there is no room beside it" % stats.display_name)
-		return
-	spawn_unit(roll_spawn_kind(), tile)
+	# Fodder-only roster: a burst of SPAWN_BURST_MIN-SPAWN_BURST_MAX Fodder that wake as one
+	# pack, in place of a single roll on the table.
+	var burst := randi_range(SPAWN_BURST_MIN, SPAWN_BURST_MAX) if AlienPresets.FODDER_ONLY else 1
+	var horde := "%s_burst_%d" % [name, spawned]
+	for i in burst:
+		var tile := free_spawn_tile()
+		if tile == NO_SPAWN_TILE:
+			if i == 0:
+				action_logged.emit("%s heaves, but there is no room beside it" % stats.display_name)
+			return
+		var unit := spawn_unit(SpawnKind.FODDER if AlienPresets.FODDER_ONLY else roll_spawn_kind(), tile)
+		if unit is SwarmUnit:
+			unit.horde_id = horde
 
 
 ## One draw from SPAWN_TABLE, with unbuilt kinds resolved to what spawns instead.

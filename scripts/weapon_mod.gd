@@ -39,6 +39,12 @@ extends Resource
 @export var optimal_range: int = 0
 @export var falloff_rate: int = 0
 
+# --- Penetration (docs/design/systems/penetration) ---
+# Points of percentile penetration added to the weapon's own (Penetration).
+@export var penetration: int = 0
+# Turns a splash weapon (buckshot) into a line-penetrating one: Slug Rounds.
+@export var replaces_splash: bool = false
+
 # --- AP, added to each action's base price before the Reflexes discount ---
 @export var shoot_ap: int = 0
 @export var aimed_ap: int = 0
@@ -57,7 +63,7 @@ const LABELS := {
 	"accuracy": "Acc", "close_accuracy": "Acc up close", "damage_pct": "Dmg%",
 	"damage_pct_vs_armored": "Dmg% vs armor", "damage_pct_vs_unarmored": "Dmg% vs unarmored",
 	"close_damage_pct": "Dmg% up close", "mag_size": "Mag", "reserve": "Reserve",
-	"optimal_range": "Range", "falloff_rate": "Falloff", "shoot_ap": "Shoot AP",
+	"optimal_range": "Range", "falloff_rate": "Falloff", "penetration": "Pen", "shoot_ap": "Shoot AP",
 	"aimed_ap": "Aimed AP", "overwatch_ap": "Overwatch AP", "suppress_ap": "Suppress AP",
 	"reload_ap": "Reload AP",
 }
@@ -86,4 +92,6 @@ static func describe_spec(spec: Dictionary) -> String:
 		parts.append("Seen from x%s" % spec["visibility_multiplier"])
 	if spec.get("ignores_darkness", false):
 		parts.append("No dark penalty")
+	if spec.get("replaces_splash", false):
+		parts.append("No spread")
 	return ", ".join(parts)

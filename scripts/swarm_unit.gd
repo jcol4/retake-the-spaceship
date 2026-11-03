@@ -23,6 +23,106 @@ extends EnemyUnit
 ## something to restore by reflex.
 
 
+## The horde this body was spawned in (main.gd `_spawn_hordes`, NestUnit's
+## burst). Empty for a lone one. Bodies sharing an id wake as ONE: the first to
+## go to combat takes the rest in with it on the same target — see
+## `_enter_combat`. Set before add_child.
+var horde_id := ""
+
+## The horde's anchor (AlienPresets.brute): drawn bigger so it reads before it
+## is shot. Set before add_child.
+var is_brute := false
+
+## Hordes part-way through waking (`_enter_combat`), by horde_id.
+static var _waking_hordes := {}
+
+## Set while TurnManager decides this body's horde (`_horde_turn`). A body whose
+## way is held by its own mates may then WAIT for them instead of detouring round
+## them or giving its turn up — see `_move_toward`.
+var in_horde_turn := false
+
+## Set when this body stopped to wait for a mate. `_horde_turn` comes back to it
+## once the others have moved.
+var waiting := false
+
+
+func _ready() -> void:
+	super()
+	_vary_body()
+
+
+## Thirty copies of one model moving in lockstep read as a copy-paste, not a
+## horde. A few percent of size and a random point in each looping clip breaks
+## that up. Seeded off the node name rather than the global RNG — the name is
+## the same on every peer, and the global stream is what spawning rolls stats
+## off, so drawing from it here would shift every roll after this body.
+## (WormUnit sets its own scale after this, from its count, and wins.)
+func _vary_body() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(String(name))
+	visual.model_scale = (AlienPresets.BRUTE_SCALE if is_brute else 1.0) * rng.randf_range(0.95, 1.05)
+	visual.loop_phase = rng.randf()
+
+
+## The shambling tier acts after everything else in the round (TurnManager) —
+## Fodder, and the brawler and worm that extend it.
+func draws_last() -> bool:
+	return true
+
+
+## A horde wakes together. Room-scoped propagation (EnemyUnit._propagate_alert)
+## only ROUSES neighbours; a horde-mate is handed the target outright, because a
+## pack that trickles into the fight one body at a time is not a horde.
+##
+## The pack screams ONCE as it turns, from the body nearest the prey — thirty
+## identical screams on one frame read as a copy-paste, the same as lockstep
+## loops do (`_vary_body`). A lone body is a pack of one.
+func _enter_combat(new_target: Unit, reason: String) -> void:
+	var was := alert_state
+	super(new_target, reason)
+	# A mate being woken by its pack's first body: that body screams for it.
+	if was == AlertState.COMBAT or _waking_hordes.has(horde_id):
+		return
+	var pack: Array[SwarmUnit] = [self]
+	if horde_id != "":
+		_waking_hordes[horde_id] = true
+		for node in get_tree().get_nodes_in_group("enemy_units"):
+			var mate := node as SwarmUnit
+			if mate == null or mate == self or mate.horde_id != horde_id \
+					or mate.is_downed or mate.alert_state == AlertState.COMBAT:
+				continue
+			mate._enter_combat(new_target, "")  # silent: one line for the pack, below
+			pack.append(mate)
+		_waking_hordes.erase(horde_id)
+		if pack.size() > 1:
+			action_logged.emit("%d more surge after %s" % [pack.size() - 1, stats.display_name])
+	screamer(pack, new_target.grid_pos).visual.play_action(UnitVisual.ALERT_SCREAM)
+
+
+## The body in `pack` nearest `at`, a tie broken at random. The draw is seeded
+## off the pack and the round rather than the global RNG, which spawning rolls
+## stats off (see `_vary_body`). Host-only: the scream mirrors itself.
+static func screamer(pack: Array[SwarmUnit], at: Vector3i) -> SwarmUnit:
+	var nearest: Array[SwarmUnit] = []
+	var best := INF
+	for body in pack:
+		var d := Vector3(body.grid_pos - at).length_squared()
+		if d < best:
+			best = d
+			nearest = [body]
+		elif d == best:
+			nearest.append(body)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash("%s:%d:%d" % [pack[0].horde_id, TurnManager.turn_number, nearest.size()])
+	return nearest[rng.randi_range(0, nearest.size() - 1)]
+
+
+## A Fodder does not scream on merely noticing something — it screams when it
+## turns on its prey, once per pack (`_enter_combat`).
+func _on_woken() -> void:
+	pass
+
+
 func _combat_turn() -> void:
 	# Replaces the base ranged loop entirely. Reached only in COMBAT — the
 	# awareness states and everything that feeds them are EnemyUnit's business.
@@ -55,6 +155,52 @@ func _combat_turn() -> void:
 			# way. It holds back the price of a swing where it can, so arriving
 			# adjacent with AP to spare means arriving with a claw in hand.
 			await _move_toward(quarry, melee_cost)
+			if waiting:
+				return  # held up by the pack; the horde turn comes back for it
+
+
+## Closing in as a pack. The plain route treats every body as a wall, and a horde
+## is decided one body at a time — so a body behind its mates (in the clump it
+## starts in, or in a doorway) found no way out before they had moved, gave its
+## whole activation up, and lagged a round behind the rest.
+##
+## During a horde turn this plans THROUGH the pack instead, since the mates are
+## heading the same way, and walks only as far as the way is clear: the body
+## comes up behind the one in front and waits there (`waiting`) for
+## `_horde_turn` to try it again. A way round that is no longer than the way
+## through is simply taken, as before.
+func _move_toward(quarry: Unit, reserve_ap: int = 0) -> void:
+	waiting = false
+	if not in_horde_turn or horde_id == "":
+		await super(quarry, reserve_ap)
+		return
+	var direct := GridManager.find_path(grid_pos, quarry.grid_pos, 999, true, null, _mate_tiles())
+	var around := _route_path(quarry.grid_pos, true)
+	if direct.is_empty() or (not around.is_empty() and around.size() <= direct.size()):
+		await super(quarry, reserve_ap)
+		return
+	direct.resize(direct.size() - 1)  # never step onto the prey itself
+	var clear := 0
+	while clear < direct.size() and GridManager.is_free(direct[clear]):
+		clear += 1
+	var steps := mini(_move_budget(reserve_ap), clear)
+	if steps < 1:
+		waiting = true
+		return
+	var path := direct.slice(0, steps)
+	spend_ap(move_cost_for(path.size()))
+	await move_along(path)
+	action_logged.emit("%s moved to %s" % [stats.display_name, path[-1]])
+
+
+## The tiles this body's standing horde-mates hold.
+func _mate_tiles() -> Dictionary:
+	var out := {}
+	for node in get_tree().get_nodes_in_group("enemy_units"):
+		var mate := node as SwarmUnit
+		if mate != null and mate != self and mate.horde_id == horde_id and not mate.is_downed:
+			out[mate.grid_pos] = true
+	return out
 
 
 ## What the log calls this unit's melee blow. The worm bites.

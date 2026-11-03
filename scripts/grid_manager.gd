@@ -296,11 +296,15 @@ func get_reachable_tiles(from: Vector3i, max_tiles: int) -> Array[Vector3i]:
 ## mass still routes around its own kind rather than pathing through the pile it
 ## is walking toward — merging is a thing that happens on ARRIVAL, not a way to
 ## pass through a friend.
-func _path_open(n: Vector3i, goal: Vector3i, allow_occupied_goal: bool, trample_for: Unit) -> bool:
+func _path_open(n: Vector3i, goal: Vector3i, allow_occupied_goal: bool, trample_for: Unit,
+		through: Dictionary = {}) -> bool:
 	if is_free(n):
 		return true
 	if allow_occupied_goal and n == goal:
 		return true
+	if through.has(n):
+		var held: GridTileData = tiles.get(n)
+		return held != null and held.passable
 	if trample_for == null:
 		return false
 	var t: GridTileData = tiles.get(n)
@@ -311,7 +315,7 @@ func _path_open(n: Vector3i, goal: Vector3i, allow_occupied_goal: bool, trample_
 
 
 func find_path(from: Vector3i, to: Vector3i, max_tiles: int, allow_occupied_goal := false,
-		trample_for: Unit = null) -> Array[Vector3i]:
+		trample_for: Unit = null, through: Dictionary = {}) -> Array[Vector3i]:
 	# BFS with parent tracking; returns path excluding `from`, empty if
 	# unreachable. With allow_occupied_goal the goal tile itself may be
 	# occupied (used to path *toward* another unit).
@@ -321,6 +325,11 @@ func find_path(from: Vector3i, to: Vector3i, max_tiles: int, allow_occupied_goal
 	# as a destination, or it paths around the soldier it means to roll over.
 	# Everything else on the board passes null and sees the old two-answer gate.
 	# See `_path_open`, and docs/design/factions/aliens/design-choices/worm-mass.md.
+	#
+	# `through` is a set of tiles (Vector3i -> anything) treated as open even while
+	# somebody holds them: a horde body planning its way THROUGH its own pack,
+	# which is about to move on (SwarmUnit._move_toward). The path it returns may
+	# cross held tiles, so the caller walks only its clear stretch.
 	#
 	# On an eight-way grid with uniform cost, a tile off both axes is reached in
 	# max(dx, dz) steps by MANY routes -- the diagonal steps may be taken in any
@@ -358,7 +367,7 @@ func find_path(from: Vector3i, to: Vector3i, max_tiles: int, allow_occupied_goal
 		if goal_depth >= 0 and cur_depth >= goal_depth:
 			break
 		for n in neighbors(cur):
-			if not _path_open(n, to, allow_occupied_goal, trample_for):
+			if not _path_open(n, to, allow_occupied_goal, trample_for, through):
 				continue
 			var step: Vector3i = n - cur
 			# A stair link is neither a turn nor a heading: it changes floor, so

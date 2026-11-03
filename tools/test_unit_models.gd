@@ -16,6 +16,7 @@ const REQUIRED := {
 	&"worm": [&"idle", &"walk", &"melee"],
 	&"nest": [&"idle"],
 	&"civilian": [&"idle", &"run", &"melee", &"downed"],
+	&"zombie": [&"idle", &"run", &"melee", &"downed", &"alert_scream"],
 }
 ## WormUnit.TIER_FLOOR tops, per pile layout.
 const PILE_COUNTS := {&"worm_clutch": 5, &"worm_knot": 9, &"worm_tide": 16}

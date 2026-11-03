@@ -94,6 +94,8 @@ var _hover_tile: Vector3i = NO_TILE
 var _throw_tiles: Array[Vector3i] = []
 var _preview_path: Array[Vector3i] = []
 var _preview_cost: int = 0
+## An End Turn pressed mid-action, waiting for the action to land (end_activation).
+var _end_queued := false
 ## How long a walk may be out of combat: more than any deck, since a walk's price
 ## is time rather than a budget (plan B.5).
 const EXPLORE_PATH_CAP := 999
@@ -287,21 +289,25 @@ func _show_targets(highlights: Node) -> void:
 	highlights.show_targets(tiles, accuracies)
 
 
-## Every hostile a shot could be put on right now: the line-of-sight test the
-## shot itself enforces. One skull each on the HUD's target bar.
+## Every hostile the armed action could be put on right now: the test the action
+## itself enforces — a clear shot through any bodies in the way for a shot, line
+## of sight alone for Suppress, which does not penetrate. One skull each on the
+## HUD's target bar.
 func shot_targets() -> Array[Unit]:
 	var out: Array[Unit] = []
 	for enemy in hostiles():
-		if GridManager.has_line_of_sight(self, enemy):
+		if (GridManager.has_line_of_sight(self, enemy) if mode == Mode.SUPPRESS else has_shot_at(enemy)):
 			out.append(enemy)
 	return out
 
 
-## The armed shot's chance against `target`. Aimed Shot quotes the Torso
-## baseline; the per-zone odds are the zone menu's to show.
+## The armed shot's chance against `target`, after the tax for every body it has
+## to go through (Penetration). Aimed Shot quotes the Torso baseline; the
+## per-zone odds are the zone menu's to show.
 func target_hit_chance(target: Unit) -> int:
 	var action := Combat.ShotAction.SHOOT if mode == Mode.SHOOT else Combat.ShotAction.AIMED_SHOT
-	return Combat.compute_accuracy(self, target, action, Combat.BodyPart.TORSO)
+	return clampi(Combat.compute_accuracy(self, target, action, Combat.BodyPart.TORSO)
+		- Penetration.through_penalty(self, target), 1, 99)
 
 
 ## Picks (or with null, clears) the target Confirm will fire at. Local only.
@@ -726,6 +732,13 @@ func _rpc_command(method: StringName, args: Array) -> void:
 		return
 	var sender := multiplayer.get_remote_sender_id()
 	var why := TurnManager.may_act(self, sender, method)
+	# The client cannot see the host's tick, so its click passed its own gate; a
+	# drop here was silent and read as lag — every click lost until the AI's
+	# playback ended. Hold the order through the tick instead, the same pause a
+	# walker takes at a boundary, then ask again: contact may have started.
+	while why == TurnManager.TICKING:
+		await TurnManager.tick_finished
+		why = TurnManager.may_act(self, sender, method)
 	if why != "":
 		push_warning("%s: rejected '%s' from peer %d — %s" % [
 			stats.display_name, method, sender, why])
@@ -877,6 +890,8 @@ func _try_move(target: Vector3i) -> void:
 	if TurnManager.in_exploration():
 		await _explore_move(target)
 		return
+	if is_busy:
+		return
 	var path := GridManager.find_path(grid_pos, target, move_tiles_affordable())
 	if path.is_empty() or path[-1] != target:
 		return
@@ -967,8 +982,8 @@ func _try_shoot(target: Unit) -> void:
 		# `fire_aimed_shot` re-validates for real once a zone is picked.
 		if not can_afford(min_aimed_shot_cost()) or not can_shoot():
 			return
-		if not GridManager.has_line_of_sight(self, target):
-			action_logged.emit("%s: no line of sight to %s" % [stats.display_name, target.stats.display_name])
+		if not has_shot_at(target):
+			action_logged.emit("%s: no clear shot at %s" % [stats.display_name, target.stats.display_name])
 			return
 		aimed_shot_target_picked.emit(target)
 		return
@@ -977,10 +992,12 @@ func _try_shoot(target: Unit) -> void:
 
 func _do_shoot(target: Unit) -> void:
 	var cost := action_cost(UnitStats.Action.SHOOT)
-	if not can_afford(cost) or not can_shoot():
+	# Busy too: the target bar hides on a poll, so a skull + Confirm can still
+	# land during a burst, and two fire_at would overlap.
+	if not can_afford(cost) or not can_shoot() or is_busy:
 		return
-	if not GridManager.has_line_of_sight(self, target):
-		action_logged.emit("%s: no line of sight to %s" % [stats.display_name, target.stats.display_name])
+	if not has_shot_at(target):
+		action_logged.emit("%s: no clear shot at %s" % [stats.display_name, target.stats.display_name])
 		return
 	_pay_attack(cost)
 	var result: Combat.ShotResult = await fire_at(target, Combat.ShotAction.SHOOT)
@@ -997,10 +1014,10 @@ func fire_aimed_shot(target: Unit, body_part: int) -> void:
 	# is per zone (Sec 4.3a), so the zone picked is what decides affordability,
 	# not the Torso baseline `_try_shoot` gated on.
 	var cost := aimed_shot_cost(body_part)
-	if not can_afford(cost) or not can_shoot() or target.is_downed:
+	if not can_afford(cost) or not can_shoot() or target.is_downed or is_busy:
 		return
-	if not GridManager.has_line_of_sight(self, target):
-		action_logged.emit("%s: no line of sight to %s" % [stats.display_name, target.stats.display_name])
+	if not has_shot_at(target):
+		action_logged.emit("%s: no clear shot at %s" % [stats.display_name, target.stats.display_name])
 		return
 	_pay_attack(cost)
 	var result: Combat.ShotResult = await fire_at(target, Combat.ShotAction.AIMED_SHOT, body_part)
@@ -1420,7 +1437,17 @@ func _check_activation_end() -> void:
 
 
 func end_activation() -> void:
+	# End Turn pressed mid-action (a reload's animation) is held until the action
+	# lands rather than dropped — dropped, the press did nothing and a soldier
+	# with AP left over just stood there waiting for a second one.
 	if is_busy:
-		return
+		if _end_queued:
+			return
+		_end_queued = true
+		while is_busy and is_inside_tree():
+			await get_tree().process_frame
+		_end_queued = false
+		if not is_inside_tree() or TurnManager.active_unit != self:
+			return  # the action's own _check_activation_end already closed it
 	set_mode(Mode.NONE)
 	TurnManager.end_activation(self)

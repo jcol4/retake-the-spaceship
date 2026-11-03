@@ -167,6 +167,13 @@ class ShotResult:
 	# saying so, appended by `describe` so every caller's line carries it.
 	var hit_carried: bool = false
 	var redirect_note: String = ""
+	# Penetration (docs/design/systems/penetration). On the intended target's
+	# result: every OTHER body the round was rolled against, in path order, each
+	# its own ShotResult with `unit` set. `blocked_by` names the body in front
+	# whose miss stopped the round before it ever reached the target.
+	var unit = null  # the body this result was rolled against; set on collateral only
+	var collateral: Array = []
+	var blocked_by: String = ""
 
 
 ## Whether `result` is a shot the target was IN COVER from: the defending edge
@@ -366,19 +373,27 @@ static func shot_damage(shooter, target) -> int:
 	return weapon.damage_against(target.stats.armored, dist)
 
 
-static func resolve_shot(shooter, target, action: ShotAction, body_part: int = BodyPart.TORSO) -> ShotResult:
+## One roll against one body. The three trailing parameters are penetration's
+## (Penetration.resolve) and leave a plain shot exactly as it always was:
+## `accuracy_cap` is the through-bodies tax (the roll is the lower of it and the
+## body's own odds), `damage_scale` is what the round has kept after the bodies
+## and cover it already passed, and `collateral` marks a body other than the one
+## aimed at — flat torso damage that can never crit, stun or injure a part.
+static func resolve_shot(shooter, target, action: ShotAction, body_part: int = BodyPart.TORSO,
+		accuracy_cap: int = 99, damage_scale: float = 1.0, collateral: bool = false) -> ShotResult:
 	var result := ShotResult.new()
-	result.accuracy = compute_accuracy(shooter, target, action, body_part)
-	var is_headshot := action == ShotAction.AIMED_SHOT and body_part == BodyPart.HEAD
-	_roll_hit(result, shooter, target, HEADSHOT_CRIT_DIVISOR if is_headshot else LUCK_CRIT_DIVISOR)
+	result.accuracy = mini(compute_accuracy(shooter, target, action, body_part), maxi(accuracy_cap, 1))
+	var is_headshot := not collateral and action == ShotAction.AIMED_SHOT and body_part == BodyPart.HEAD
+	var crit_divisor := INF if collateral else (HEADSHOT_CRIT_DIVISOR if is_headshot else LUCK_CRIT_DIVISOR)
+	_roll_hit(result, shooter, target, crit_divisor)
 
 	if result.hit:
 		var mult := CRIT_MULTIPLIER if result.crit else 1.0
 		if is_headshot and result.crit and randf() * 100.0 < shooter.stats.luck / SEVERE_CRIT_DIVISOR:
 			result.severe_crit = true
 			mult = SEVERE_CRIT_MULTIPLIER
-		result.damage = roundi(shot_damage(shooter, target) * mult)
-		if action == ShotAction.AIMED_SHOT:
+		result.damage = roundi(shot_damage(shooter, target) * mult * damage_scale)
+		if action == ShotAction.AIMED_SHOT and not collateral:
 			result.body_part = body_part
 			# Sec 4.2: a crit to center-mass knocks the wind out of them.
 			if body_part == BodyPart.TORSO and result.crit:
@@ -395,7 +410,7 @@ static func resolve_shot(shooter, target, action: ShotAction, body_part: int = B
 		# A wall is not a crate: corner cover is never chewed at.
 		if not result.cover_structural:
 			var left := GridManager.damage_cover_edge(
-				target.grid_pos, defence[1], shooter.stats.weapon_damage)
+				target.grid_pos, defence[1], roundi(shooter.stats.weapon_damage * damage_scale))
 			result.cover_broken = left != defence[0]
 	return result
 
@@ -457,7 +472,26 @@ static func resolve_melee(attacker, target) -> ShotResult:
 	return result
 
 
+## The whole shot for the log: the roll on the body aimed at, then every other
+## body the round was rolled against (penetration, buckshot splash).
 static func describe(result: ShotResult) -> String:
+	if result.blocked_by != "":
+		return "BLOCKED — the round stopped in %s" % result.blocked_by + _describe_collateral(result)
+	return _describe_one(result) + _describe_collateral(result)
+
+
+static func _describe_collateral(result: ShotResult) -> String:
+	if result.collateral.is_empty():
+		return ""
+	var parts: PackedStringArray = []
+	for c: ShotResult in result.collateral:
+		var who: String = c.unit.stats.display_name if c.unit != null else "?"
+		var down := " — DOWN" if c.hit and c.unit != null and c.unit.is_downed else ""
+		parts.append("%s (%d%%): %s%s" % [who, c.accuracy, _describe_one(c), down])
+	return " | also: " + "; ".join(parts)
+
+
+static func _describe_one(result: ShotResult) -> String:
 	# Armor is called out rather than folded silently into a smaller number: a
 	# player who cannot see the plate eating half the shot has no way to work out
 	# that the EMP grenade in their kit is the answer.

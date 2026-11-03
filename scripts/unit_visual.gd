@@ -153,6 +153,12 @@ const VARIANT_LOOP_TIME := {
 	# The civilian runs the merc's stride (tools/build_civilian_run.py) at a
 	# third of his 4.5 m/s, so a third of the cadence keeps the feet planted.
 	&"civilian": {RUN: 3 * 2 * FOOTSTEP_GAP},
+	# The Mixamo zombie (tools/build_zombie_mixamo.py). Its run covers ~1.8 m a
+	# cycle, so 1.5 m/s is 1.2 s. The rest are its clips' own lengths, or close:
+	# the neck bite is 4.2 s authored, and every Fodder swing in a horde is played
+	# one after another, so it is sped up to 2 s rather than shown whole. Not
+	# loops, but `_duration` reads any pose from this table.
+	&"zombie": {RUN: 1.2, IDLE: 4.0, MELEE: 2.0, DOWNED: 3.0, ALERT_SCREAM: 2.8},
 }
 
 ## Crossfade between poses, in seconds. Short: the game's actions are brisk and
@@ -206,6 +212,11 @@ const COVER_HIGH := &"high"
 		model_scale = value
 		if _model:
 			_model.scale = Vector3.ONE * model_scale
+
+## Where in every LOOPING clip (idle, run...) this unit starts, as a fraction of
+## the clip. One-shots always play from their first frame. A horde sets it per
+## body so a room of the same model does not breathe and stride in lockstep.
+var loop_phase: float = 0.0
 
 ## Whether this character carries the rig-mounted light (Sec 5.2). Aliens do not.
 @export var has_light: bool = true
@@ -533,6 +544,12 @@ func _mount_flash() -> void:
 ## brings every material in at metallic 0.5 on a packed metal/roughness map —
 ## the source .blends leave Metallic unplugged — which laid a grey sheen over
 ## pale surfaces that the sprite renders never had.
+##
+## The roughness map is dropped too. The only models that carry one are the
+## Mixamo ones (zombie, civilian, nest), and theirs is the Glossiness map wired
+## in as roughness — the inverse — so matte skin rendered near-mirror and blew
+## out to white under any nearby light. Without it the material's own roughness
+## (1.0 on those) holds: fully matte, which is what that skin should read as.
 func _dress_surfaces(root: Node) -> void:
 	for node in root.find_children("*", "MeshInstance3D", true, false):
 		var mesh := node as MeshInstance3D
@@ -548,6 +565,7 @@ func _dress_surfaces(root: Node) -> void:
 			mat.albedo_color *= faction_tint
 			mat.metallic = 0.0
 			mat.metallic_texture = null
+			mat.roughness_texture = null
 			_add_floor(mat)
 			mat.next_pass = _outline_for(mat)
 			mesh.set_surface_override_material(s, mat)
@@ -1328,8 +1346,9 @@ func _play(base: StringName, restart: bool = false) -> void:
 		var length := player.get_animation(pose).length
 		var speed := length / duration if duration > 0.0 and length > 0.01 else 1.0
 		player.play(pose, blend, speed)
-		if restart or _phases[i] != 0.0:
-			player.seek(_phases[i] * length, true)
+		var phase := _phases[i] + (loop_phase if pose in LOOPING else 0.0)
+		if restart or phase != 0.0:
+			player.seek(fposmod(phase, 1.0) * length, true)
 
 
 # --- Tick playback (exploration plan B.12) --------------------------------------

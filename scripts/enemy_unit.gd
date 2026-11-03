@@ -142,7 +142,7 @@ func _combat_turn() -> void:
 		if quarry == null:
 			return
 		var in_range := GridManager.chebyshev_dist(grid_pos, quarry.grid_pos) <= ATTACK_RANGE
-		if in_range and GridManager.has_line_of_sight(self, quarry) and can_shoot():
+		if in_range and has_shot_at(quarry) and can_shoot():
 			# Affordability is checked BEFORE the coin flip and the loop bails when
 			# nothing is affordable, which the old flat 1/2 AP costs never needed:
 			# a snap shot can now cost more than a whole small pool, and without the
@@ -641,7 +641,7 @@ func _set_state(new_state: AlertState) -> void:
 	# it would freeze the player halfway down a corridor for the length of a
 	# scream. Nothing downstream depends on the clip finishing.
 	if was == AlertState.UNAWARE and new_state != AlertState.UNAWARE:
-		visual.play_action(UnitVisual.ALERT_SCREAM)
+		_on_woken()
 	_refresh_label()
 	state_changed.emit(self)
 	# Awareness is decided on the host alone (see `_on_lighting_changed`), so the
@@ -650,6 +650,12 @@ func _set_state(new_state: AlertState) -> void:
 	if visual.mirrors():
 		for peer_id in SteamLobby.ready_peers:
 			_rpc_show_state.rpc_id(peer_id, new_state)
+
+
+## The performance for leaving UNAWARE (see `_set_state`). SwarmUnit overrides
+## it: a horde screams once, from one body, rather than every body at once.
+func _on_woken() -> void:
+	visual.play_action(UnitVisual.ALERT_SCREAM)
 
 
 ## Client-side: the host's awareness change, for the label and the HUD. Skips

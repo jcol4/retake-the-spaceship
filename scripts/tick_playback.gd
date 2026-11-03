@@ -33,16 +33,23 @@ class Join:
 			finished.emit()
 
 
-## Host: hands the timeline to every ready client, then plays it here.
-func play_host(events: Array, tree: SceneTree) -> void:
+## Host: hands the timeline to every ready client, then plays it here. `horde`
+## plays it as one horde's activation (`play_horde`) rather than a round tick.
+func play_host(events: Array, tree: SceneTree, horde := false) -> void:
 	events = _live(events)
 	if events.is_empty():
 		return
 	if SteamLobby.is_networked() and SteamLobby.is_host() and not SteamLobby.ready_peers.is_empty():
 		var wire := to_wire(events)
 		for peer_id in SteamLobby.ready_peers:
-			TurnManager._rpc_play_tick.rpc_id(peer_id, wire)
-	await play(events, tree)
+			if horde:
+				TurnManager._rpc_play_horde.rpc_id(peer_id, wire)
+			else:
+				TurnManager._rpc_play_tick.rpc_id(peer_id, wire)
+	if horde:
+		await play_horde(events, tree)
+	else:
+		await play(events, tree)
 
 
 ## The timeline as it crosses the wire: every unit as its node path, which names
@@ -119,6 +126,140 @@ func play(events: Array, tree: SceneTree) -> void:
 		LightingManager.recompute_display()
 	_finish(units)
 	LightingManager.end_display()
+
+
+## Most a horde body's walk starts behind the pack's first, seconds. Enough that
+## a room of one model does not stride off in lockstep; short against a step,
+## so it still reads as one surge.
+const HORDE_STAGGER := 0.3
+
+
+## One horde's activation (TurnManager._horde_turn), played as a pack rather than
+## slot by slot. Two phases:
+##   1. Every walk and turn at once. Each body keeps to its own pace, starting up
+##      to HORDE_STAGGER behind the others, and a step onto a tile another body
+##      is leaving waits until that one is halfway off it.
+##   2. Everything else — the claws and whatever they knocked down — one event
+##      at a time, in the order it was decided.
+## A Fodder closes OR swings (SwarmUnit), so a body that walks and then claws
+## only ever stepped once, and nothing it did is reordered by the split.
+func play_horde(events: Array, tree: SceneTree) -> void:
+	events = _live(events)
+	if events.is_empty() or DisplayServer.get_name() == "headless":
+		return
+	var moves: Array = []
+	var blows: Array = []
+	for i in events.size():
+		var kind: String = events[i]["kind"]
+		if kind == ExplorationRules.EV_STEP or kind == ExplorationRules.EV_TURN:
+			moves.append(i)
+		else:
+			blows.append(i)
+	var units := _units_in(events)
+	var unspawned := {}
+	_prepare(events, units, unspawned)
+	LightingManager.begin_display()
+	var map := tree.get_first_node_in_group("map")
+
+	var starts := horde_starts(events, moves, _horde_offsets(events, moves))
+	var chains := {}
+	var last_step := {}
+	for i: int in moves:
+		var unit: Unit = events[i]["unit"]
+		if not chains.has(unit):
+			chains[unit] = []
+		chains[unit].append(i)
+		if events[i]["kind"] == ExplorationRules.EV_STEP:
+			last_step[unit] = i
+	_update_visibility(units, unspawned, map, events, moves)
+	if not chains.is_empty():
+		var join := Join.new()
+		join.left = chains.size()
+		var t0 := Time.get_ticks_msec()
+		for unit: Unit in chains:
+			_run_chain(events, chains[unit], starts, last_step.get(unit, -1), t0, unspawned, tree, join)
+		if join.left > 0:
+			await join.finished
+	LightingManager.recompute_display()
+
+	for i: int in blows:
+		_update_visibility(units, unspawned, map, events, [i])
+		var join := Join.new()
+		join.left = 1
+		_run(events[i], false, unspawned, join)
+		if join.left > 0:
+			await join.finished
+		LightingManager.recompute_display()
+	_finish(units)
+	LightingManager.end_display()
+
+
+## A pause in a horde body's walk shorter than this keeps its run going; a longer
+## one stands it idle until it moves again. Covers the frame or two a timer can
+## land late, so a body walking steps back to back never flickers to idle.
+const HORDE_IDLE_GAP := 0.08
+
+
+## One body's walk in a horde playback: its events in order, each held until its
+## start time from `horde_starts` (seconds after `t0`) has come round. While it is
+## held — waiting at a tile for a mate to clear the next — it stands IDLE rather
+## than running on the spot; its next step puts it back into the run.
+func _run_chain(events: Array, chain: Array, starts: Dictionary, last_step: int,
+		t0: int, unspawned: Dictionary, tree: SceneTree, join: Join) -> void:
+	var unit: Unit = events[chain[0]]["unit"]
+	for i: int in chain:
+		var wait: float = starts[i] - (Time.get_ticks_msec() - t0) / 1000.0
+		# A turn on the spot is not a stride either.
+		var stands: bool = wait > HORDE_IDLE_GAP or events[i]["kind"] == ExplorationRules.EV_TURN
+		if stands and is_instance_valid(unit) and not unit.is_instant():
+			unit.visual.set_stance_local(UnitVisual.IDLE)
+		if wait > 0.0:
+			await tree.create_timer(wait).timeout
+		var one := Join.new()
+		one.left = 1
+		_run(events[i], i == last_step, unspawned, one)
+		if one.left > 0:
+			await one.finished
+	join.done()
+
+
+## Each walking body's head start: a random fraction of HORDE_STAGGER, seeded off
+## the unit's name so every peer staggers the pack the same way.
+static func _horde_offsets(events: Array, moves: Array) -> Dictionary:
+	var out := {}
+	for i: int in moves:
+		var unit: Unit = events[i]["unit"]
+		if not out.has(unit):
+			var rng := RandomNumberGenerator.new()
+			rng.seed = hash(String(unit.name))
+			out[unit] = rng.randf() * HORDE_STAGGER
+	return out
+
+
+## When each of `moves` starts, seconds into the walk phase: index -> seconds.
+## A body's first event starts at its offset and each later one when the one
+## before it ends (a step's length is the model's own travel time, as
+## `_play_step` tweens it). A step onto a tile some other body is leaving starts
+## no sooner than halfway through that body's step off it, so two models never
+## stand in one tile. Pure arithmetic on the timeline: a test can read it.
+static func horde_starts(events: Array, moves: Array, offsets: Dictionary) -> Dictionary:
+	var out := {}
+	var free_at := {}
+	var vacated := {}
+	for i: int in moves:
+		var e: Dictionary = events[i]
+		var unit: Unit = e["unit"]
+		var t: float = free_at.get(unit, offsets.get(unit, 0.0))
+		var seconds := TURN_SECONDS
+		if e["kind"] == ExplorationRules.EV_STEP:
+			if vacated.has(e["to"]):
+				t = maxf(t, vacated[e["to"]])
+			var dist := GridManager.grid_to_world(e["from"]).distance_to(GridManager.grid_to_world(e["to"]))
+			seconds = dist / maxf(0.1, unit.move_speed)
+			vacated[e["from"]] = t + seconds * 0.5
+		out[i] = t
+		free_at[unit] = t + seconds
+	return out
 
 
 func _units_in(events: Array) -> Array[Unit]:

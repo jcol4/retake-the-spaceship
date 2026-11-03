@@ -89,9 +89,21 @@ func _check_cadence_and_adjacency() -> void:
 	for activation in range(1, 10):
 		await nest.take_turn()
 		spawned_after.append(_spawned_units().size() - before)
-	var expected: Array[int] = [0, 0, 1, 1, 1, 2, 2, 2, 3]
-	_check(spawned_after == expected,
-		"one spawn every 3rd activation, none between (%s)" % [spawned_after])
+	if AlienPresets.FODDER_ONLY:
+		# A burst of SPAWN_BURST_MIN-MAX on every 3rd activation, nothing between.
+		var lo: int = _nest_script.SPAWN_BURST_MIN
+		var hi: int = _nest_script.SPAWN_BURST_MAX
+		var ok := spawned_after[0] == 0 and spawned_after[1] == 0
+		var prev := 0
+		for i in spawned_after.size():
+			var grew: int = spawned_after[i] - prev
+			ok = ok and (grew >= lo and grew <= hi if (i + 1) % 3 == 0 else grew == 0)
+			prev = spawned_after[i]
+		_check(ok, "a burst of %d-%d every 3rd activation, none between (%s)" % [lo, hi, spawned_after])
+	else:
+		var expected: Array[int] = [0, 0, 1, 1, 1, 2, 2, 2, 3]
+		_check(spawned_after == expected,
+			"one spawn every 3rd activation, none between (%s)" % [spawned_after])
 	var units := _spawned_units()
 	var adjacent := true
 	var distinct := {}

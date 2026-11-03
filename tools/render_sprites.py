@@ -288,6 +288,9 @@ VARIANT_BUCKET_ZERO = {
     # every civilian pose faces like that run, so it goes on the whole rig.
     # Judged on a running unit in game: at 90 it ran toward the camera.
     "civilian": 180.0,
+    # zombie_mixamo.blend: a stock Mixamo import, facing -Y like the civilian.
+    # Not yet judged on a moving unit.
+    "zombie": 180.0,
     # worm_anims.blend: the Z rotation that points the head (the spiked +Y end)
     # along Blender +Y, MEASURED off the rest mesh -- its tail-to-head axis sits
     # 5.3 deg anticlockwise of +Y with the rig at 25.5. The rig also lies ~93 deg

@@ -663,6 +663,13 @@ func _rpc_sync_grid_pos(new_grid_pos: Vector3i) -> void:
 		LightingManager.recompute_dynamic()
 
 
+## True for a unit that is drawn only after every unit without it has acted this
+## round, whatever its Initiative (TurnManager). The shambling melee tier
+## (SwarmUnit) overrides it.
+func draws_last() -> bool:
+	return false
+
+
 func begin_activation() -> void:
 	# An attack that opened the fight from exploration is paid for here (E8).
 	ap = ExplorationRules.opening_ap(ap_pool(), pre_spent_ap)
@@ -2211,7 +2218,18 @@ func _injured_arm_count() -> int:
 	return n
 
 
-func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.BodyPart.TORSO, charge_ammo: bool = true) -> Combat.ShotResult:
+## Whether this unit can put a round on `target`: line of sight, and enough
+## penetration to get through every body standing in front of it
+## (Penetration.can_reach). The test for every AIMED shot — Shoot, Aimed Shot,
+## Overwatch — where line of sight alone is the test for Suppress.
+func has_shot_at(target: Unit) -> bool:
+	return Penetration.can_reach(self, target)
+
+
+## `penetrates` is false for suppressing fire, the one shot that does not travel
+## the penetration path (docs/design/systems/penetration §6).
+func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.BodyPart.TORSO,
+		charge_ammo: bool = true, penetrates: bool = true) -> Combat.ShotResult:
 	# Coroutine — callers MUST `await`. Damage lands when the shot animation
 	# finishes, so the target drops in time with the effect, not before it.
 	# Swing onto the target before anything else. The weapon points where the
@@ -2227,7 +2245,8 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	# that paid-for burst rather than costing a fresh one.
 	if charge_ammo:
 		ammo -= 1
-	var result := Combat.resolve_shot(self, target, action, body_part)
+	var result := Penetration.resolve(self, target, action, body_part) if penetrates \
+		else Combat.resolve_shot(self, target, action, body_part)
 	is_busy = true
 	var rounds := randi_range(BURST_MIN, BURST_MAX)
 	_pending_shot = result
@@ -2266,6 +2285,7 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 			result.newly_injured = target.apply_body_part_damage(body_part, raw)
 			if result.stunned:
 				target.stunned = true
+	_land_collateral(result)
 	_report_incoming(target)
 	# Sec 5.4: gunfire is loud, and it leaves brass. The first is what the robot
 	# faction shares with the (deferred) alien sound channel; the second is what
@@ -2274,6 +2294,28 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	SecurityNetwork.report_evidence(grid_pos, SecurityNetwork.Evidence.BRASS)
 	is_busy = false
 	return result
+
+
+## Lands every other body the round was rolled against (Penetration): the same
+## carried-body redirect and armor as a hit on the target, and every one of them
+## — hit or missed — counts as shot at.
+func _land_collateral(result: Combat.ShotResult) -> void:
+	for c: Combat.ShotResult in result.collateral:
+		var body: Unit = c.unit
+		if body == null or not is_instance_valid(body):
+			continue
+		if c.hit:
+			var raw := c.damage
+			var victim := body
+			if body.redirects_hit_to_carried(self, c):
+				victim = body.carrying
+				c.hit_carried = true
+				c.redirect_note = "the round hits %s, slung over %s's shoulder" % [
+					victim.stats.display_name, body.stats.display_name]
+			c.damage = victim.take_damage(raw)
+			c.absorbed = raw - c.damage
+			show_impact(victim.global_position, false)
+		_report_incoming(body)
 
 
 func _pick_strays(rounds: int, hit: bool) -> Array[int]:

@@ -2,8 +2,9 @@ class_name LightSource
 extends Node3D
 ## A static light fixture — overhead light, monitor/terminal, flickering light,
 ## etc. (Sec 5.3). Contributes to nearby tiles' light_value via
-## LightingManager and carries its own shadow-casting SpotLight3D, aimed
-## straight down, for a harsh beam-of-light look.
+## LightingManager and carries its own shadow-casting SpotLight3D for a harsh
+## beam-of-light look: straight down by default, or tilted along this node's
+## -Z by `beam_pitch` for a fixture mounted on a wall (MapBuilder._add_wall_lamp).
 ##
 ## Registration is explicit (register_with_grid), not done from _ready, to
 ## match CoverObject's pattern: the caller controls exactly when this fixture
@@ -15,6 +16,18 @@ extends Node3D
 @export var flickers: bool = false
 @export var flicker_min: float = 30.0
 @export var flicker_max: float = 100.0
+## The beam's angle below this node's -Z, in degrees: -90 is straight down.
+@export var beam_pitch: float = -90.0
+@export var spot_angle: float = 68.0  # wide enough at a ~2m mount to reach nearby cover
+## SpotLight3D.spot_angle_attenuation: 1.0 fades evenly out to the rim; higher
+## holds the disc bright and drops it off hard at the edge, like a flashlight.
+@export var spot_edge: float = 1.0
+## Visual only: scales the SpotLight3D's energy without touching `intensity`,
+## which the rules read for light_value.
+@export var beam_energy_scale: float = 1.0
+## SpotLight3D.spot_attenuation: higher fades the beam out sooner with distance.
+@export var beam_falloff: float = 3.0
+@export var casts_shadows: bool = true
 
 var grid_pos: Vector3i
 var _current_intensity: float
@@ -47,21 +60,21 @@ func _make_visual() -> SpotLight3D:
 	# gameplay light_value falloff in LightingManager stays radial/Chebyshev
 	# and doesn't know about this cone's shape or angle).
 	var light := SpotLight3D.new()
-	light.rotation_degrees = Vector3(-90, 0, 0)  # aim straight down
+	light.rotation_degrees = Vector3(beam_pitch, 0, 0)
 	light.light_color = light_color
 	light.light_energy = _energy_for(_current_intensity)
 	light.spot_range = light_range * GridManager.TILE_SIZE
-	light.spot_angle = 68.0  # wide enough at a ~2m ceiling mount to reach nearby cover
-	light.spot_attenuation = 3.0  # hot center, sharp cutoff instead of a gentle wash
-	light.spot_angle_attenuation = 1.0  # even brightness across the disc, sharp only at the rim
-	light.shadow_enabled = true
+	light.spot_angle = spot_angle
+	light.spot_attenuation = beam_falloff
+	light.spot_angle_attenuation = spot_edge
+	light.shadow_enabled = casts_shadows
 	light.shadow_blur = 0.1  # harsh, hard-edged shadows
 	add_child(light)
 	return light
 
 
 func _energy_for(value: float) -> float:
-	return value / 100.0 * 12.0
+	return value / 100.0 * 12.0 * beam_energy_scale
 
 
 func _exit_tree() -> void:

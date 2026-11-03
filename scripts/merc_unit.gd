@@ -140,7 +140,7 @@ func _finish_downed_if_cheap() -> void:
 		var best := 999999
 		for candidate in downed_targets():
 			var d := GridManager.chebyshev_dist(grid_pos, candidate.grid_pos)
-			if d < best and d <= ATTACK_RANGE and GridManager.has_line_of_sight(self, candidate):
+			if d < best and d <= ATTACK_RANGE and has_shot_at(candidate):
 				best = d
 				body = candidate
 		if body == null:
@@ -1037,7 +1037,7 @@ func _board_turn() -> void:
 		var quarry := acquire_target()
 		if quarry == null or quarry.is_downed \
 				or GridManager.chebyshev_dist(grid_pos, quarry.grid_pos) > ATTACK_RANGE \
-				or not GridManager.has_line_of_sight(self, quarry):
+				or not has_shot_at(quarry):
 			return
 		if not can_shoot():
 			if ap < reload_cost:

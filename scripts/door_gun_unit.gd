@@ -194,6 +194,7 @@ static func make_stats(display_name: String = "Door gun") -> UnitStats:
 	w.mag_size = WEAPON_MAG
 	w.starting_reserve = -1
 	w.noise_radius = WEAPON_NOISE
+	w.penetration = 60  # a mounted heavy gun: LMG tier (docs/design/systems/penetration)
 	stats.weapon = w
 	return stats
 
@@ -247,7 +248,7 @@ func _top_up() -> void:
 func targets_in_reach() -> Array[Unit]:
 	var out: Array[Unit] = []
 	for unit in hostiles():
-		if covers(unit.grid_pos) and GridManager.has_line_of_sight(self, unit):
+		if covers(unit.grid_pos) and has_shot_at(unit):
 			out.append(unit)
 	return out
 

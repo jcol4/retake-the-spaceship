@@ -45,6 +45,14 @@ extends Resource
 # Unit.gunfire_noise_radius), so keep the two in step by hand.
 @export var noise_radius: int = 5
 
+# Percentile penetration, 0-100: how many bodies a round passes through and how
+# much damage it keeps doing so (Penetration). 0 for a non-roster weapon unless
+# its builder sets one — the Spitter's spit does not penetrate.
+@export var penetration: int = 0
+# Buckshot: no line penetration, a hit splashes into the tiles around the target
+# instead (Penetration.splash_tiles). A mod with `replaces_splash` turns it off.
+@export var splash: bool = false
+
 # --- Attachments and ammo (design doc `weapons/attachments.md`) --------------
 # One attachment per slot, null for empty, plus one ammo type (null = Standard).
 # All of them are WeaponMods; read the totals through the accessors below, never
@@ -214,6 +222,21 @@ func effective_falloff_rate() -> int:
 	if falloff_rate <= 0:
 		return falloff_rate  # no falloff to reduce, and a bonus can't create one
 	return maxi(0, falloff_rate + _bonus(&"falloff_rate"))
+
+
+# --- Penetration ---
+
+func effective_penetration() -> int:
+	return clampi(penetration + _bonus(&"penetration"), 0, 100)
+
+
+func effective_splash() -> bool:
+	if not splash:
+		return false
+	for m in mods():
+		if m.replaces_splash:
+			return false
+	return true
 
 
 # --- AP ---

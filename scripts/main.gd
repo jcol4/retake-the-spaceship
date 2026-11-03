@@ -348,8 +348,15 @@ func _spawn_and_start() -> void:
 		spawn_index += 1
 	_player_units = player_units
 
+	# Fodder-only roster (AlienPresets.FODDER_ONLY): every alien marker below is
+	# spawned as hordes instead, and the per-type loops are handed nothing.
+	var no_spawns: Array[Vector3i] = []
+	var fodder_only := AlienPresets.FODDER_ONLY
+	if fodder_only:
+		_spawn_hordes(map, nest_spawns, contract)
+
 	var enemy_index := 1
-	for spawn in map.enemy_spawns:
+	for spawn in (no_spawns if fodder_only else map.enemy_spawns):
 		var enemy: EnemyUnit = ENEMY_SCENE.instantiate()
 		enemy.stats = AlienPresets.ranged("Alien_%d" % enemy_index)
 		enemy.name = "Alien_%d" % enemy_index
@@ -359,7 +366,7 @@ func _spawn_and_start() -> void:
 		enemy_index += 1
 
 	var swarm_index := 1
-	for spawn in map.swarm_spawns:
+	for spawn in (no_spawns if fodder_only else map.swarm_spawns):
 		var swarm: SwarmUnit = SWARM_SCENE.instantiate()
 		swarm.stats = AlienPresets.swarm("Swarm_%d" % swarm_index)
 		swarm.name = "Swarm_%d" % swarm_index
@@ -369,7 +376,7 @@ func _spawn_and_start() -> void:
 		swarm_index += 1
 
 	var brawler_index := 1
-	for spawn in map.brawler_spawns:
+	for spawn in (no_spawns if fodder_only else map.brawler_spawns):
 		var brawler: BrawlerUnit = BRAWLER_SCENE.instantiate()
 		brawler.stats = AlienPresets.brawler("Brawler_%d" % brawler_index)
 		brawler.name = "Brawler_%d" % brawler_index
@@ -379,7 +386,7 @@ func _spawn_and_start() -> void:
 		brawler_index += 1
 
 	var hunter_index := 1
-	for spawn in map.hunter_spawns:
+	for spawn in (no_spawns if fodder_only else map.hunter_spawns):
 		var hunter: AgileHunterUnit = HUNTER_SCENE.instantiate()
 		hunter.stats = AlienPresets.hunter("Hunter_%d" % hunter_index)
 		hunter.name = "Hunter_%d" % hunter_index
@@ -397,7 +404,7 @@ func _spawn_and_start() -> void:
 	# sets `current_hp` from the stat block, so a count written before the node
 	# enters the tree is overwritten by the single worm's 5 HP.
 	var worm_index := 1
-	for spawn in map.worm_spawns:
+	for spawn in (no_spawns if fodder_only else map.worm_spawns):
 		var worm: WormUnit = WORM_SCENE.instantiate()
 		worm.stats = AlienPresets.worm("Worm_%d" % worm_index)
 		worm.name = "Worm_%d" % worm_index
@@ -624,6 +631,79 @@ func _on_squadmate_left(peer_id: int) -> void:
 				TurnManager.unit_activated.emit(unit)
 	hud.append_log("Your squadmate disconnected — their mercs are yours now.")
 	_try_start_mission()
+
+
+## Fodder-only roster (AlienPresets.FODDER_ONLY): ONE horde per compartment that
+## holds any alien marker, of whatever type, huddled around the first marker
+## found there. A marker outside every compartment gets a horde of its own.
+##
+## Spawned before the mercs, robots, nests and the VIP, so the tiles those will
+## land on are held back here — a horde that spilled onto a merc's marker would
+## stack two units on one tile. Rolls the global RNG (sizes, stats) in a fixed
+## order, which is all co-op needs: every peer builds the same hordes.
+func _spawn_hordes(map: Node3D, nest_spawns: Array[Vector3i], contract: Contract) -> void:
+	var reserved := {}
+	for tile: Vector3i in map.merc_spawns + nest_spawns:
+		reserved[tile] = true
+	for kind: int in map.cerberus_spawns:
+		for tile: Vector3i in map.cerberus_spawns[kind]:
+			reserved[tile] = true
+	if contract != null:
+		reserved[contract.target_tile] = true
+	var anchors: Array[Vector3i] = []
+	var rooms_seen := {}
+	for markers: Array[Vector3i] in [map.enemy_spawns, map.swarm_spawns,
+			map.brawler_spawns, map.hunter_spawns, map.worm_spawns]:
+		for spawn in markers:
+			var room: int = map.room_at(spawn)
+			if room >= 0:
+				if rooms_seen.has(room):
+					continue
+				rooms_seen[room] = true
+			anchors.append(spawn)
+	var index := 1
+	for h in anchors.size():
+		var tiles := _horde_tiles(map, anchors[h], randi_range(AlienPresets.HORDE_MIN, AlienPresets.HORDE_MAX), reserved)
+		for i in tiles.size():
+			var swarm: SwarmUnit = SWARM_SCENE.instantiate()
+			# The first body, on the anchor, is the horde's brute.
+			swarm.is_brute = i == 0
+			swarm.stats = AlienPresets.brute("Brute_%d" % index) if i == 0 \
+				else AlienPresets.swarm("Swarm_%d" % index)
+			swarm.horde_id = "horde_%d" % (h + 1)
+			swarm.name = "Swarm_%d" % index
+			swarm.position = GridManager.grid_to_world(tiles[i])
+			add_child(swarm)
+			swarm.action_logged.connect(_on_unit_log)
+			index += 1
+
+
+## Up to `count` free tiles for a horde: breadth-first out from `anchor`, kept to
+## its floor and its compartment, never through a wall and never onto a reserved
+## tile. Fewer than `count` in a cramped room — the horde is just smaller there.
+## GridManager.neighbors' fixed step order makes the result the same on every peer.
+func _horde_tiles(map: Node3D, anchor: Vector3i, count: int, reserved: Dictionary) -> Array[Vector3i]:
+	var room: int = map.room_at(anchor)
+	var out: Array[Vector3i] = []
+	var seen := {anchor: true}
+	var frontier: Array[Vector3i] = [anchor]
+	while not frontier.is_empty() and out.size() < count:
+		var tile: Vector3i = frontier.pop_front()
+		if GridManager.is_free(tile) and not reserved.has(tile):
+			out.append(tile)
+		for n in GridManager.neighbors(tile):
+			if seen.has(n) or n.y != anchor.y:
+				continue
+			seen[n] = true
+			var t := GridManager.get_tile(n)
+			if t == null or not t.passable:
+				continue
+			if room >= 0 and map.room_at(n) != room:
+				continue
+			if room < 0 and GridManager.chebyshev_dist(anchor, n) > 2:
+				continue
+			frontier.append(n)
+	return out
 
 
 func _spawn_security_robots() -> void:
@@ -880,7 +960,7 @@ const AUTO_FETCH_GIVE_UP_ROUND := 28
 func _auto_hostile_in_sight(player: PlayerUnit) -> bool:
 	for enemy in player.hostiles():
 		if GridManager.chebyshev_dist(player.grid_pos, enemy.grid_pos) <= 8 \
-				and GridManager.has_line_of_sight(player, enemy):
+				and player.has_shot_at(enemy):
 			return true
 	return false
 
@@ -1259,7 +1339,7 @@ func _auto_shoot(player: PlayerUnit) -> void:
 		var target: Unit = null
 		for enemy in player.hostiles():
 			if GridManager.chebyshev_dist(player.grid_pos, enemy.grid_pos) <= 8 \
-					and GridManager.has_line_of_sight(player, enemy):
+					and player.has_shot_at(enemy):
 				target = enemy
 				break
 		if target == null:
@@ -1301,7 +1381,7 @@ func _greedy_fallback(player: PlayerUnit, fixed_target: Unit = null) -> void:
 		if target == null:
 			break
 		var in_range := GridManager.chebyshev_dist(player.grid_pos, target.grid_pos) <= 8
-		if in_range and GridManager.has_line_of_sight(player, target) and player.can_shoot():
+		if in_range and player.has_shot_at(target) and player.can_shoot():
 			if player.ap < shoot_cost:
 				break  # cannot afford the shot it wants — end the activation
 			player.spend_ap(shoot_cost)

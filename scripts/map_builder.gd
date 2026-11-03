@@ -88,6 +88,9 @@ var placeholder_walls: Dictionary = {}
 ## Every kit piece placed, as "<socket>:<id>@<where>", in build order — so a
 ## test can check that one seed gives the same choices twice.
 var piece_log: PackedStringArray = []
+## [floor cell, side] of every wall lamp hung so far, so a room's own lamps
+## never land on a spot a doorway lamp already holds.
+var _lamp_spots: Dictionary = {}
 var _catalog: ModuleCatalog
 ## Which grid step currently leads away from the camera. ZERO means "not resolved
 ## yet", which is also the state on a freshly built map.
@@ -197,6 +200,7 @@ func build(map_data: MapData) -> void:
 	_wall_meshes.clear()
 	placeholder_walls.clear()
 	piece_log = PackedStringArray()
+	_lamp_spots.clear()
 	_occlusion_step = Vector3i.ZERO  # forces a recompute against the new layout
 	_revealed.clear()
 	_last_revealed.clear()
@@ -241,6 +245,8 @@ func build(map_data: MapData) -> void:
 	_build_door_frames()
 	for pos: Vector3i in data.cells:
 		_build_cell(pos, data.get_cell(pos))
+	if data.seed != 0:
+		_build_wall_lamps()
 	# After every cell, because an edge prop registers itself against the tiles on
 	# BOTH sides and those tiles have to exist first.
 	for entry: Array in data.cover_edge_list():
@@ -309,7 +315,7 @@ func _build_cell(pos: Vector3i, cell: MapData.Cell) -> void:
 		if t:
 			t.alarm = true
 	elif cell.fixture != MapData.Fixture.NONE:
-		_add_light(world, cell.fixture)
+		_add_light(pos, cell.fixture)
 
 
 func cell_to_world(pos: Vector3i) -> Vector3:
@@ -685,6 +691,7 @@ func _build_door_frames() -> void:
 		var n := 1 + absi(_coord(hi, along) - _coord(lo, along))
 		for i in n:
 			seen[lo + along * i] = true
+		_add_door_lamps(lo, hi, along)
 		var width := n * GridManager.TILE_SIZE + DOOR_CLEARANCE
 		var p := _catalog.pick("door_frame", _socket_hash(["door_frame", lo]),
 			func(q: Dictionary) -> bool: return _jamb_width(q, width) <= MAX_JAMB)
@@ -697,6 +704,42 @@ func _build_door_frames() -> void:
 		for flank: Vector3i in [lo - along, hi + along]:
 			if data.terrain_at(flank) == MapData.Terrain.WALL:
 				_register_wall(flank, node)
+
+
+## A wall lamp either side of the doorway lo..hi, on both rooms' sides of the
+## wall, so a doorway is marked by a pair of lamps from whichever room it is
+## seen. Each lamp hangs on the face of a WALL cell flanking the run, slid to
+## the half of it away from the door: the frame's jamb covers up to
+## DOOR_LAMP_CLEAR of the face next to the opening. Where the doorway opens
+## straight into a corridor, the flank has no face on that side, and the lamp
+## goes on the corridor's own wall beside the opening instead. Lamps light the
+## doorway itself (DOOR_LAMP_RANGE tiles), so they are real LightSources like
+## every other, but shadowless: a deck has many doors.
+func _add_door_lamps(lo: Vector3i, hi: Vector3i, along: Vector3i) -> void:
+	var across := Vector3i(along.z, 0, along.x)
+	var room_on_face := GridManager.TILE_SIZE - DOOR_LAMP_CLEAR - DOOR_LAMP_MARGIN
+	for end: Vector3i in [lo, hi]:
+		var out := -along if end == lo else along
+		var flank := end + out
+		if data.terrain_at(flank) != MapData.Terrain.WALL:
+			continue
+		for d: Vector3i in [across, -across]:
+			var cell := flank + d
+			var side := MapData.SIDE_STEP.find(-d)
+			# From the face's middle to the middle of the clear part, away from the door.
+			var slide := Vector3(out) * (GridManager.TILE_SIZE / 2.0 - DOOR_LAMP_MARGIN - room_on_face / 2.0)
+			if not _wall_sides(cell).has(side):
+				cell = end + d
+				side = MapData.SIDE_STEP.find(out)
+				slide = Vector3.ZERO
+				if not _wall_sides(cell).has(side):
+					continue
+			var source := LightSource.new()
+			source.light_range = DOOR_LAMP_RANGE
+			source.intensity = DOOR_LAMP_INTENSITY
+			source.light_color = Color(0.85, 0.92, 1.0)
+			source.casts_shadows = false
+			_add_wall_lamp(source, cell, side, slide)
 
 
 ## The wall line a DOOR cell sits in: along X when a WALL or DOOR flanks it to
@@ -881,9 +924,12 @@ func pad_world_position(h: MapData.Hangar) -> Vector3:
 	return cell_to_world(h.pad_center)
 
 
-func _add_light(world: Vector3, fixture: int) -> void:
-	# Sec 5.3 fixtures. Mounted at ceiling-ish height; occlusion is handled by
-	# LightingManager's raycast against wall geometry, same as unit LOS.
+## Sec 5.3 fixtures. Occlusion is handled by LightingManager's raycast against
+## wall geometry, same as unit LOS. The deck has no ceiling, so an overhead or
+## flickering fixture is hung on the nearest wall of its room instead
+## (_wall_mount, _add_wall_lamp); a monitor's glow, and a fixture whose room
+## has no wall face, keep the old mount in mid-air above the cell.
+func _add_light(pos: Vector3i, fixture: int) -> void:
 	var source := LightSource.new()
 	match fixture:
 		MapData.Fixture.OVERHEAD:  # bright, wide, always on
@@ -894,16 +940,208 @@ func _add_light(world: Vector3, fixture: int) -> void:
 			source.light_range = 2.5
 			source.intensity = 45.0
 			source.light_color = Color(0.4, 0.75, 1.0)
-		MapData.Fixture.FLICKER:  # fluctuates turn-to-turn (Sec 5.3)
+		MapData.Fixture.FLICKER:  # flicker disabled — burns steady like an overhead
 			source.light_range = 6.0
 			source.intensity = 90.0
 			source.light_color = Color(0.85, 0.92, 1.0)
-			source.flickers = true
-			source.flicker_min = 25.0
-			source.flicker_max = 90.0
+	if fixture != MapData.Fixture.MONITOR:
+		var mount := _wall_mount(pos)
+		if not mount.is_empty():
+			_add_wall_lamp(source, mount[0], mount[1])
+			return
 	add_child(source)
-	source.global_position = world + Vector3(0, 2.0, 0)
+	source.global_position = cell_to_world(pos) + Vector3(0, 2.0, 0)
 	source.register_with_grid()
+
+
+## Wall lamps hang with their middle this high up the 3.0 m wall face.
+const WALL_LAMP_HEIGHT := 2.4
+## How far in front of the wall face a lamp's light sits: inside the floor cell,
+## so the rules light from that tile and the fog files it with that room.
+const WALL_LAMP_STANDOFF := 0.25
+## A wall lamp's beam, in degrees below the horizontal into the room, its
+## half-angle, and how hard its rim is (LightSource.spot_edge): a flashlight
+## cone that leaves a defined pool on the floor in front of the lamp. Its top
+## edge (PITCH + SPOT_ANGLE) must stay below the horizontal: the camera always
+## looks down from 35 degrees above, so a beam that never rises can never point
+## at it, whatever the yaw. Visual only — the rules' light_value falloff
+## doesn't know the cone's shape.
+const WALL_LAMP_PITCH := -55.0
+const WALL_LAMP_SPOT_ANGLE := 40.0
+const WALL_LAMP_SPOT_EDGE := 3.0
+## The beam's brightness and distance falloff (LightSource.beam_energy_scale,
+## beam_falloff): a narrow cone spreads its light over less floor, so it is
+## drawn brighter and carried further than the rules' intensity alone gives.
+const WALL_LAMP_BEAM_ENERGY := 2.2
+const WALL_LAMP_BEAM_FALLOFF := 1.5
+## Generated decks: one lamp per this many cells of a room, at least one and at
+## most WALL_LAMP_MAX. Dimmer and shorter than an overhead fixture (90 over 6
+## tiles), so a lamp lights the stretch of room in front of it and leaves dark
+## floor between lamps: past 3 tiles a lamp adds under EnemyUnit's 25 sight
+## threshold on top of the ambient floor.
+const WALL_LAMP_AREA := 30
+const WALL_LAMP_MAX := 4
+const WALL_LAMP_RANGE := 5.0
+const WALL_LAMP_INTENSITY := 60.0
+## Doorway lamps (_add_door_lamps): enough to light the doorway and a step
+## either side of it, little more.
+const DOOR_LAMP_RANGE := 3.0
+const DOOR_LAMP_INTENSITY := 45.0
+## How much of a flanking wall face, from the opening, a door frame's jamb may
+## cover (Door_Frame_A's at a 2-tile door is 0.59 m), and the gap kept between
+## a doorway lamp's panel and the far end of the face.
+const DOOR_LAMP_CLEAR := 0.59
+const DOOR_LAMP_MARGIN := 0.04
+
+
+## Sides of floor cell `pos` that face a WALL cell, in Side order.
+func _wall_sides(pos: Vector3i) -> Array[int]:
+	var out: Array[int] = []
+	if data.terrain_at(pos) != MapData.Terrain.FLOOR:
+		return out
+	for side: int in 4:
+		if data.terrain_at(pos + MapData.SIDE_STEP[side]) == MapData.Terrain.WALL:
+			out.append(side)
+	return out
+
+
+## Where a fixture at `pos` hangs, as [floor cell, side]: on `pos` itself when
+## it touches a wall, else on the nearest floor cell that does, by a breadth-
+## first walk that stays inside the room. Empty when the walk finds none.
+func _wall_mount(pos: Vector3i) -> Array:
+	var room := data.room_index_at(pos)
+	var seen := {pos: true}
+	var frontier: Array[Vector3i] = [pos]
+	while not frontier.is_empty():
+		var next: Array[Vector3i] = []
+		for cell in frontier:
+			var sides := _wall_sides(cell)
+			if not sides.is_empty():
+				return [cell, sides[posmod(_socket_hash(["wall_light", cell]), sides.size())]]
+			for step: Vector3i in MapData.SIDE_STEP:
+				var n := cell + step
+				if seen.has(n) or data.terrain_at(n) != MapData.Terrain.FLOOR or data.room_index_at(n) != room:
+					continue
+				seen[n] = true
+				next.append(n)
+		frontier = next
+	return []
+
+
+## Generated decks carry no fixtures, so every room that is not a corridor gets
+## wall lamps of its own, spread out: the first on a hashed wall cell, each
+## next one on the wall cell farthest from those already lit. Hand-authored
+## decks are left with the fixtures they were drawn with.
+func _build_wall_lamps() -> void:
+	var spots: Dictionary = {}  # room -> Array of [floor cell, side]
+	var area: Dictionary = {}  # room -> cells
+	for pos: Vector3i in data.room_of:
+		var room: int = data.room_of[pos]
+		if data.corridors.has(room):
+			continue
+		area[room] = area.get(room, 0) + 1
+		for side: int in _wall_sides(pos):
+			if _lamp_spots.has([pos, side]):
+				continue
+			if not spots.has(room):
+				spots[room] = []
+			spots[room].append([pos, side])
+	for room: int in spots:
+		var candidates: Array = spots[room]
+		var want := mini(clampi(area[room] / WALL_LAMP_AREA, 1, WALL_LAMP_MAX), candidates.size())
+		var lit: Array = [candidates[posmod(_socket_hash(["wall_lamps", room]), candidates.size())]]
+		while lit.size() < want:
+			var best: Array = []
+			var best_dist := -1
+			for spot: Array in candidates:
+				var dist := 1 << 30
+				for other: Array in lit:
+					dist = mini(dist, GridManager.chebyshev_dist(spot[0], other[0]))
+				if dist > best_dist:
+					best_dist = dist
+					best = spot
+			lit.append(best)
+		for spot: Array in lit:
+			var source := LightSource.new()
+			source.light_range = WALL_LAMP_RANGE
+			source.intensity = WALL_LAMP_INTENSITY
+			source.light_color = Color(0.85, 0.92, 1.0)
+			_add_wall_lamp(source, spot[0], spot[1])
+
+
+## Hangs `source` on the wall at `side` of floor cell `cell`: the light sits
+## WALL_LAMP_STANDOFF in front of the face with a narrow, hard-edged beam
+## tilted down into the room, and a small housing (_make_lamp_housing) goes on
+## the face behind it — a flashlight-like point the beam visibly comes from,
+## where the kit's light panels read as glowing white squares. The housing is
+## the light's child, so the fog hides the two together, and it is registered
+## with the WALL cell it hangs on, so occlusion fades it with that wall instead
+## of leaving it floating in front of the cutaway.
+##
+## `slide` moves the lamp along the wall from the middle of the face, in metres.
+func _add_wall_lamp(source: LightSource, cell: Vector3i, side: int,
+		slide := Vector3.ZERO) -> void:
+	var step: Vector3i = MapData.SIDE_STEP[side]
+	_lamp_spots[[cell, side]] = true
+	source.beam_pitch = WALL_LAMP_PITCH
+	source.spot_angle = WALL_LAMP_SPOT_ANGLE
+	source.spot_edge = WALL_LAMP_SPOT_EDGE
+	source.beam_energy_scale = WALL_LAMP_BEAM_ENERGY
+	source.beam_falloff = WALL_LAMP_BEAM_FALLOFF
+	add_child(source)
+	source.global_position = cell_to_world(cell) + Vector3(0, WALL_LAMP_HEIGHT, 0) + slide \
+		+ Vector3(step) * (GridManager.TILE_SIZE / 2.0 - WALL_LAMP_STANDOFF)
+	# -Z, the way the beam points, faces away from the wall.
+	source.rotation.y = atan2(float(step.x), float(step.z))
+	var housing := _make_lamp_housing()
+	source.add_child(housing)
+	# Back against the face, which is WALL_LAMP_STANDOFF behind the light (+Z).
+	housing.position = Vector3(0, 0, WALL_LAMP_STANDOFF - LAMP_HOUSING_SIZE.z / 2.0)
+	_register_wall(cell + step, housing)
+	source.register_with_grid()
+
+
+## A wall lamp's housing, in metres: across the wall, up it, out from it.
+const LAMP_HOUSING_SIZE := Vector3(0.24, 0.12, 0.2)
+## The lens on the housing's underside, as a fraction of the housing's footprint.
+const LAMP_LENS_FRACTION := 0.7
+## Emission strength of the lens: over the environment's glow threshold, so it
+## blooms as a small hot point.
+const LAMP_LENS_ENERGY := 3.0
+static var _housing_material: StandardMaterial3D
+static var _lens_material: StandardMaterial3D
+
+
+## A dark metal box with a small glowing lens on its underside, centred on the
+## node's origin; the caller backs it onto the wall.
+func _make_lamp_housing() -> Node3D:
+	if _housing_material == null:
+		_housing_material = StandardMaterial3D.new()
+		_housing_material.albedo_color = Color(0.16, 0.17, 0.19)
+		_housing_material.metallic = 0.6
+		_housing_material.roughness = 0.5
+		_lens_material = StandardMaterial3D.new()
+		_lens_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_lens_material.albedo_color = Color(0.85, 0.92, 1.0)
+		_lens_material.emission_enabled = true
+		_lens_material.emission = Color(0.85, 0.92, 1.0)
+		_lens_material.emission_energy_multiplier = LAMP_LENS_ENERGY
+	var housing := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = LAMP_HOUSING_SIZE
+	housing.mesh = box
+	housing.material_override = _housing_material
+	housing.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var lens := MeshInstance3D.new()
+	var plane := PlaneMesh.new()  # faces +Y; flipped below to face down
+	plane.size = Vector2(LAMP_HOUSING_SIZE.x, LAMP_HOUSING_SIZE.z) * LAMP_LENS_FRACTION
+	lens.mesh = plane
+	lens.material_override = _lens_material
+	lens.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	lens.rotation.x = PI
+	lens.position.y = -LAMP_HOUSING_SIZE.y / 2.0 - 0.002
+	housing.add_child(lens)
+	return housing
 
 
 func _add_floor_quad(world: Vector3, mat: StandardMaterial3D) -> void:

@@ -756,8 +756,9 @@ func _on_aimed_shot_target_picked(target: Unit) -> void:
 	# player cannot choose between zones without seeing both numbers. Zones the
 	# remaining pool cannot cover are disabled rather than hidden — knowing the
 	# head was 7 AP away is the information that shapes the NEXT activation.
+	var through := Penetration.through_penalty(player, target)
 	for part in body_part_buttons:
-		var acc := Combat.compute_accuracy(player, target, Combat.ShotAction.AIMED_SHOT, part)
+		var acc := clampi(Combat.compute_accuracy(player, target, Combat.ShotAction.AIMED_SHOT, part) - through, 1, 99)
 		var cost := player.aimed_shot_cost(part)
 		body_part_buttons[part].text = "%s — %d AP (%d%%)" % [Combat.body_part_name(part), cost, acc]
 		body_part_buttons[part].disabled = not player.can_afford(cost)

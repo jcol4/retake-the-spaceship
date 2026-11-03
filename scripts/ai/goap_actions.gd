@@ -60,7 +60,7 @@ class Attack extends GoapAction:
 
 	func execute(unit: Unit, ctx: Dictionary) -> bool:
 		var target: Unit = ctx.get("target")
-		if target == null or target.is_downed or not GridManager.has_line_of_sight(unit, target):
+		if target == null or target.is_downed or not unit.has_shot_at(target):
 			return false
 		unit.spend_ap(ap_cost(unit, ctx))
 		var result: Combat.ShotResult = await unit.fire_at(target, Combat.ShotAction.SHOOT)
@@ -107,7 +107,7 @@ class AttackFromCover extends GoapAction:
 
 	func execute(unit: Unit, ctx: Dictionary) -> bool:
 		var target: Unit = ctx.get("target")
-		if target == null or target.is_downed or not GridManager.has_line_of_sight(unit, target):
+		if target == null or target.is_downed or not unit.has_shot_at(target):
 			return false
 		unit.spend_ap(ap_cost(unit, ctx))
 		var result: Combat.ShotResult = await unit.fire_at(target, Combat.ShotAction.SHOOT)
