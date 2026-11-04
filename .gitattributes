@@ -4,3 +4,15 @@
 assets/room_tiles/quaternius_scifi/**/*.gltf filter=lfs diff=lfs merge=lfs -text
 assets/room_tiles/quaternius_scifi/**/*.bin  filter=lfs diff=lfs merge=lfs -text
 assets/room_tiles/quaternius_scifi/**/*.png  filter=lfs diff=lfs merge=lfs -text
+
+# Godot writes LF and rewrites these on every reimport. Pinned to LF so a
+# reimport that changes nothing is no diff (core.autocrlf=true otherwise flags
+# every one as modified). NOT gitignored: .import files carry each asset's uid
+# and its import settings, and Godot expects them committed.
+*.import   text eol=lf
+*.tscn     text eol=lf
+*.tres     text eol=lf
+*.gd       text eol=lf
+*.gdshader text eol=lf
+*.uid      text eol=lf
+*.godot    text eol=lf
