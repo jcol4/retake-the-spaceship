@@ -1,8 +1,7 @@
 class_name Dropship
 extends Node3D
-## The ship that inserts the squad and lifts it out (GDD §7.1, §7.4). Placeholder
-## art: a box hull and a hinged ramp, until the dropship model on the art list
-## exists.
+## The ship that inserts the squad and lifts it out (GDD §7.1, §7.4). Drawn as
+## ShipModel.DROPSHIP (a box hull when that is missing) with a hinged ramp.
 ##
 ## Deliberately NOT a Unit. "The ship itself cannot be damaged" (§7.4) is
 ## enforced by there being nothing to hit: no "units" group membership means no
@@ -31,6 +30,11 @@ const RAMP_SIZE := Vector3(3.0, 0.12, 2.2)
 ## bulkhead's (MapBuilder.WALL_HEIGHT), so it occludes exactly what a wall does.
 const BLOCKER_HEIGHT := 3.0
 const RAMP_DOWN_ANGLE := deg_to_rad(25.0)
+## How tall the ship model is drawn at least (ShipModel.fitted's min_height).
+const MODEL_MIN_HEIGHT := 2.0
+## The door gun's strut and the platform on top of it (_build_gun_pylon).
+const PYLON_WIDTH := 0.3
+const PYLON_DECK := 1.1
 ## Metres above the pad it descends from and climbs back to. Above the camera's
 ## usual framing so it arrives from off-screen rather than popping in.
 const HOVER_HEIGHT := 16.0
@@ -58,18 +62,29 @@ func _init() -> void:
 func _build() -> void:
 	var hull_mat := StandardMaterial3D.new()
 	hull_mat.albedo_color = Color(0.32, 0.36, 0.34)
-	_hull = MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = HULL_SIZE
-	_hull.mesh = box
-	_hull.material_override = hull_mat
-	_hull.position = Vector3(0, HULL_SIZE.y / 2.0, 0)
-	add_child(_hull)
+	# The ship model (ShipModel.DROPSHIP) fitted to the hull footprint, nose
+	# away from the ramp. The pack's ships are flat fighters, so it is stretched
+	# up to MODEL_MIN_HEIGHT to read as a ship that can carry a squad. Without
+	# the model the box hull stays.
+	var tail_z := HULL_SIZE.z / 2.0
+	var ship := ShipModel.fitted(ShipModel.DROPSHIP, HULL_SIZE, MODEL_MIN_HEIGHT)
+	if ship:
+		add_child(ship)
+		var fitted: AABB = ship.get_meta("fitted_aabb")
+		tail_z = fitted.end.z
+	else:
+		_hull = MeshInstance3D.new()
+		var box := BoxMesh.new()
+		box.size = HULL_SIZE
+		_hull.mesh = box
+		_hull.material_override = hull_mat
+		_hull.position = Vector3(0, HULL_SIZE.y / 2.0, 0)
+		add_child(_hull)
 
 	# Built facing local +Z; `place` turns the whole ship to its hangar's ramp side.
 	_ramp_pivot = Node3D.new()
 	_ramp_pivot.name = "RampPivot"
-	_ramp_pivot.position = Vector3(0, RAMP_SIZE.y, HULL_SIZE.z / 2.0)
+	_ramp_pivot.position = Vector3(0, RAMP_SIZE.y, tail_z)
 	add_child(_ramp_pivot)
 	var ramp_mat := StandardMaterial3D.new()
 	ramp_mat.albedo_color = Color(0.85, 0.6, 0.15)
@@ -90,6 +105,29 @@ func _build() -> void:
 	var corner := MapData.HANGAR_PAD_RADIUS * 1.5
 	door_gun_mount.position = Vector3(corner, HULL_SIZE.y, corner)
 	add_child(door_gun_mount)
+	if ship:
+		_build_gun_pylon(corner, hull_mat)
+
+
+## The door gun stands on the hull roof's corner (HULL_SIZE.y), which the box
+## hull filled; the ship model neither reaches that corner nor that height, so a
+## strut from the ship's deck carries a platform there instead. It travels with
+## the ship and, like the hull, has no collision.
+func _build_gun_pylon(corner: float, mat: StandardMaterial3D) -> void:
+	var strut := MeshInstance3D.new()
+	var strut_box := BoxMesh.new()
+	strut_box.size = Vector3(PYLON_WIDTH, HULL_SIZE.y, PYLON_WIDTH)
+	strut.mesh = strut_box
+	strut.material_override = mat
+	strut.position = Vector3(corner, HULL_SIZE.y / 2.0, corner)
+	add_child(strut)
+	var deck := MeshInstance3D.new()
+	var deck_box := BoxMesh.new()
+	deck_box.size = Vector3(PYLON_DECK, 0.1, PYLON_DECK)
+	deck.mesh = deck_box
+	deck.material_override = mat
+	deck.position = Vector3(corner, HULL_SIZE.y - 0.05, corner)
+	add_child(deck)
 
 
 ## The landed ship's sight-and-light blocker (GDD §7.2): a static body on

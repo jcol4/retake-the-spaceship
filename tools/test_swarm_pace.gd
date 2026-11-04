@@ -51,7 +51,7 @@ func _initialize() -> void:
 	await process_frame
 
 	await _check_pool_covers_one_claw()
-	await _check_cannot_close_and_swing()
+	await _check_can_close_and_swing()
 	await _check_movement_is_flat()
 	await _check_brawler_shares_the_pace()
 	await _check_brute_shares_the_pace()
@@ -82,28 +82,21 @@ func _check_pool_covers_one_claw() -> void:
 	_free([swarm])
 
 
-## THE CASE THE WHOLE STAT BLOCK EXISTS FOR, and the one the deleted lunge latch
-## used to guarantee by hand: the player's turn of warning.
-##
-## The bar is TWO tiles, not one, and the difference is the whole point. A
-## shambler could always step one tile and swing — that was 1 AP of movement plus
-## a 1 AP claw out of two, the ordinary shamble — so a swarm already one step
-## away reaching you is not the thing the latch protected against. What it
-## protected against was CROSSING GROUND and connecting on the same draw, which
-## is what the lunge did and what the pool now forbids: anything standing two or
-## more tiles out cannot both arrive and land a blow.
-func _check_cannot_close_and_swing() -> void:
+## MOVE-THEN-CLAW (2026-11-03): Fodder can cross a few tiles and still swing on
+## the same activation. The claw is SwarmUnit.CLAW_AP_COST (3) against a 6 AP
+## pool, so three tiles then a claw fits and four does not.
+func _check_can_close_and_swing() -> void:
 	var swarm = await _spawn(SWARM, ANCHOR, AlienPresets.swarm("Swarm"))
 	var pool: int = swarm.ap_pool()
 	var claw: int = swarm.action_cost(MELEE)
-	var two_tiles: int = 2 * swarm.move_ap_per_tile()
-	_check(two_tiles + claw > pool,
-		"closing two tiles (%d AP) then clawing (%d AP) exceeds the pool (%d AP)"
-		% [two_tiles, claw, pool])
-	# And the reach it DOES keep is exactly the shamble's: one step, then a swing.
-	_check(swarm.move_ap_per_tile() + claw <= pool,
-		"while one step (%d AP) plus a claw (%d AP) still fits, as it always did"
-		% [swarm.move_ap_per_tile(), claw])
+	var tile: int = swarm.move_ap_per_tile()
+	_check(claw == 3, "a swarm's claw costs 3 AP (got %d)" % claw)
+	_check(3 * tile + claw <= pool,
+		"closing three tiles (%d AP) then clawing (%d AP) fits the pool (%d AP)"
+		% [3 * tile, claw, pool])
+	_check(4 * tile + claw > pool,
+		"while four tiles then a claw does not (%d + %d vs %d AP)"
+		% [4 * tile, claw, pool])
 	_free([swarm])
 
 

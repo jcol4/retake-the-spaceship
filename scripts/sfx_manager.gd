@@ -39,8 +39,41 @@ const MIX_LEVEL := 0.5
 ## with no stream loaded is a no-op, which is what lets sounds be wired up
 ## before the art for them exists — `Sfx.play("rifle_fire", pos)` is safe to
 ## commit the day before the sample lands.
+##
+## One `<weapon>_fire` key per roster weapon — WeaponPresets.FIRE_SFX maps the
+## weapon to its key, and `rifle_fire` is what anything off the roster (aliens,
+## the door gun) keeps firing. Every gunfire sample is a whole BURST, played once
+## per trigger pull (see Unit._on_muzzle), and every one is the "Isolated" take
+## from Snake's Authentic Gun Sounds: the pack's "Full Sound" takes carry the
+## outdoor range's echo, which is wrong inside a ship's hull.
 const STREAMS := {
 	"rifle_fire": "res://assets/audio/sfx/weapons/rifle_fire.tres",
+	"ar_fire": "res://assets/audio/sfx/weapons/ar_fire.tres",
+	"smg_fire": "res://assets/audio/sfx/weapons/smg_fire.tres",
+	"lmg_fire": "res://assets/audio/sfx/weapons/lmg_fire.tres",
+	"battle_rifle_fire": "res://assets/audio/sfx/weapons/battle_rifle_fire.tres",
+	"shotgun_fire": "res://assets/audio/sfx/weapons/shotgun_fire.tres",
+	"pistol_fire": "res://assets/audio/sfx/weapons/pistol_fire.tres",
+	# Footsteps (Unit.footstep_sfx): boots for anyone in boots, a heavier clank
+	# for the security robots.
+	"step_boots_metal": "res://assets/audio/sfx/footsteps/step_boots_metal.tres",
+	"step_heavy_metal": "res://assets/audio/sfx/footsteps/step_heavy_metal.tres",
+}
+
+## Per-key trim in dB, on top of MIX_LEVEL. Missing means 0. Footsteps sit well
+## under gunfire: a squad crossing a room is three steps a second per soldier,
+## and at gunfire level that is a drum line, not a texture.
+const TRIM_DB := {
+	"step_boots_metal": -10.0,
+	"step_heavy_metal": -8.0,
+}
+
+## Keys that only play on a FREE voice and never steal one. Footsteps are
+## constant and individually forgettable; a step that stole the voice a burst
+## was still ringing on would cut real information short to say nothing.
+const LOW_PRIORITY := {
+	"step_boots_metal": true,
+	"step_heavy_metal": true,
 }
 
 var _voices: Array[AudioStreamPlayer3D] = []
@@ -78,22 +111,27 @@ func play(key: String, at: Vector3, pitch_scale: float = 1.0) -> void:
 	var stream: AudioStream = _loaded.get(key)
 	if stream == null:
 		return
-	var voice := _take_voice()
+	var voice := _take_voice(not LOW_PRIORITY.has(key))
+	if voice == null:
+		return
 	voice.stream = stream
 	voice.pitch_scale = pitch_scale
+	voice.volume_db = linear_to_db(MIX_LEVEL) + TRIM_DB.get(key, 0.0)
 	voice.global_position = at
 	voice.play()
 
 
 ## Round-robin with voice stealing. Prefers a player that has finished over one
 ## still sounding, so a quiet moment never interrupts anything; only genuine
-## saturation cuts a tail short.
-func _take_voice() -> AudioStreamPlayer3D:
+## saturation cuts a tail short. With `steal` false, saturation returns null.
+func _take_voice(steal: bool = true) -> AudioStreamPlayer3D:
 	for i in _voices.size():
 		var index := (_next_voice + i) % _voices.size()
 		if not _voices[index].playing:
 			_next_voice = (index + 1) % _voices.size()
 			return _voices[index]
+	if not steal:
+		return null
 	var stolen := _voices[_next_voice]
 	_next_voice = (_next_voice + 1) % _voices.size()
 	return stolen

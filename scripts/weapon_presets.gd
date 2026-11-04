@@ -112,6 +112,23 @@ const GUN_MODEL := {
 	WeaponId.BATTLE_RIFLE: &"battle_rifle",
 }
 
+## The Sfx key each weapon fires with (SfxManager.STREAMS). Calibres from Snake's
+## Authentic Gun Sounds, chosen so no two guns share a recording: 5.56 rifle,
+## 9mm spray (SMG) and 9mm double-tap (pistol), 7.62x54R for the LMG (a PKM's
+## round), .308 for the battle rifle, 20 gauge for the shotgun.
+const FIRE_SFX := {
+	WeaponId.ASSAULT_RIFLE: "ar_fire",
+	WeaponId.SHOTGUN: "shotgun_fire",
+	WeaponId.SMG: "smg_fire",
+	WeaponId.LMG: "lmg_fire",
+	WeaponId.BATTLE_RIFLE: "battle_rifle_fire",
+	WeaponId.PISTOL: "pistol_fire",
+}
+
+## What a weapon off the roster (id -1: alien weapons, the door gun) fires with —
+## the sound every gun made before each got its own.
+const DEFAULT_FIRE_SFX := "rifle_fire"
+
 const CLASS_DEFAULT := {
 	UnitStats.UnitClass.ASSAULT: WeaponId.ASSAULT_RIFLE,
 	UnitStats.UnitClass.SNIPER: WeaponId.BATTLE_RIFLE,
@@ -153,6 +170,11 @@ static func make(id: WeaponId, attachment_ids: PackedInt32Array = PackedInt32Arr
 ## non-roster weapons aliens and the door gun are built with, id -1).
 static func gun_model(id: int) -> StringName:
 	return GUN_MODEL.get(id, &"")
+
+
+## The Sfx key weapon `id` fires with. See FIRE_SFX.
+static func fire_sfx(id: int) -> String:
+	return FIRE_SFX.get(id, DEFAULT_FIRE_SFX)
 
 
 static func default_for_class(unit_class: UnitStats.UnitClass) -> WeaponId:

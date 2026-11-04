@@ -35,6 +35,7 @@ func _initialize() -> void:
 	# Before _check_degradation, which shoots the (9,6) south edge to pieces —
 	# every posture case below is phrased against that edge being intact.
 	await _check_posture()
+	await _check_shared_cover()
 	_check_degradation()
 
 	print("")
@@ -123,6 +124,22 @@ func _check_posture() -> void:
 	_check(unit.cover_pose() == &"",
 		"but looking along the crate rather than over it does not")
 
+	# Facing is continuous now, so the gate's edge (~45.6 degrees) is reachable.
+	# A unit not yet using the crate does not pick it up just past the edge...
+	unit.refresh_cover_pose()
+	unit.rotation.y = PI - deg_to_rad(50.0)
+	_check(unit.cover_pose() == &"", "50 degrees off is outside the gate for a unit not using it")
+	# ...but one already using it holds it there (COVER_HOLD_DOT), so a turn of
+	# a few degrees across the edge does not flicker the pose.
+	unit.rotation.y = PI
+	unit.refresh_cover_pose()
+	unit.rotation.y = PI - deg_to_rad(50.0)
+	_check(unit.cover_pose() == &"low", "a unit already in cover holds it a little past the gate")
+	unit.rotation.y = PI - deg_to_rad(60.0)
+	_check(unit.cover_pose() == &"", "but not indefinitely")
+	unit.rotation.y = PI
+	unit.refresh_cover_pose()
+
 	# Hunkering must NOT suppress the cover pose: the hunker settles into the
 	# cover art, so a unit reporting no pose here would stand back up on screen
 	# at the exact moment it ducked.
@@ -179,6 +196,44 @@ func _check_passability() -> void:
 	_check(_grid.is_free(COVERED), "a covered tile is free to stand on")
 	var reachable: Array = _grid.get_reachable_tiles(COVERED + Vector3i(0, 0, 3), 4)
 	_check(COVERED in reachable, "and is reachable by an ordinary move")
+
+
+## Firing across cover you are crouched behind yourself still costs the target's
+## protection, but does not chew the crate: (9,6) and (9,7) share the south edge.
+func _check_shared_cover() -> void:
+	var across := COVERED + Vector3i(0, 0, 1)
+	_check(_grid.shares_cover_edge(COVERED, MapData.Side.SOUTH, across),
+		"the tile across the crate shares that cover")
+	_check(not _grid.shares_cover_edge(COVERED, MapData.Side.SOUTH, COVERED + Vector3i(0, 0, 4)),
+		"a tile further south does not")
+
+	var edge = _grid.cover_edge(COVERED, MapData.Side.SOUTH)
+	var full: int = edge.hp
+	var shooter = load("res://scenes/player_unit.tscn").instantiate()
+	shooter.position = _grid.grid_to_world(across)
+	var target = load("res://scenes/player_unit.tscn").instantiate()
+	target.position = _grid.grid_to_world(COVERED)
+	root.add_child(shooter)
+	root.add_child(target)
+	await process_frame
+
+	shooter._equip(4, PackedInt32Array(), -1)  # battle rifle: the bare test unit has no gun to chip with
+	var r = _combat.resolve_shot(shooter, target, _combat.ShotAction.SHOOT)
+	_check(r.had_cover and r.cover_type == MapData.Cover.HEAVY,
+		"a shot across shared cover still faces it")
+	_check(edge.hp == full and not r.cover_broken, "but leaves the shared cover undamaged")
+
+	# Step the shooter back off the crate: now it is just the target's cover.
+	_grid.set_occupant(across, null)
+	shooter.grid_pos = COVERED + Vector3i(0, 0, 4)
+	_combat.resolve_shot(shooter, target, _combat.ShotAction.SHOOT)
+	_check(edge.hp < full, "from further back the same shot chips it")
+	edge.hp = full
+
+	for u in [shooter, target]:
+		_grid.set_occupant(u.grid_pos, null)
+		u.queue_free()
+	await process_frame
 
 
 func _check_degradation() -> void:

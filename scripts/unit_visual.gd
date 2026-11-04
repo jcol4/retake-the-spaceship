@@ -70,6 +70,11 @@ const DEAD := &"dead"
 const ALERT_SCREAM := &"alert_scream"
 ## Idle variation, played at random intervals while IDLE holds. See _fidget_loop.
 const IDLE_FIDGET := &"idle_fidget"
+## Optional feet-stepping clips for a big turn on the spot. See `_maybe_turn_clip`
+## for when they play and the authoring contract.
+const TURN_LEFT := &"turn_l90"
+const TURN_RIGHT := &"turn_r90"
+const TURN_AROUND := &"turn_180"
 
 # When each boot lands during the run cycle, half a cycle apart. The run is
 # played at exactly 2 x FOOTSTEP_GAP a cycle (LOOP_TIME) with a contact on its
@@ -126,6 +131,7 @@ const ONE_SHOT_TIME := {
 	GRENADE: 37 / 12.0, INTERACT: 30 / 12.0,
 	HIT_REACT: 7 / 12.0, &"hit_react_low": 7 / 12.0,
 	DOWNED: 12 / 12.0, ALERT_SCREAM: 2.80,
+	TURN_LEFT: 0.5, TURN_RIGHT: 0.5, TURN_AROUND: 0.7,
 }
 
 ## Poses that cycle rather than play once and hold.
@@ -154,11 +160,11 @@ const VARIANT_LOOP_TIME := {
 	# third of his 4.5 m/s, so a third of the cadence keeps the feet planted.
 	&"civilian": {RUN: 3 * 2 * FOOTSTEP_GAP},
 	# The Mixamo zombie (tools/build_zombie_mixamo.py). Its run covers ~1.8 m a
-	# cycle, so 1.5 m/s is 1.2 s. The rest are its clips' own lengths, or close:
-	# the neck bite is 4.2 s authored, and every Fodder swing in a horde is played
-	# one after another, so it is sped up to 2 s rather than shown whole. Not
-	# loops, but `_duration` reads any pose from this table.
-	&"zombie": {RUN: 1.2, IDLE: 4.0, MELEE: 2.0, DOWNED: 3.0, ALERT_SCREAM: 2.8},
+	# cycle, played 1.5x fast: 0.8 s a cycle, so its move_speed (swarm_unit.tscn)
+	# is 2.25 m/s to keep the feet planted — change the two together. The rest
+	# are its clips' own lengths, or close: the neck bite plays whole at its
+	# authored 4.2 s. Not loops, but `_duration` reads any pose from this table.
+	&"zombie": {RUN: 0.8, IDLE: 4.0, MELEE: 4.2, DOWNED: 3.0, ALERT_SCREAM: 2.8},
 }
 
 ## Crossfade between poses, in seconds. Short: the game's actions are brisk and
@@ -172,10 +178,10 @@ const MODEL_DIR := "res://assets/models/"
 
 # --- Direction ---------------------------------------------------------------
 #
-# The model turns with the unit, so nothing here buckets facing any more. The
-# eight-way table survives because game rules still speak in it (Unit snaps to
-# 45 degrees; PlayerUnit.GRENADE_RELEASE_OFFSET counts buckets), and
-# tools/test_sprite_direction.gd pins the mapping.
+# Facing is continuous (Unit._yaw_toward) and the model shows it through the
+# free-turn layer below, so nothing here buckets facing. The eight-way table
+# survives only because PlayerUnit.GRENADE_RELEASE_OFFSET is written in
+# buckets, and tools/test_sprite_direction.gd pins the mapping.
 
 ## Screen-space directions, indexed by bucket, at the camera's start yaw.
 const DIRECTIONS: Array[StringName] = [
@@ -235,7 +241,16 @@ var loop_phase: float = 0.0
 ## Whether this unit gets the MIN_BRIGHTNESS darkness floor. Off for fixtures
 ## like the nest: the floor exists so a unit in the dark stays findable, and on
 ## something that sits in the room it just glows against the unlit deck around it.
+## Off for the Fodder too, by choice rather than as a fixture: on its pale skin the
+## glow is a flat grey cut-out, and a horde you lose in the dark is the point.
 @export var darkness_floor: bool = true
+
+## Whether the beam's character hotspot (`_build_hotspot`, energy 60 on
+## CHARACTER_LAYER) lights this unit. It is tuned to CLIP a character to full
+## brightness, which pops dark gear out of the beam but blows a pale skin out to
+## white, and the glow pass then blooms it into a gloss. Off, the unit is lit by
+## the base beam exactly as the floor and walls are.
+@export var takes_hotspot: bool = true
 
 ## Height of the placeholder figure, in metres — the old placeholder canvas.
 const PLACEHOLDER_HEIGHT := 1.92
@@ -378,6 +393,7 @@ func _build_model() -> void:
 	_muzzle = null
 	_flash = null
 	_mount = null
+	_aim_mod = null
 	_health_band = null
 	_band_glow = null
 	_down_pips.clear()
@@ -450,6 +466,7 @@ func _build_single(sidecar: Dictionary) -> bool:
 	_dress_surfaces(inst)
 	# After dressing, which would otherwise tint and outline the flash too.
 	_mount_flash()
+	_bind_aim(inst)
 	return true
 
 
@@ -556,7 +573,8 @@ func _dress_surfaces(root: Node) -> void:
 		if mesh.mesh == null or mesh == _muzzle or mesh == _health_band \
 				or mesh in _down_pips or mesh == _ammo_bar or mesh in _mag_pips:
 			continue
-		mesh.layers |= CHARACTER_LAYER
+		if takes_hotspot:
+			mesh.layers |= CHARACTER_LAYER
 		for s in mesh.mesh.get_surface_count():
 			var src := mesh.get_active_material(s) as BaseMaterial3D
 			if src == null:
@@ -623,6 +641,9 @@ func set_variant(new_variant: StringName) -> void:
 	# Freed NOW, not queued: WormUnit swaps in the same frame the first model was
 	# built, and a queued free of meshes the renderer has not yet drawn once
 	# leaves it reading their materials after they are gone.
+	# A fallen body's physics pose lives on the old skeleton; the new model
+	# rests in the authored corpse pose instead (`_stance` is already DEAD).
+	_drop_ragdoll()
 	remove_child(_model)
 	_model.free()
 	_model = null
@@ -725,9 +746,17 @@ func _build_hotspot() -> SpotLight3D:
 ## Which way the beam points right now, in world space — LightingManager aims
 ## its cone by this, so the tiles the rules light are the ones lit on screen.
 ## Unit facing where there is no light (headless, or a character without one).
+##
+## CORRECTED FOR THE TURN STILL IN FLIGHT. The body lags the aim on purpose (the
+## free-turn layer), so for a moment after every turn the gun, and the light on
+## it, still points where the unit used to look. The rules must not read that
+## lag: the light's own direction is turned on by however much of the turn the
+## model has yet to show, which is exactly where it will point once settled.
+## Settled, the correction is zero and this is the bare light, as it always was.
 func aim_direction() -> Vector3:
 	if _light and _light.is_inside_tree():
-		return -_light.global_transform.basis.z.normalized()
+		var beam := -_light.global_transform.basis.z.normalized()
+		return beam.rotated(Vector3.UP, _turn_pending())
 	return -global_transform.basis.z.normalized()
 
 
@@ -1018,6 +1047,7 @@ static func _bracket_color(hp_fraction: float) -> Color:
 ## this the model keeps whatever it showed when it went out of sight — which for
 ## a unit killed there is standing up rather than lying where it fell.
 func refresh() -> void:
+	snap_facing()
 	_play(_action if _action != &"" else _stance, true)
 
 
@@ -1219,8 +1249,14 @@ func _play_action(action: StringName) -> void:
 ## Makes DEAD the stance, where the model has it. One without keeps DOWNED's
 ## last frame — asking for DEAD there would fall through `_play` to IDLE and
 ## stand the body up.
+##
+## Either way the corpse pose becomes the STANCE, not just what is on screen:
+## `refresh` (a unit coming back into view, a tick playback handing the model
+## back) replays the stance, and one left at IDLE stood the body back up. A
+## model with no DEAD rests on DOWNED, which `_play` holds at its last frame.
 func _settle_dead() -> void:
 	if _resolved_base(DEAD) == &"":
+		_stance = DOWNED
 		return
 	_stance = DEAD
 	_play(DEAD)
@@ -1283,8 +1319,10 @@ func _play_burst(rounds: int) -> void:
 	_play(BEGIN_SHOOT if begin != &"" else AIM_HOLD, true)
 	await get_tree().create_timer(
 		_phase_time(BEGIN_SHOOT, begin, RAISE_TIME, COVER_RAISE_TIME)).timeout
+	await _hold_for_barrel()
 	# FIRE has no cover variant BY DESIGN: the unit has already stepped out, so
 	# it fires exactly as it does in the open.
+	_barrel_frozen = true
 	for _i in rounds:
 		# Restarted, so every round gets its own kick and its own flash.
 		_play(FIRE_SHOOT, true)
@@ -1292,6 +1330,7 @@ func _play_burst(rounds: int) -> void:
 			_flash.fire(BURST_CADENCE)
 		muzzle.emit()
 		await get_tree().create_timer(BURST_CADENCE).timeout
+	_barrel_frozen = false
 	_play(END_SHOOT if end != &"" else AIM_HOLD, true)
 	await get_tree().create_timer(
 		_phase_time(END_SHOOT, end, SETTLE_TIME, COVER_SETTLE_TIME)).timeout
@@ -1299,11 +1338,36 @@ func _play_burst(rounds: int) -> void:
 	_play(_stance)
 
 
+## Holds the first round until the barrel's line is on the target (see
+## `_aim_barrel`) AND the legs have finished turning, up to BARREL_HOLD_MAX.
+## The legs matter because the correction freezes for the rounds: legs still
+## coming round would carry the spine, and the frozen line, off the target.
+## Returns at once when no loop is running (no aim point, or a model without a
+## barrel or a spine to turn it with).
+func _hold_for_barrel() -> void:
+	var waited := 0.0
+	while waited < BARREL_HOLD_MAX and is_inside_tree() and not _instant() \
+			and _has_aim_point and can_twist() and _flash != null \
+			and (_barrel_error > BARREL_ON_TARGET or _body_turning):
+		await get_tree().process_frame
+		waited += get_process_delta_time()
+
+
 ## How long a burst phase holds: the cover length when a cover variant answered
 ## for it, the plain length otherwise.
 func _phase_time(base: StringName, resolved: StringName, plain: float,
 		in_cover: float) -> float:
 	return in_cover if resolved != &"" and resolved != base else plain
+
+
+## Where a shot is DRAWN leaving the weapon: the muzzle flash's mount on the
+## animated rifle, so a tracer starts at the flash. Falls back to
+## `muzzle_origin` for a model with no muzzle marker. Cosmetic only -- anything
+## that has to agree between peers or with LOS reads `muzzle_origin`.
+func barrel_tip() -> Vector3:
+	if _flash != null and _flash.is_inside_tree():
+		return _flash.global_position
+	return muzzle_origin()
 
 
 ## Where a shot leaves the weapon, in world space. Derived from the UNIT's yaw on
@@ -1318,7 +1382,9 @@ func muzzle_origin() -> Vector3:
 ## Drives every player from one call, which keeps a pile's instances in lockstep
 ## with each other (each at its own phase).
 func _play(base: StringName, restart: bool = false) -> void:
-	if _instant():
+	if _instant() or _ragdoll != null:
+		# A body on the deck in a physics pose shows nothing else until it is
+		# cleared (`clear_ragdoll`) — `refresh` would otherwise stand it back up.
 		return
 	# A pose the model has nothing for falls through to IDLE rather than being
 	# asked for as-is — otherwise a model missing `downed` would freeze in
@@ -1333,8 +1399,8 @@ func _play(base: StringName, restart: bool = false) -> void:
 	if _pose_root:
 		_pose_placeholder(pose)
 		return
-	if _model:
-		_model.rotation.y = deg_to_rad(_pose_yaw.get(pose, 0.0))
+	_pose_yaw_rad = deg_to_rad(_pose_yaw.get(pose, 0.0))
+	_apply_body()
 	var duration := _duration(pose)
 	# A round's kick restarts from its first frame with no blend — blending into
 	# itself would smear the recoil into nothing.
@@ -1347,8 +1413,469 @@ func _play(base: StringName, restart: bool = false) -> void:
 		var speed := length / duration if duration > 0.0 and length > 0.01 else 1.0
 		player.play(pose, blend, speed)
 		var phase := _phases[i] + (loop_phase if pose in LOOPING else 0.0)
-		if restart or phase != 0.0:
+		if effective == DOWNED and _action != DOWNED:
+			# DOWNED as a resting stance (`_settle_dead`), not the collapse: the
+			# body is already on the deck, so show it there rather than falling again.
+			player.seek(length, true)
+		elif restart or phase != 0.0:
 			player.seek(fposmod(phase, 1.0) * length, true)
+
+
+# --- Free turn --------------------------------------------------------------------
+#
+# How a turn looks. The RULES facing is the unit's yaw (plus, during tick
+# playback, this node's own local yaw), it can be any angle, and it is set
+# instantly; nothing here reads or writes it. What this section draws is three
+# layers chasing it, each on a critically damped spring (fast, no overshoot,
+# and happy to have its target change mid-turn, which a tween is not):
+#
+#   aim   the upper body's yaw. Chases the rules facing quickly.
+#   body  the legs' yaw, i.e. the whole model's. Holds still while the aim is
+#         within BODY_DEADZONE of it, then turns all the way onto the aim, so a
+#         small adjustment is a twist at the waist and a big one moves the feet.
+#   head  the eyes, a touch ahead of the aim (HEAD_LEAD_MAX).
+#
+# The difference between aim and body is the spine twist, applied by an
+# AimModifier on the model's skeleton. A rig with no spine to twist (a worm, the
+# placeholder) gets no deadzone: its body is its aim. Running, the deadzone is
+# off too, since legs that hold still while running are a moonwalk.
+#
+# `aim_direction` corrects the rules beam for whatever of the turn is still to
+# come, so none of this can move what is lit.
+
+## Spring stiffness per layer, 1/s. Roughly 4/omega seconds to settle.
+const AIM_OMEGA := 20.0
+const BODY_OMEGA := 9.0
+const HEAD_OMEGA := 32.0
+const PITCH_OMEGA := 14.0
+## How far the aim may lead the legs before the feet move: about 45 degrees.
+const BODY_DEADZONE := 0.785
+## Most the spine may twist, about 70 degrees. Past it the upper body waits on
+## the legs.
+const MAX_TWIST := 1.22
+## The legs' turn counts as done inside this, about 1.7 degrees.
+const BODY_SETTLE := 0.03
+## Most the head may lead the gun, about 35 degrees.
+const HEAD_LEAD_MAX := 0.6
+## Pitch limit onto a target above or below the muzzle, about 35 degrees.
+const MAX_PITCH := 0.6
+## The barrel loop (`_aim_barrel`): how fast it closes, 1/s, and the most yaw it
+## may add on top of the twist, about 45 degrees. The merc's shooting pose needs
+## about 28 of it.
+const BARREL_RATE := 18.0
+const MAX_BARREL_YAW := 0.8
+## Closer than this (metres, flat) the bore-to-target angle is meaningless.
+const BARREL_MIN_RANGE := 0.4
+## The first round waits, after the raise, until the bore is within
+## BARREL_ON_TARGET of the target line (about 0.1 degree), but never longer than
+## BARREL_HOLD_MAX seconds. Only a big turn onto the target ever waits: the legs
+## have not come round by the end of the raise.
+const BARREL_ON_TARGET := 0.002
+const BARREL_HOLD_MAX := 0.35
+## Seconds to blend the twist in or out across a pose change.
+const INFLUENCE_TIME := 0.15
+## A leg turn at least this big (about 70 degrees) plays a turn clip, if the
+## model has one.
+const TURN_CLIP_MIN := 1.22
+
+## Poses the body must face squarely in: authored motions aimed at something
+## (a swing, a throw, a console) and everything on the floor. The twist fades
+## out for these and the legs turn the whole way.
+const SQUARE_POSES: Array[StringName] = [
+	MELEE, GRENADE, INTERACT, DOWNED, DEAD, ALERT_SCREAM, RUN_STOP,
+]
+
+var _aim_mod: AimModifier = null
+## World yaws, radians, each kept within PI of the facing it chases.
+var _aim_yaw := 0.0
+var _body_yaw := 0.0
+var _head_yaw := 0.0
+var _aim_vel := 0.0
+var _body_vel := 0.0
+var _head_vel := 0.0
+var _pitch := 0.0
+var _pitch_vel := 0.0
+## Yaw the barrel loop adds on top of the twist, radians. See `_aim_barrel`.
+var _barrel_yaw := 0.0
+## How far the drawn bore was off the target line last frame, radians; 0 when
+## the loop is not running. `_play_burst` holds its first round on it.
+var _barrel_error := 0.0
+## True from a burst's first round to its last: the loop holds its correction.
+var _barrel_frozen := false
+## True while the legs are turning onto the aim, until BODY_SETTLE.
+var _body_turning := false
+## 0..1, how much of the twist is applied. Follows `_twist_target`.
+var _influence := 0.0
+## False until the springs have been put on the facing once; until then the
+## next frame snaps rather than swinging in from yaw 0.
+var _facing_ready := false
+## Where a burst is aimed, for the pitch. See set_aim_point.
+var _aim_point := Vector3.ZERO
+var _has_aim_point := false
+## The current pose's authored yaw correction (export sidecar), radians.
+var _pose_yaw_rad := 0.0
+var _turn_clip_playing := false
+
+
+## Hangs an AimModifier on the model's skeleton, if the rig has a spine it knows.
+func _bind_aim(inst: Node) -> void:
+	var skel: Skeleton3D = null
+	for n in inst.find_children("*", "Skeleton3D", true, false):
+		skel = n as Skeleton3D
+		break
+	if skel == null:
+		return
+	var mod := AimModifier.new()
+	mod.name = "AimModifier"
+	if not mod.bind(skel):
+		mod.free()
+		return
+	skel.add_child(mod)
+	_aim_mod = mod
+
+
+## Whether this model can show a twist at the waist at all.
+func can_twist() -> bool:
+	return _aim_mod != null and _aim_mod.supported()
+
+
+## Aims the upper body's pitch at `point` (world) for a burst. Cosmetic: the
+## shot itself comes from `muzzle_origin`.
+func set_aim_point(point: Vector3) -> void:
+	_aim_point = point
+	_has_aim_point = true
+
+
+func clear_aim_point() -> void:
+	_has_aim_point = false
+
+
+## Puts every layer straight onto the current facing, no swing. For a unit
+## that was not drawn (it just came into view, spawned, was teleported) and so
+## has no turn anyone saw begin.
+func snap_facing() -> void:
+	var yaw := _presented_yaw()
+	_aim_yaw = yaw
+	_body_yaw = yaw
+	_head_yaw = yaw
+	_aim_vel = 0.0
+	_body_vel = 0.0
+	_head_vel = 0.0
+	_pitch = 0.0
+	_pitch_vel = 0.0
+	_barrel_yaw = 0.0
+	_body_turning = false
+	_influence = 1.0 if _twist_target() > 0.0 else 0.0
+	_facing_ready = true
+	_apply_body()
+
+
+## The rules facing as this node shows it: the unit's yaw plus any local yaw
+## playback has put on this node. World yaw, -Z forward.
+func _presented_yaw() -> float:
+	if not is_inside_tree():
+		return rotation.y + (_unit.rotation.y if _unit else 0.0)
+	var back := global_transform.basis.z
+	return atan2(back.x, back.z)
+
+
+## Turns the model by the legs' lag behind the facing (plus the pose's authored
+## correction). `_model` is this node's child, so its local yaw is the gap.
+func _apply_body() -> void:
+	if _model == null or _ragdoll != null:
+		return
+	_model.rotation.y = _pose_yaw_rad + wrapf(_body_yaw - _presented_yaw(), -PI, PI)
+
+
+## The twist the modifier is actually applying, radians.
+func _applied_twist() -> float:
+	if not can_twist():
+		return 0.0
+	return clampf(wrapf(_aim_yaw - _body_yaw, -PI, PI), -MAX_TWIST, MAX_TWIST) * _influence
+
+
+## How much of the current turn the model has yet to show, radians. Measured
+## against what is DRAWN, never against the springs' own state:
+##   * the model's yaw is read off `_model` itself, because a rules turn moves
+##     the model with its parent at once, before `_process` next corrects it,
+##     and the lighting recompute that follows a turn runs in that gap;
+##   * the twist is the one the modifier last APPLIED, since the skeleton runs
+##     its modifiers later in the frame than `_process` sets them.
+func _turn_pending() -> float:
+	if not _facing_ready or _model == null:
+		return 0.0
+	var shown := _aim_mod.applied_twist if _aim_mod and _aim_mod.active else 0.0
+	return -wrapf(_model.rotation.y - _pose_yaw_rad + shown, -PI, PI)
+
+
+## 1 where the current pose may twist, 0 where it must face squarely.
+func _twist_target() -> float:
+	if not can_twist():
+		return 0.0
+	var pose := _action if _action != &"" else _stance
+	return 0.0 if pose in SQUARE_POSES else 1.0
+
+
+func _moving() -> bool:
+	return _action == &"" and (_stance == RUN or _stance == WALK)
+
+
+func _process(delta: float) -> void:
+	if _model == null or _ragdoll != null:
+		return
+	if _instant() or not _facing_ready:
+		snap_facing()
+		return
+	var facing := _presented_yaw()
+	var a := _spring_angle(_aim_yaw, _aim_vel, facing, AIM_OMEGA, delta)
+	_aim_yaw = a.x
+	_aim_vel = a.y
+	var h := _spring_angle(_head_yaw, _head_vel, facing, HEAD_OMEGA, delta)
+	_head_yaw = h.x
+	_head_vel = h.y
+	_influence = move_toward(_influence, _twist_target(), delta / INFLUENCE_TIME)
+
+	# Legs. The deadzone shrinks with the twist it relies on, so a pose that
+	# must face squarely brings the feet the whole way round.
+	var deadzone := 0.0 if _moving() else BODY_DEADZONE * _influence
+	var gap := wrapf(_aim_yaw - _body_yaw, -PI, PI)
+	if not _body_turning and absf(gap) > deadzone + 0.001:
+		_body_turning = true
+		_maybe_turn_clip(wrapf(facing - _body_yaw, -PI, PI))
+	if _body_turning:
+		var b := _spring_angle(_body_yaw, _body_vel, _aim_yaw, BODY_OMEGA, delta)
+		_body_yaw = b.x
+		_body_vel = b.y
+		if absf(wrapf(_aim_yaw - _body_yaw, -PI, PI)) < BODY_SETTLE \
+				and absf(wrapf(facing - _aim_yaw, -PI, PI)) < BODY_SETTLE:
+			_body_turning = false
+			_body_vel = 0.0
+	else:
+		_body_vel = 0.0
+	_apply_body()
+
+	_aim_barrel(delta)
+
+	if _aim_mod:
+		var twist := _applied_twist() + _barrel_yaw * _influence
+		_aim_mod.twist = twist
+		_aim_mod.aim_world_yaw = _body_yaw + twist
+		_aim_mod.pitch = _pitch * _influence
+		_aim_mod.head_lead = clampf(wrapf(_head_yaw - _aim_yaw, -PI, PI),
+			-HEAD_LEAD_MAX, HEAD_LEAD_MAX) * _influence
+
+
+## Puts the BARREL'S LINE through the aim point while one is set (a burst).
+##
+## Facing the target is not enough: the shooting clips hold the rifle at the
+## right shoulder and well off the body's forward (about 28 degrees on the merc),
+## so a body squared up to the target fires a line that passes metres wide of
+## it. No fixed offset can fix that, because the raise, the kick and the cover
+## variants each hold the gun differently. So this is a closed loop on what is
+## DRAWN: every frame it measures the bore's yaw and pitch against the line from
+## the barrel tip to the target and feeds the difference into the twist, which
+## turns tip and bore together about the spine until the line runs through.
+##
+## FROZEN WHILE THE ROUNDS GO OUT (`_barrel_frozen`, set by `_play_burst`). Left
+## running, the loop fights each round's kick and settles on the AVERAGE of the
+## kick cycle, so every round leaves from the un-kicked pose low by the mean
+## kick. Converged during the raise and held, the rounds leave on the line and
+## the recoil plays on top of it, as recoil should.
+##
+## Cosmetic only. The shot resolves from `muzzle_origin`, and `aim_direction`
+## takes the twist back out (`_turn_pending` subtracts whatever is shown), so the
+## rules beam stays on the unit's facing.
+##
+## A model with no barrel marker gets the plain pitch toward the aim point from
+## shoulder height instead. Without an aim point both terms ease back to zero.
+func _aim_barrel(delta: float) -> void:
+	var barrel_ok := _has_aim_point and can_twist() and _flash != null and _flash.is_inside_tree() \
+		and _influence > 0.99
+	_barrel_error = 0.0
+	if barrel_ok:
+		var tip := _flash.global_position
+		var bore := (-_flash.global_transform.basis.z).normalized()
+		var to := _aim_point - tip
+		if Vector2(to.x, to.z).length() > BARREL_MIN_RANGE and absf(bore.y) < 0.95:
+			var gain := 1.0 - exp(-BARREL_RATE * delta)
+			var yaw_err := wrapf(atan2(-to.x, -to.z) - atan2(-bore.x, -bore.z), -PI, PI)
+			var pitch_err := _elevation(to) - _elevation(bore)
+			_barrel_error = Vector2(yaw_err, pitch_err).length()
+			if _barrel_frozen:
+				return  # rounds going out: hold the aim, let the kick show on top
+			_barrel_yaw = clampf(_barrel_yaw + yaw_err * gain, -MAX_BARREL_YAW, MAX_BARREL_YAW)
+			_pitch = clampf(_pitch + pitch_err * gain, -MAX_PITCH, MAX_PITCH)
+			_pitch_vel = 0.0
+		return
+	var target_pitch := 0.0
+	if _has_aim_point:
+		var d := _aim_point - (global_position + Vector3(0.0, MUZZLE_HEIGHT, 0.0))
+		var flat := Vector2(d.x, d.z).length()
+		if flat > 0.01:
+			target_pitch = clampf(atan2(d.y, flat), -MAX_PITCH, MAX_PITCH)
+	var p := _spring(_pitch, _pitch_vel, target_pitch, PITCH_OMEGA, delta)
+	_pitch = p.x
+	_pitch_vel = p.y
+	_barrel_yaw *= exp(-PITCH_OMEGA * delta)
+
+
+static func _elevation(d: Vector3) -> float:
+	return atan2(d.y, Vector2(d.x, d.z).length())
+
+
+## A turn of the legs big enough to need the feet to step. Plays TURN_LEFT,
+## TURN_RIGHT or TURN_AROUND over the spring's rotation, where the model has
+## one, as a decoration like the fidget: `_action` stays empty so nothing waits
+## on it and any real pose cuts it off.
+##
+## AUTHORING CONTRACT: the clip steps the feet IN PLACE with no net rotation of
+## the rig. The spring supplies the rotation; a clip that also turned the hips
+## would turn the unit twice.
+func _maybe_turn_clip(turn: float) -> void:
+	if absf(turn) < TURN_CLIP_MIN or _turn_clip_playing or _moving() or _action != &"" \
+			or not _authored or _instant():
+		return
+	var clip := TURN_AROUND if absf(turn) > 2.36 else (TURN_LEFT if turn > 0.0 else TURN_RIGHT)
+	if not _has_any(clip):
+		return
+	_turn_clip_playing = true
+	var stance := _stance
+	_play(clip, true)
+	await get_tree().create_timer(_duration(_resolved_base(clip))).timeout
+	_turn_clip_playing = false
+	if is_inside_tree() and _action == &"" and _stance == stance and _ragdoll == null:
+		_play(_stance)
+
+
+## One step of a critically damped spring from `x` (velocity `v`) toward
+## `target`: the closed form, so it is stable at any frame time. -> (x, v).
+static func _spring(x: float, v: float, target: float, omega: float, dt: float) -> Vector2:
+	var e := x - target
+	var k := exp(-omega * dt)
+	var t := (v + omega * e) * dt
+	return Vector2(target + (e + t) * k, (v - omega * t) * k)
+
+
+## `_spring` for an angle: the short way round, and the result kept within PI
+## of the target so the error never grows without bound.
+static func _spring_angle(x: float, v: float, target: float, omega: float, dt: float) -> Vector2:
+	return _spring(target + wrapf(x - target, -PI, PI), v, target, omega, dt)
+
+
+# --- Ragdoll --------------------------------------------------------------------
+#
+# A unit that drops in view goes down as physics (Ragdoll): the round that
+# dropped it decides which way. Visual only — see Ragdoll's class comment. A rig
+# Ragdoll does not know, an unseen collapse, or too many falls at once take the
+# authored DOWNED animation instead, exactly as before.
+
+
+## Off switch: false puts every unit back on the authored collapse.
+const RAGDOLL_ENABLED := true
+
+var _ragdoll: Ragdoll = null
+
+
+## The collapse — downed, or killed outright. `hit` is Unit.hit_record(). Not a
+## coroutine and not mirrored: every peer runs it from the replicated
+## `life_state` (Unit._present_life_state), with the replicated hit.
+func collapse(hit: Dictionary) -> void:
+	# Already falling: the burst that dropped it started the fall on the round
+	# that did it (`take_round`), before the damage was applied.
+	if _ragdoll != null:
+		return
+	if _start_ragdoll(hit):
+		return
+	play_action(DOWNED)
+
+
+## One round of a burst striking this unit (Unit._on_muzzle), on every peer.
+## Visual only. `doomed` is the shot that drops it: its first landing round
+## starts the fall, so the body goes down WITH the gunfire rather than after
+## the burst; every round after that jolts the falling body. A round into a
+## unit that stays up changes nothing here — it flinches after the burst, as
+## before. `part` is Combat.BodyPart for the round that was rolled, or -1.
+func take_round(from: Vector3, doomed: bool, part: int) -> void:
+	if _ragdoll != null:
+		if is_instance_valid(_ragdoll) and _ragdoll.is_simulating():
+			_ragdoll.add_round(from, part)
+		return
+	if not doomed:
+		return
+	if _start_ragdoll({"kind": Ragdoll.HitKind.BULLET, "from": from,
+			"part": part if part >= 0 else Combat.BodyPart.TORSO, "seed": _round_rng.randi()}):
+		# The light goes out with the soldier the moment it falls, not when the
+		# burst's damage lands half a second later (Unit._present_life_state).
+		_set_flashlight_enabled(false)
+
+
+## Never the global generator: the burst plays mid-`fire_at`, and seeded runs
+## replay the global sequence.
+static var _round_rng := RandomNumberGenerator.new()
+
+
+## Undoes a fall's physics pose (a revive, a playback rewind). The caller sets
+## the stance that follows.
+func clear_ragdoll() -> void:
+	if _ragdoll == null:
+		return
+	if is_instance_valid(_ragdoll):
+		_ragdoll.clear()
+	_ragdoll = null
+	_current = &""
+	if _aim_mod:
+		_aim_mod.active = true
+	snap_facing()
+
+
+func is_ragdolled() -> bool:
+	return _ragdoll != null
+
+
+func _start_ragdoll(hit: Dictionary) -> bool:
+	# `_has_any(DOWNED)`: the ragdoll REPLACES an authored collapse. A model with
+	# none (the nest shares the soldier's skeleton but never falls) keeps doing
+	# what it always did.
+	if not RAGDOLL_ENABLED or _ragdoll != null or _model == null or not _authored \
+			or not _has_any(DOWNED) or _instant() or Ragdoll.active_count >= Ragdoll.MAX_ACTIVE:
+		return false
+	var skel: Skeleton3D = null
+	for n in _model.find_children("*", "Skeleton3D", true, false):
+		skel = n as Skeleton3D
+		break
+	if not Ragdoll.supports(skel):
+		return false
+	for player in _players:
+		player.pause()
+	# The body is physics from here: no twist on top of it, and `_process` stops
+	# turning the model under it.
+	if _aim_mod:
+		_aim_mod.active = false
+	_action = &""
+	_ragdoll = Ragdoll.new()
+	_ragdoll.name = "Ragdoll"
+	add_child(_ragdoll)
+	# The corpse stance, for whatever comes after the ragdoll (a model rebuild
+	# drops it). `_play` is gated by now, so this only records it.
+	_settle_dead()
+	var floor_y := _unit.global_position.y if _unit else global_position.y
+	_ragdoll.start(skel, hit, floor_y, _mount, _model)
+	return true
+
+
+## Frees a ragdoll outright, gun and all, with no restore — the model it posed
+## is about to be freed too (`set_variant`).
+func _drop_ragdoll() -> void:
+	if _ragdoll != null and is_instance_valid(_ragdoll):
+		_ragdoll.free()
+	_ragdoll = null
+
+
+## How long the authored collapse runs, which is what playback paces a fall on.
+func _collapse_time() -> float:
+	var resolved := _resolved_base(DOWNED)
+	return _duration(resolved) if resolved != &"" and _authored \
+		else FALLBACK_TIME.get(DOWNED, DEFAULT_FALLBACK_TIME)
 
 
 # --- Tick playback (exploration plan B.12) --------------------------------------
@@ -1384,6 +1911,7 @@ func play_hit_react_local() -> void:
 func replay_reset(was_active: bool) -> void:
 	set_dead_tint(false)
 	if was_active:
+		clear_ragdoll()
 		_action = &""
 		_stance = IDLE
 		_play(IDLE, true)
@@ -1392,9 +1920,16 @@ func replay_reset(was_active: bool) -> void:
 ## The collapse at its slot: down if it was standing, and the corpse tint if this
 ## was a death. Coroutine.
 func replay_down(was_active: bool, dead: bool) -> void:
-	if was_active:
+	if was_active and _ragdoll != null:
+		pass  # the burst's own rounds already dropped it (`take_round`)
+	elif was_active:
 		_set_flashlight_enabled(false)
-		await _play_action(DOWNED)
+		if _start_ragdoll(_unit.hit_record() if _unit and _unit.has_method("hit_record") else {}):
+			# Playback is paced on the collapse; the fall takes as long as the
+			# authored one would have, and carries on settling after.
+			await get_tree().create_timer(_collapse_time()).timeout
+		else:
+			await _play_action(DOWNED)
 	if dead:
 		set_dead_tint(true)
 

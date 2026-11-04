@@ -72,34 +72,16 @@ static func ranged(display_name: String) -> UnitStats:
 ## mechanically: can_shoot() is false forever. Lowest initiative on the board, so
 ## a swarm generally acts after the squad has already had its say.
 ##
-## FITNESS 10 IS THE SHAMBLE, and it is the whole of what replaced the deleted
-## two-speed movement override. A 6 AP pool against a 5 AP claw means it closes OR
-## swings in an activation and never both — so the player still gets
-## one turn of warning between "that thing is near" and "that thing is on me",
-## which is the property the old lunge latch existed to guarantee. Raising this
-## number is how that warning gets deleted by accident; test_swarm_pace.gd is
-## there to make the attempt fail loudly.
+## FITNESS 10 IS THE SHAMBLE: a 6 AP pool. The claw is priced flat by
+## SwarmUnit.CLAW_AP_COST (3 AP), so it can walk up to 3 tiles and still swing.
+## test_swarm_pace.gd checks that relationship.
 static func swarm(display_name: String) -> UnitStats:
 	var stats := UnitStats.new()
 	stats.display_name = display_name
 	stats.perception = randi_range(25, 40)
-	# FIXED, where the other three roll, and it changed meaning enough to be worth
-	# saying why. Reflexes used to be near-decorative on a swarm — it has no gun,
-	# and melee accuracy is Perception (Sec 11.4) — so a 15-30 roll cost nothing.
-	# It now sets the price of the claw, and across that old range the price came
-	# out 3 AP or 4 depending on the roll: some swarms could step a tile and swing,
-	# others could only do one or the other. That is the tier's signature action
-	# behaving differently between two identical-looking creatures, so it is
-	# authored now.
-	# 40, re-pinned when K_REFLEXES dropped to 0.03. This number is not a
-	# characterisation, it is a DIAL SET TO BUY A PRICE: the claw has to come out
-	# at 5 AP against the 6 AP pool, because that is what leaves one-step-then-
-	# swing affordable and two-steps-then-swing not. At the old 0.04 discount, 28
-	# bought that; at 0.03 it buys a 6 AP claw — the whole pool — and a swarm that
-	# has to stand still to swing cannot shamble into contact at all.
-	#
-	# So: if K_REFLEXES or the melee base ever moves again, this moves with it, and
-	# tools/test_swarm_pace.gd is what says so out loud.
+	# Fixed rather than rolled. It no longer prices the claw (SwarmUnit overrides
+	# the melee cost with a flat CLAW_AP_COST); it only feeds the other
+	# Reflexes-discounted actions, none of which a swarm takes.
 	stats.reflexes = 40
 	stats.fitness = 10
 	stats.luck = 15
@@ -149,9 +131,9 @@ static func hunter(display_name: String) -> UnitStats:
 
 
 ## The horde's anchor: one per group, the body that holds the line while the
-## regulars wrap around. The swarm's block with HP and claw moved and nothing
-## else — same Reflexes 40, so the same 5 AP claw against the same 6 AP pool, and
-## the close-OR-swing warning survives (test_swarm_pace.gd checks it does).
+## regulars wrap around. The swarm's block with HP and claw damage moved and
+## nothing else — the same 3 AP claw against the same 6 AP pool
+## (test_swarm_pace.gd checks it).
 ##
 ## 18-22 HP is three or four rifle hits, against a regular's one or two. Claw 5
 ## is a rifle round's worth: of the bodies in contact, this is the one to kill

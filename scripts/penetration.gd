@@ -108,8 +108,10 @@ static func resolve(shooter: Unit, target: Unit, action: Combat.ShotAction, body
 			# An empty tile's edge behind the target: chipped by what is left of
 			# the round, and paid for if it is light. Heavy is where it ends.
 			var cover: Array = entry["cover"]
-			GridManager.damage_cover_edge(entry["tile"], cover[1],
-				roundi(shooter.stats.weapon_damage * scale))
+			# Spared when it is the shooter's own cover too (Combat.resolve_shot).
+			if not GridManager.shares_cover_edge(entry["tile"], cover[1], shooter.grid_pos):
+				GridManager.damage_cover_edge(entry["tile"], cover[1],
+					roundi(shooter.stats.weapon_damage * scale))
 			if cover[0] == MapData.Cover.HEAVY or pen < PEN_PER_BODY:
 				break
 			pen -= PEN_PER_BODY

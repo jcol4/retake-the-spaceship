@@ -668,10 +668,20 @@ func _rpc_show_state(new_state: AlertState) -> void:
 	state_changed.emit(self)
 
 
+## Grey, matching the HUD's label over a dead soldier.
+const BODY_TAG_COLOR := Color(0.65, 0.65, 0.68)
+
+
 func _refresh_label() -> void:
 	# The player's only read on any of this, so it has to survive being glanced
 	# at from XCOM camera distance: a colour and one character.
 	if _name_label == null:
+		return
+	# A body's tag only ever shows under the J key's debug ALL mode (NameTags).
+	if life_state != LifeState.ACTIVE:
+		_name_label.text = "%s — %s" % [stats.display_name,
+			"DEAD" if life_state == LifeState.DEAD else "DOWNED"]
+		_name_label.modulate = BODY_TAG_COLOR
 		return
 	_name_label.text = stats.display_name + STATE_GLYPH[alert_state]
 	_name_label.modulate = STATE_COLOR[alert_state]

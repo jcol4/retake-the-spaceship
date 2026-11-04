@@ -118,6 +118,50 @@ GUNS = {
 ## names the gun the .blend previews, and becomes the sidecar's default.
 MOUNT = "weapon_mount"
 
+## THE FREE-TURN BONE CONTRACT (scripts/aim_modifier.gd PROFILES). The game twists
+## the spine toward the aim and carries the gun by the trigger hand's motion, so
+## it finds these bones by name. Both lists must match a PROFILES entry there.
+##
+##   twist -- the spine, hips to chest. Everything that holds the gun (both
+##            arms and both hands) must hang below the LAST of them.
+##   head  -- the eyes' lead on the gun. Optional.
+##   hand  -- the trigger hand, which the gun moves with.
+##   weapon-- the bone weapon_mount rides. Required only on a gun carrier.
+##
+## An armed character missing any required bone fails the export: it would aim
+## with its hips while its gun pointed somewhere else. An unarmed one only warns,
+## since it just turns without a twist.
+AIM_RIGS = [
+    {"twist": ["spine_1", "chest"], "head": ["neck", "head"], "hand": "hand.R", "weapon": "weapon"},
+    {"twist": ["Spine", "Spine1", "Spine2"], "head": ["Neck", "Head"], "hand": "RightHand", "weapon": None},
+]
+
+
+def _has_bone(names, wanted):
+    return any(n == wanted or n.endswith("_" + wanted) or n.endswith(":" + wanted) for n in names)
+
+
+def check_aim_rig(variant, character, armed):
+    """Exits on an armed rig the game cannot aim; warns on an unarmed one."""
+    if character.type != "ARMATURE":
+        return
+    names = [b.name for b in character.data.bones]
+    for rig in AIM_RIGS:
+        required = rig["twist"] + [rig["hand"]] + ([rig["weapon"]] if armed and rig["weapon"] else [])
+        if all(_has_bone(names, b) for b in rig["twist"]):
+            missing = [b for b in required if not _has_bone(names, b)]
+            if armed and (missing or rig["weapon"] is None):
+                sys.exit("[export_models] %s carries a gun but its rig lacks %s (see AIM_RIGS)"
+                         % (variant, missing or ["a weapon bone"]))
+            if missing:
+                print("[export_models] warning: %s lacks %s; it will turn without a twist"
+                      % (variant, missing))
+            return
+    if armed:
+        sys.exit("[export_models] %s carries a gun but matches no AIM_RIGS spine" % variant)
+    print("[export_models] note: %s matches no AIM_RIGS spine; it turns without a twist" % variant)
+
+
 ## Blender (x, y, z) -> Godot (x, z, -y): the axis swap the glTF exporter
 ## applies with +Y up. Used to hand pile transforms to the game in its own axes.
 TO_GODOT = Matrix(((1, 0, 0, 0), (0, 0, 1, 0), (0, -1, 0, 0), (0, 0, 0, 1)))
@@ -228,6 +272,7 @@ def export_model(variant, out_dir):
     # The preview gun is HIDDEN, not deleted: the left hand's IK targets its
     # grip_support, and the export bakes that IK into the arm.
     mount = bpy.data.objects.get(MOUNT)
+    check_aim_rig(variant, character, mount is not None)
     gun = None
     if mount is not None:
         gun = mount.get("gun")

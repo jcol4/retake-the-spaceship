@@ -12,15 +12,18 @@ extends EnemyUnit
 ## (rework doc Sec 4.1). Pace now comes from the AP POOL, hand-set per type
 ## (Sec 4.5) — see `main.gd._swarm_stats` for the Fitness value that buys it.
 ##
-## What that costs, stated plainly rather than hidden: Sec 11.4's lunge is gone
-## as a behaviour, and with it the burst of speed that made a shambler in contact
-## range read as a different creature. What SURVIVES is the property the lunge's
-## latch existed to protect — the player's one turn of warning. A swarm's pool
-## and its melee cost are sized so it can close OR swing in an activation but
-## never both, so "that thing is near" and "that thing is on me" are still two
-## separate turns. Re-adding a burst is a deliberate design decision (it would be
-## an AP grant or a move-cost discount now, not a tiles-per-AP override), not
-## something to restore by reflex.
+## MOVE-THEN-CLAW (2026-11-03). The old close-OR-swing rule (a 5 AP claw against
+## a 6 AP pool, so only a one-tile step could precede a swing) is retired: the
+## claw is a flat CLAW_AP_COST, cheap enough that a shambler can walk a few tiles
+## and still land a blow on the same activation. The player's warning now comes
+## from the swarm's short reach (pool minus claw), not from a dead turn.
+
+
+## The claw's price, flat rather than read off Reflexes so it does not drift
+## when K_REFLEXES or the melee base moves. Against the swarm's 6 AP pool this is
+## up to 3 tiles then a claw, or two claws when already in contact.
+## WormUnit overrides action_cost with its own rule and is unaffected.
+const CLAW_AP_COST := 3
 
 
 ## The horde this body was spawned in (main.gd `_spawn_hordes`, NestUnit's
@@ -68,6 +71,12 @@ func _vary_body() -> void:
 ## Fodder, and the brawler and worm that extend it.
 func draws_last() -> bool:
 	return true
+
+
+func action_cost(action: UnitStats.Action) -> int:
+	if action == UnitStats.Action.MELEE:
+		return CLAW_AP_COST
+	return super(action)
 
 
 ## A horde wakes together. Room-scoped propagation (EnemyUnit._propagate_alert)

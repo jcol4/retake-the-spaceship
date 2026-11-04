@@ -51,6 +51,8 @@ const BURST_MAX := 6
 # burst; the rest converge. On a miss every round misses. Kept below BURST_MIN
 # so a hit always lands visibly more rounds on target than it throws away.
 const BURST_STRAY_MAX := 2
+# One round in this many draws a tracer (VfxManager), starting with the first.
+const TRACER_EVERY := 2
 
 @export var stats: UnitStats
 
@@ -399,11 +401,20 @@ var _pending_target: Unit = null
 # result. Decided up front so the pattern is fixed before the first round.
 var _burst_round: int = 0
 var _burst_strays: Array[int] = []
+## Whether the armed burst kills (or downs) its target, and where its first
+## landing round strikes — so the body drops on the round that does it
+## (UnitVisual.take_round) rather than after the whole burst. Presentation
+## only; set by `fire_at` on the host, carried to clients with the burst.
+var _burst_doomed := false
+var _burst_part: int = -1
 ## Corner peeking (GDD §6.1.2) is cosmetic: the shot resolves from the unit's own
 ## tile, and only the model slides this far toward the lean tile to fire, over
 ## LEAN_SECONDS each way.
 const LEAN_DISTANCE := 0.55
 const LEAN_SECONDS := 0.15
+## Height above a target's feet a shooter's upper body pitches onto, metres.
+## Cosmetic (UnitVisual.set_aim_point): hit rolls never read it.
+const AIM_CHEST_HEIGHT := 1.2
 ## The offset the lean currently adds to `visual.position`. Applied RELATIVE to
 ## wherever the visual is, because tick playback owns that position while a
 ## timeline plays (it walks the model along the recorded path), and the two must
@@ -444,9 +455,47 @@ func set_rendered(rendered: bool) -> void:
 	if _display_mode:
 		return  # playback owns the sprite until it ends (end_display)
 	visual.visible = rendered
+	_sync_label()
 	# After `_rendered` is set, so the visual is no longer instant and plays.
 	if rendered:
 		visual.refresh()
+
+
+## The name tag follows the model. It is drawn by PixelView's text camera rather
+## than as part of the Visual, so hiding the model left it up: every unit fog of
+## war kept off the screen still announced itself by name, which a horde turns
+## into a room of labels with no bodies under them. A downed body has none.
+##
+## The J key's NameTags mode bends that: ALL shows every tag, including fogged
+## units and enemy bodies (but not this side's bodies, which already have the
+## HUD's body label), and NONE keeps only this side's own soldiers.
+func _sync_label() -> void:
+	if _name_label == null:
+		return
+	var shown := _tag_normally_shown()
+	match NameTags.mode:
+		NameTags.Mode.ALL:
+			shown = life_state == LifeState.ACTIVE or not _has_body_label()
+		NameTags.Mode.NONE:
+			shown = shown and is_in_group("player_units")
+	_name_label.visible = shown
+
+
+## Whether the tag shows under the game's own rules (NameTags NORMAL).
+func _tag_normally_shown() -> bool:
+	return visual.visible and life_state == LifeState.ACTIVE
+
+
+## Whether the HUD draws this unit's downed or dead body label. Those bodies keep
+## their name tag hidden in every mode, so a tag never doubles up on the HUD's label.
+func _has_body_label() -> bool:
+	return is_in_group("player_units") or is_in_group(VipUnit.GROUP)
+
+
+## Rewrites the name tag's text for the current state. Subclasses with a live
+## readout (alert glyph, HP) override it. Called on every life-state change.
+func _refresh_label() -> void:
+	pass
 
 
 ## Re-asks the map whether this unit is drawn, for the step from `grid_pos` onto
@@ -476,6 +525,7 @@ func set_display_visible(on: bool) -> void:
 		return
 	_display_visible = on
 	visual.visible = on
+	_sync_label()
 	if on:
 		visual.refresh()
 
@@ -487,6 +537,7 @@ func end_display() -> void:
 	_lean_applied = Vector3.ZERO
 	visual.rotation = Vector3.ZERO
 	visual.visible = _rendered
+	_sync_label()
 	if _rendered:
 		visual.refresh()
 
@@ -517,9 +568,11 @@ func _ready() -> void:
 	_name_label = get_node_or_null("NameLabel")
 	if _name_label:
 		_name_label.text = stats.display_name
+		_sync_label()  # a unit spawned mid-mission picks up the J key's mode
 	sync_gun_model()
 	visual.setup()
 	visual.muzzle.connect(_on_muzzle)
+	visual.footstep.connect(_on_footstep)
 	GridManager.cover_destroyed.connect(_on_cover_destroyed)
 	refresh_cover_pose()  # a unit may spawn already in cover
 	visual.set_flashlight_enabled(has_flashlight and flashlight_on)
@@ -569,7 +622,8 @@ func _setup_replication() -> void:
 			"ammo", "reserve", "reserve_mags", "hunkered", "on_overwatch", "flashlight_on",
 			"downed_hp", "down_count", "carrying_path", "carried_by_path",
 			"stowed_ammo", "stowed_reserve", "stowed_reserve_mags",
-			"inventory_codes", "sidearm_selected"]:
+			"inventory_codes", "sidearm_selected",
+			"hit_kind", "hit_from", "hit_part", "hit_seed"]:
 		var path := NodePath(".:%s" % prop)
 		config.add_property(path)
 		config.property_set_replication_mode(path, SceneReplicationConfig.REPLICATION_MODE_ALWAYS)
@@ -956,31 +1010,31 @@ func _step_to(target: Vector3, speed: float) -> void:
 	await tween.finished
 
 
-## Adds the turn toward `target` to a parallel movement tween, `seconds` long.
-##
-## Both guards are about that parallel: `finished` waits for the LONGEST branch,
-## so a fixed 0.09s turn would hold up any leg shorter than that.
-func _tween_yaw(tween: Tween, target: Vector3, seconds: float) -> void:
+## Faces the leg toward `target` as it starts. INSTANT: the facing is rules
+## state (the beam), and UnitVisual's free-turn springs draw the turn itself,
+## so a tween here would only smooth something already smoothed. The tween and
+## seconds are kept so the call sites read as before.
+func _tween_yaw(_tween: Tween, target: Vector3, _seconds: float) -> void:
 	var yaw := _yaw_toward(target)
 	if is_nan(yaw) or absf(yaw - rotation.y) < 0.001:
 		return  # already facing it: every leg of a straight path
-	tween.tween_property(self, "rotation:y", yaw, minf(TURN_TIME, seconds))
+	rotation.y = yaw
 
 
 func _yaw_toward(world_pos: Vector3) -> float:
 	# Godot forward is -Z. Returns the short way round rather than unwinding
 	# through a full turn, or NAN when the point is directly underfoot.
 	#
-	# QUANTISED to the eight grid directions, and that is a hard requirement
-	# rather than a tidiness one: a character is drawn in eight directions
-	# (UnitVisual.DIRECTIONS), so a unit holding a yaw between two of them has no
-	# art to show and the sprite layer hides itself. Movement already produces
-	# quantised yaws — GridManager.STEPS sees to that — but `face_toward` is
-	# driven by a raw mouse click, and that is the case this catches.
+	# CONTINUOUS. This used to snap to the eight grid directions because a
+	# prerendered sprite had no art between them; the 3D model turns to any yaw,
+	# so a unit now looks exactly at what it faces. Movement still produces
+	# eight-way yaws on its own (GridManager.STEPS), and nothing downstream needs
+	# a quantised one: the flashlight cone is a dot product, and cover selection
+	# (`_best_cover_side`) holds its side across the diagonal with hysteresis.
 	var delta := world_pos - global_position
 	if absf(delta.x) <= 0.001 and absf(delta.z) <= 0.001:
 		return NAN
-	var target := snappedf(atan2(-delta.x, -delta.z), PI / 4.0)
+	var target := atan2(-delta.x, -delta.z)
 	return rotation.y + wrapf(target - rotation.y, -PI, PI)
 
 
@@ -992,13 +1046,13 @@ func face_toward(world_pos: Vector3) -> void:
 	if is_nan(yaw):
 		return
 	_record(ExplorationRules.EV_TURN, {"from_yaw": rotation.y, "yaw": yaw})
-	if is_instant():
-		rotation.y = yaw
-	else:
+	# Set at once, then held for the turn's old length so pacing is unchanged.
+	# The model shows the turn on its own springs (UnitVisual free turn), and
+	# its `aim_direction` already answers with the settled beam.
+	rotation.y = yaw
+	if not is_instant():
 		is_busy = true
-		var tween := create_tween()
-		tween.tween_property(self, "rotation:y", yaw, TURN_TIME * 2.0)
-		await tween.finished
+		await get_tree().create_timer(TURN_TIME * 2.0).timeout
 		is_busy = false
 	# Which cover a unit is using follows from where it looks (MIN_FACING_DOT), so
 	# a turn in place can put it into cover or take it out of one without it
@@ -1062,23 +1116,42 @@ const COVER_FAMILY := {
 ## unit hugs cover only where its own facing already points out over it, and a
 ## soldier standing beside a crate looking down the wall stays posed plain.
 ##
-## 0.7: facing is quantised to eight directions and cover sides are the four
-## cardinals, so the reachable dot products are 0, ±0.707 and ±1. This admits the
-## cardinal itself and the two diagonals either side of it, and nothing else.
+## 0.7 is about 45.6 degrees either side of the covered cardinal, so the
+## diagonals (0.707) still count. Facing used to be quantised to eight, which
+## made this an exact set; it is continuous now, so COVER_HOLD_DOT keeps the
+## answer steady near that edge.
 const MIN_FACING_DOT := 0.7
+
+## Hysteresis for the side already in use. That side stays admitted down to
+## MIN_FACING_DOT minus this (about 53 degrees), and beats a rival unless the
+## rival scores this much better. Without it, a unit aiming close to a diagonal
+## between two covered sides would swap pose on a one-degree change. Eight-way
+## facings never land in the band, so their answers are unchanged.
+const COVER_HOLD_DOT := 0.1
+
+## The tile and side `refresh_cover_pose` last settled on, read back by
+## `_best_cover_side` as the side to hold. Only valid on `_held_cover_tile`.
+var _held_cover_tile := Vector3i(-1, -1, -1)
+var _held_cover_side := -1
 
 
 ## Which covered side this unit is using, or -1 for none. The side it is most
 ## looking OUT over — a soldier uses the crate the threat is on the far side of
-## — with ties going to the heavier cover.
+## — with ties going to the heavier cover, and the side already in use held
+## against a near-tie (COVER_HOLD_DOT).
 func _best_cover_side() -> int:
 	var forward := Vector3(-sin(rotation.y), 0.0, -cos(rotation.y))
+	var held := _held_cover_side if _held_cover_tile == grid_pos else -1
 	var best := -1
 	var best_score := -1.0
 	var best_tier := MapData.Cover.NONE
 	for side in GridManager.covered_sides(grid_pos):
 		var score := forward.dot(Vector3(MapData.SIDE_STEP[side]))
-		if score < MIN_FACING_DOT:
+		if side == held:
+			if score < MIN_FACING_DOT - COVER_HOLD_DOT:
+				continue
+			score += COVER_HOLD_DOT
+		elif score < MIN_FACING_DOT:
 			continue
 		var tier := GridManager.cover_type_on(grid_pos, side)
 		if score > best_score or (is_equal_approx(score, best_score) and tier > best_tier):
@@ -1162,6 +1235,8 @@ func cover_pose() -> StringName:
 ## Recomputes the cover posture and pushes it to the sprite. Cheap, and safe to
 ## call at any point — it re-resolves what is on screen without restarting it.
 func refresh_cover_pose() -> void:
+	_held_cover_side = _best_cover_side()
+	_held_cover_tile = grid_pos
 	visual.set_cover_pose(cover_pose())
 
 
@@ -1194,6 +1269,56 @@ func _on_cover_destroyed(pos: Vector3i, side: int, _tier: int) -> void:
 	if is_downed:
 		return
 	refresh_cover_pose()
+
+
+## The last attack that landed on this unit, kept for one thing: which way the
+## body goes when it falls (UnitVisual.collapse -> Ragdoll). Presentation only —
+## no rule reads it. Replicated, so every peer's body falls the same way.
+##   hit_kind  Ragdoll.HitKind      hit_from  where the attack came from (world)
+##   hit_part  Combat.BodyPart, or -1 for none (a blast)
+##   hit_seed  for the ragdoll's small random choices
+var hit_kind: int = 0
+var hit_from := Vector3.ZERO
+var hit_part: int = -1
+var hit_seed: int = 0
+## Its own generator, never the global one: seeded tests (test_carry's redirect
+## loop, for one) replay the global sequence and a presentation roll in the
+## middle of `fire_at` would shift every number after it.
+static var _hit_rng := RandomNumberGenerator.new()
+
+
+## Records the attack about to land (see `hit_kind`). Called just before
+## `take_damage` by everything that hurts a unit.
+func note_hit(from: Vector3, kind: int, part: int = -1) -> void:
+	hit_kind = kind
+	hit_from = from
+	hit_part = part
+	hit_seed = _hit_rng.randi()
+
+
+## Whether a landed hit of `raw` would take this unit off its feet — downed or
+## dead. The arithmetic `take_damage` does, changing nothing.
+func would_collapse(raw: int) -> bool:
+	return life_state == LifeState.ACTIVE and raw > 0 and damage_taken(raw) >= current_hp
+
+
+func hit_record() -> Dictionary:
+	return {"kind": hit_kind, "from": hit_from, "part": hit_part, "seed": hit_seed}
+
+
+## Where an ordinary shot lands, for the fall: an Aimed Shot hits what it aimed
+## at; anything else lands where rounds land — mostly centre mass.
+static func shot_part(action: Combat.ShotAction, aimed: int) -> int:
+	if action == Combat.ShotAction.AIMED_SHOT:
+		return aimed
+	var r := _hit_rng.randf()
+	if r < 0.08:
+		return Combat.BodyPart.HEAD
+	if r < 0.62:
+		return Combat.BodyPart.TORSO
+	if r < 0.76:
+		return Combat.BodyPart.ARM_L if r < 0.69 else Combat.BodyPart.ARM_R
+	return Combat.BodyPart.LEG_L if r < 0.88 else Combat.BodyPart.LEG_R
 
 
 ## Returns the damage that actually landed, after `damage_taken` — callers use it
@@ -1359,8 +1484,8 @@ func _present_life_state(old: LifeState) -> void:
 		var tile: GridTileData = GridManager.get_tile(grid_pos)
 		if tile and tile.occupant == self:
 			GridManager.set_occupant(grid_pos, null)
-		if _name_label:
-			_name_label.visible = false
+		_refresh_label()
+		_sync_label()
 		# The rig light goes down with the soldier: LightingManager already skips a
 		# downed unit's beam, and leaving the model's own lamp lit would show a
 		# beam that lights nothing. Comes back on with a revive (below).
@@ -1368,18 +1493,22 @@ func _present_life_state(old: LifeState) -> void:
 		# Deliberately not awaited: the unit is out of the fight the moment its
 		# HP hits zero, and the shooter's own activation shouldn't stall on the
 		# collapse playing out. (ActiveMarker self-hides off is_downed.)
-		visual.play_action(UnitVisual.DOWNED)
+		# The ragdoll where the model supports it and is on screen, the authored
+		# collapse otherwise (UnitVisual.collapse).
+		visual.collapse(hit_record())
 	if life_state == LifeState.DEAD:
 		visual.set_dead_tint(true)
 	if life_state == LifeState.ACTIVE and old != LifeState.ACTIVE:
 		GridManager.set_occupant(grid_pos, self)
 		global_position = GridManager.grid_to_world(grid_pos)
-		if _name_label:
-			_name_label.visible = true
+		_refresh_label()
+		_sync_label()
 		visual.set_flashlight_enabled(has_flashlight and flashlight_on)
 		# No stand-up animation exists (extraction plan art list), so standing back
 		# up is a cut to the idle — the same answer do_hunker gives for the same
-		# missing transition.
+		# missing transition. The fall's physics pose goes first, or the stance
+		# change would be ignored under it.
+		visual.clear_ragdoll()
 		settle_idle()
 
 
@@ -2231,7 +2360,9 @@ func has_shot_at(target: Unit) -> bool:
 func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.BodyPart.TORSO,
 		charge_ammo: bool = true, penetrates: bool = true) -> Combat.ShotResult:
 	# Coroutine — callers MUST `await`. Damage lands when the shot animation
-	# finishes, so the target drops in time with the effect, not before it.
+	# finishes. The target's BODY drops earlier, on the first round that lands
+	# (`_burst_doomed`, UnitVisual.take_round), so the fall plays with the
+	# gunfire; the rules still only change once the burst is done.
 	# Swing onto the target before anything else. The weapon points where the
 	# body faces, so firing without this sprays the burst off toward whatever
 	# direction the last move left — and face_toward also swings the flashlight,
@@ -2253,12 +2384,23 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	_pending_target = target
 	_burst_round = 0
 	_burst_strays = _pick_strays(rounds, result.hit)
+	# Where the round lands and whether it drops the target, decided now so the
+	# burst can show it: the fall starts on the first round that lands. Only
+	# when nothing can redirect the hit (a carrier may take it into the body on
+	# its shoulder instead), so the prediction is the same arithmetic
+	# `take_damage` is about to do — `would_collapse`. Rolls only `_hit_rng`.
+	var vis_part := shot_part(action, body_part)
+	_burst_part = vis_part
+	_burst_doomed = result.hit and target.carrying == null and target.would_collapse(result.damage)
 	# Decided here, on the host, and carried to every client and into the
 	# tick's record: which way, if any, the model leans out to fire.
 	var lean := _lean_step_toward(target)
 	_record(ExplorationRules.EV_SHOT, {"target": target, "hit": result.hit, "crit": result.crit,
-		"rounds": rounds, "strays": PackedInt32Array(_burst_strays), "melee": false, "lean": lean})
+		"rounds": rounds, "strays": PackedInt32Array(_burst_strays), "melee": false, "lean": lean,
+		"doomed": _burst_doomed, "part": vis_part})
 	await _play_armed_burst(rounds, lean)  # emits `muzzle` once per round
+	var doomed := _burst_doomed
+	_burst_doomed = false
 	_pending_shot = null
 	_pending_target = null
 	if result.hit:
@@ -2277,6 +2419,7 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 			result.hit_carried = true
 			result.redirect_note = "the round hits %s, slung over %s's shoulder" % [
 				victim.stats.display_name, target.stats.display_name]
+		victim.note_hit(visual.muzzle_origin(), Ragdoll.HitKind.BULLET, vis_part)
 		result.damage = victim.take_damage(raw)
 		result.absorbed = raw - result.damage
 		# Body-part injury and stun are about the unit aimed AT; a round that went
@@ -2285,6 +2428,13 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 			result.newly_injured = target.apply_body_part_damage(body_part, raw)
 			if result.stunned:
 				target.stunned = true
+	# A body dropped by the burst that the hit then did not drop after all. Should
+	# not happen — `would_collapse` is take_damage's own arithmetic — but a
+	# soldier lying on the deck while still in the fight is the one wrong
+	# answer worth guarding against.
+	if doomed and target.life_state == LifeState.ACTIVE and target.visual.is_ragdolled():
+		target.visual.clear_ragdoll()
+		target.settle_idle()
 	_land_collateral(result)
 	_report_incoming(target)
 	# Sec 5.4: gunfire is loud, and it leaves brass. The first is what the robot
@@ -2312,6 +2462,8 @@ func _land_collateral(result: Combat.ShotResult) -> void:
 				c.hit_carried = true
 				c.redirect_note = "the round hits %s, slung over %s's shoulder" % [
 					victim.stats.display_name, body.stats.display_name]
+			victim.note_hit(visual.muzzle_origin(), Ragdoll.HitKind.BULLET,
+				shot_part(Combat.ShotAction.SHOOT, Combat.BodyPart.TORSO))
 			c.damage = victim.take_damage(raw)
 			c.absorbed = raw - c.damage
 			show_impact(victim.global_position, false)
@@ -2346,6 +2498,8 @@ func melee_at(target: Unit) -> Combat.ShotResult:
 	if result.hit:
 		show_impact(target.global_position, result.crit)
 		var raw := result.damage
+		target.note_hit(global_position + Vector3(0, GridManager.EYE_HEIGHT, 0),
+			Ragdoll.HitKind.MELEE, Combat.BodyPart.HEAD if _hit_rng.randf() < 0.3 else Combat.BodyPart.TORSO)
 		result.damage = target.take_damage(raw)
 		result.absorbed = raw - result.damage
 	# Outside the `if result.hit`, like the one in `fire_at`: a swing that missed
@@ -2406,7 +2560,17 @@ func _on_muzzle() -> void:
 	# no mark at the target.
 	var lands := _pending_shot != null and _pending_shot.hit and round_index not in _burst_strays
 	var crit := _pending_shot != null and _pending_shot.crit
-	vfx.shot_impact(from, _pending_target.visual.global_position, lands, crit)
+	# The tracer leaves the drawn barrel (where the flash is), not `from`. Drawn
+	# on the first round and every TRACER_EVERY after it, so a 4-6 round burst
+	# shows 2-3 streaks instead of a solid stream.
+	vfx.shot_impact(visual.barrel_tip(), _pending_target.visual.global_position, lands, crit,
+		round_index % TRACER_EVERY == 0)
+	# The round into the body: the one that drops it starts the fall, every one
+	# after jolts it (UnitVisual.take_round). The first landing round strikes
+	# where the shot was rolled to land; the rest go where rounds go.
+	if lands:
+		_pending_target.visual.take_round(from, _burst_doomed, _burst_part)
+		_burst_part = -1
 	# ONCE PER BURST, not once per round — unlike `shot_impact` above, which is
 	# per-round because each round leaves its own separate mark.
 	#
@@ -2419,8 +2583,38 @@ func _on_muzzle() -> void:
 	# Gated on the TARGET exactly as the impact above is: a covering burst that
 	# rolls no shot still makes the noise a rifle makes. If per-round gunfire is
 	# ever wanted, the SAMPLE has to change with it — a single crack, not a burst.
+	#
+	# The weapon in HAND, not the primary: a soldier carrying a body fires the
+	# sidearm, and should sound like it.
 	if round_index == 0:
-		Sfx.play("rifle_fire", from)
+		var weapon := active_weapon()
+		Sfx.play(WeaponPresets.fire_sfx(weapon.id if weapon else -1), from)
+
+
+## The Sfx key this unit's feet make on the deck, or "" for none. By faction,
+## because that is what tracks footwear today: Contractors and rival mercs are
+## soldiers in boots, Security is robots, and the Aliens — worms, swarms,
+## hunters — move in ways a boot sample would only make sillier. A unit that
+## breaks the rule (a barefoot civilian, a robot dog) overrides this.
+func footstep_sfx() -> String:
+	match faction:
+		Faction.Id.CONTRACTORS, Faction.Id.RIVAL_MERCS:
+			return "step_boots_metal"
+		Faction.Id.SECURITY:
+			return "step_heavy_metal"
+	return ""
+
+
+## One per boot landing, from UnitVisual's run loop. Gated on `is_instant` as
+## well, even though the visual only starts that loop for a drawn unit: a unit
+## that walks OUT of the squad's sight mid-move keeps running its loop, and its
+## footsteps would place an enemy the squad can no longer see.
+func _on_footstep() -> void:
+	if is_instant():
+		return
+	var key := footstep_sfx()
+	if key != "":
+		Sfx.play(key, global_position)
 
 
 ## Plays the burst armed by `fire_at` or `_arm_covering_fire`, and hands every
@@ -2436,7 +2630,8 @@ func _play_armed_burst(rounds: int, lean := Vector3i.ZERO) -> void:
 		var crit := has_shot and _pending_shot.crit
 		var strays := PackedInt32Array(_burst_strays)
 		for peer_id in SteamLobby.ready_peers:
-			_rpc_play_armed_burst.rpc_id(peer_id, target_path, rounds, has_shot, hit, crit, strays, lean)
+			_rpc_play_armed_burst.rpc_id(peer_id, target_path, rounds, has_shot, hit, crit, strays, lean,
+				_burst_doomed, _burst_part)
 	await _play_burst_leaning(rounds, lean)
 
 
@@ -2454,12 +2649,17 @@ func _lean_step_toward(target: Unit) -> Vector3i:
 ## back. Skipped when nothing is drawn (`is_instant`), and when a lean is already
 ## running on this model — a second one stacked on it could leave it displaced.
 func _play_burst_leaning(rounds: int, lean: Vector3i) -> void:
+	# The upper body pitches onto the target's chest for the burst. Cosmetic.
+	if _pending_target != null and is_instance_valid(_pending_target):
+		visual.set_aim_point(_pending_target.visual.global_position + Vector3(0.0, AIM_CHEST_HEIGHT, 0.0))
 	if lean == Vector3i.ZERO or is_instant() or (_lean_tween != null and _lean_tween.is_running()):
 		await visual.play_burst(rounds, false)
+		visual.clear_aim_point()
 		return
 	var offset := global_transform.basis.inverse() * (Vector3(lean).normalized() * LEAN_DISTANCE)
 	await _tween_lean(offset)
 	await visual.play_burst(rounds, false)
+	visual.clear_aim_point()
 	if is_instant():
 		_set_lean(Vector3.ZERO)  # hidden mid-burst: nothing to watch it slide back
 	else:
@@ -2481,7 +2681,7 @@ func _set_lean(offset: Vector3) -> void:
 
 @rpc("authority", "call_remote", "reliable")
 func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, hit: bool,
-		crit: bool, strays: PackedInt32Array, lean: Vector3i) -> void:
+		crit: bool, strays: PackedInt32Array, lean: Vector3i, doomed := false, part := -1) -> void:
 	# Only what `_on_muzzle` reads; the rest of the result stays on the host.
 	var shot: Combat.ShotResult = null
 	if has_shot:
@@ -2492,7 +2692,10 @@ func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, h
 	_pending_target = get_node_or_null(target_path) as Unit if not target_path.is_empty() else null
 	_burst_round = 0
 	_burst_strays.assign(strays)
+	_burst_doomed = doomed
+	_burst_part = part
 	await _play_burst_leaning(rounds, lean)
+	_burst_doomed = false
 	# Unless a later burst took the arming over meanwhile — the suppression-break
 	# case `_disarm_covering_fire` describes.
 	if _pending_shot == shot:
@@ -2505,13 +2708,13 @@ func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, h
 ## was hit and is still standing. No roll, no damage, no RPC — every peer plays
 ## the timeline itself. Coroutine.
 func replay_attack(target: Unit, hit: bool, crit: bool, rounds: int,
-		strays: PackedInt32Array, melee: bool, lean := Vector3i.ZERO) -> void:
+		strays: PackedInt32Array, melee: bool, lean := Vector3i.ZERO, doomed := false, part := -1) -> void:
 	if melee:
 		await visual.play_action_local(UnitVisual.MELEE)
 		if hit:
 			_show_impact(target.visual.global_position, crit)
 	else:
-		await _rpc_play_armed_burst(target.get_path(), rounds, true, hit, crit, strays, lean)
+		await _rpc_play_armed_burst(target.get_path(), rounds, true, hit, crit, strays, lean, doomed, part)
 	if hit and not target.is_downed:
 		target.visual.play_hit_react_local()
 
@@ -2549,6 +2752,7 @@ func _arm_covering_fire(target: Unit) -> void:
 	_pending_target = target
 	_burst_round = 0
 	_burst_strays.clear()
+	_burst_doomed = false
 
 
 ## Clears the arming above, UNLESS a real shot has taken it over meanwhile.

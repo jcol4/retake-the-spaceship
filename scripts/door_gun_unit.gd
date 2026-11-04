@@ -348,13 +348,20 @@ func _on_replicated() -> void:
 	_refresh_label()
 
 
+## Up whether drawn or disabled: the gunner sits on the ship's roof over a hangar
+## the player has found, and "DISABLED" is news worth keeping on screen.
+## (The J key's NONE mode still hides it; see Unit._sync_label.)
+func _tag_normally_shown() -> bool:
+	return true
+
+
 ## "Door gun 24/30", or "Door gun — DISABLED". Replaces EnemyUnit's alert-glyph
 ## label: a gunner has no alert state worth reading, and its HP is the one thing
 ## the player wants from it.
 func _refresh_label() -> void:
 	if _name_label == null:
 		return
-	_name_label.visible = true
+	_sync_label()
 	if life_state == LifeState.ACTIVE:
 		_name_label.text = "%s %d/%d" % [stats.display_name, current_hp, stats.max_hp()]
 		_name_label.modulate = LABEL_ACTIVE

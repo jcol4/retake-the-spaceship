@@ -157,6 +157,23 @@ var _fog_sight_key: Array = []
 ## tiles it has got (see _reveal_seen).
 var _fog_pending: Array[int] = []
 var _fog_tile_index := 0
+## Out-of-sight dimming, fog of war's second half: explored floor where an enemy
+## would NOT be drawn is drawn darker and drained of colour (out_of_sight.gdshader).
+## Without it a room seen through a doorway is lit and drawn edge to edge, reads
+## as all-clear, and a horde standing behind its crate seems to be missing rather
+## than unseen. The rule is `unit_visible_at`'s, tile by tile: outside every room
+## a soldier stands in, and out of every standing soldier's line of sight.
+var _dim_mesh: MultiMeshInstance3D
+## The squad, revealed and explored state the current dimming answers to.
+var _dim_key: Array = []
+## Tiles still to test against `_dim_key`, and the out-of-sight set they build. The
+## set on screen is swapped for the new one only once every tile is tested, so a
+## walk never flickers half-old, half-new.
+var _dim_pending: Array[Vector3i] = []
+var _dim_next: Array[Vector3i] = []
+const SIGHT_DIM_SHADER := preload("res://shaders/out_of_sight.gdshader")
+## Above the floor and under every overlay (HighlightManager's lowest is 0.05).
+const SIGHT_DIM_LIFT := 0.03
 ## Microseconds of sight tests the reveal may spend per frame.
 const FOG_SIGHT_BUDGET_USEC := 2500
 var _building := false
@@ -215,6 +232,10 @@ func build(map_data: MapData) -> void:
 	_fog_sight_key = []
 	_fog_pending.clear()
 	_fog_tile_index = 0
+	_dim_mesh = null
+	_dim_key = []
+	_dim_pending.clear()
+	_dim_next.clear()
 	_building = true
 	data.compute_rooms()
 	_compute_cell_regions()
@@ -282,6 +303,8 @@ func build(map_data: MapData) -> void:
 	if insertion != null and data.room_index_at(insertion.pad_center) >= 0:
 		_explored[data.room_index_at(insertion.pad_center)] = true
 	_apply_fog()
+	# After _assign_fog, which would otherwise file it under a room's fog group.
+	_build_sight_dim()
 	_building = false
 	LightingManager.recompute_base()
 
@@ -846,14 +869,21 @@ func _dress_cover_block(body: StaticBody3D, footprint: Rect2i, tier: int) -> voi
 	piece_log.append("%s:%s@%s" % [socket, p.id, footprint])
 
 
-## One hangar wreck (MapData.wrecks), placeholder art until the wrecked-ship
-## props on the art list exist: a dark box over the whole footprint. Unlike a
-## cover block it is collision LAYER 1 at full wall height, so it blocks line of
-## sight and light exactly as a bulkhead does (both raycast layer 1), and its
-## neighbours get HEAVY cover from it that never wears down
-## (CoverEdge.indestructible). Its cells get no GridManager tile — the OBSTACLE
-## branch of `_build_cell` — which is what makes it impassable.
+## One hangar wreck (MapData.wrecks): a box body over the whole footprint,
+## drawn as one of ShipModel.WRECKS. Unlike a cover block it is collision LAYER
+## 1 at full wall height, so it blocks line of sight and light exactly as a
+## bulkhead does (both raycast layer 1), and its neighbours get HEAVY cover from
+## it that never wears down (CoverEdge.indestructible). Its cells get no
+## GridManager tile — the OBSTACLE branch of `_build_cell` — which is what makes
+## it impassable.
+##
+## Only the box's "Mesh" child is swapped for the ship, as _dress_cover_block
+## does: the body and its BoxShape3D are the rules' wreck, and stay. The ship is
+## laid whichever way round fits it largest, flipped end for end by hash, and
+## kept WRECK_MARGIN inside the footprint so no part of it hangs over a walkable
+## tile. With the model missing, the dark box stays.
 const WRECK_COLOR := Color(0.2, 0.19, 0.18)
+const WRECK_MARGIN := 0.15
 
 
 func _add_wreck(footprint: Rect2i) -> void:
@@ -864,8 +894,26 @@ func _add_wreck(footprint: Rect2i) -> void:
 		footprint.size.y * GridManager.TILE_SIZE)
 	var body := _add_box_body((first + last) / 2.0, size, _mat(WRECK_COLOR), 1)
 	body.name = "Wreck_%d_%d" % [footprint.position.x, footprint.position.y]
+	_dress_wreck(body, size, footprint)
 	var edge := GridManager.register_cover_block(footprint, 0, MapData.Cover.HEAVY, body)
 	edge.indestructible = true
+
+
+func _dress_wreck(body: StaticBody3D, size: Vector3, footprint: Rect2i) -> void:
+	var h := _socket_hash(["wreck", footprint])
+	var path: String = ShipModel.WRECKS[posmod(h, ShipModel.WRECKS.size())]
+	var room := size - Vector3(WRECK_MARGIN * 2.0, 0.0, WRECK_MARGIN * 2.0)
+	var ship := ShipModel.fitted(path, room, 0.0, true)
+	if ship == null:
+		return
+	var mesh := body.get_node("Mesh")
+	body.remove_child(mesh)
+	mesh.free()
+	body.add_child(ship)
+	ship.position = Vector3(0, -size.y / 2.0, 0)  # the body sits at mid-height
+	# End for end by hash: a half turn keeps the fit.
+	ship.rotation.y = PI if posmod(h >> 4, 2) == 1 else 0.0
+	piece_log.append("wreck:%s@%s" % [path.get_file().get_basename(), footprint])
 
 
 ## Hangar floor markings (GDD §7.2), placeholder art until the hangar room module
@@ -1197,6 +1245,7 @@ func _process(_delta: float) -> void:
 		return
 	_revealed = _revealed_regions()
 	_update_fog()
+	_update_sight_dim()
 	# Ahead of the camera check, and every frame rather than only on a change.
 	#
 	# Ahead, because which units are drawn decides whether their activations are
@@ -1312,6 +1361,80 @@ func _forget_unseen(_turn: int) -> void:
 func _on_cover_destroyed(_pos: Vector3i, _side: int, _now: int) -> void:
 	_sight_cache.clear()
 	_fog_sight_key = []
+	_dim_key = []
+
+
+## The dimming's one node: a MultiMesh of floor quads, one draw call however
+## much of the deck is out of sight. Headless runs get none — it is only a
+## picture, and testing every explored tile on every step would slow every
+## test that walks a soldier.
+func _build_sight_dim() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	var quad := QuadMesh.new()
+	quad.orientation = PlaneMesh.FACE_Y
+	quad.size = Vector2(GridManager.TILE_SIZE, GridManager.TILE_SIZE)
+	var material := ShaderMaterial.new()
+	material.shader = SIGHT_DIM_SHADER
+	quad.material = material
+	var multimesh := MultiMesh.new()
+	multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	multimesh.mesh = quad
+	_dim_mesh = MultiMeshInstance3D.new()
+	_dim_mesh.name = "OutOfSight"
+	_dim_mesh.multimesh = multimesh
+	_dim_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_dim_mesh.visible = false
+	add_child(_dim_mesh)
+
+
+## Re-tests the explored floor whenever what decides it changes — a soldier steps,
+## goes down, a room is revealed or explored, cover is blown off — spread across
+## frames under FOG_SIGHT_BUDGET_USEC like the reveal, and sharing its per-tile
+## sight cache. Skipped while a tick is being decided: the roots are already at
+## their final tiles then, and the dimming would jump ahead of the playback.
+func _update_sight_dim() -> void:
+	if _dim_mesh == null:
+		return
+	if not fog_of_war:
+		_dim_mesh.visible = false
+		return
+	if TurnManager.resolving_tick:
+		return
+	var squad: Array = []
+	for node in get_tree().get_nodes_in_group("player_units"):
+		var soldier := node as Unit
+		if soldier != null and not soldier.is_downed and soldier.is_inside_tree():
+			squad.append(soldier.grid_pos)
+	var key: Array = [squad, _revealed.keys(), _explored.keys()]
+	if key != _dim_key:
+		_dim_key = key
+		_dim_next.clear()
+		_dim_pending.clear()
+		for region: int in _explored:
+			if not _revealed.has(region):
+				_dim_pending.append_array(_region_tiles.get(region, []))
+		if _dim_pending.is_empty():
+			_show_sight_dim()
+			return
+	if _dim_pending.is_empty():
+		return
+	var deadline := Time.get_ticks_usec() + FOG_SIGHT_BUDGET_USEC
+	while not _dim_pending.is_empty() and Time.get_ticks_usec() < deadline:
+		var tile: Vector3i = _dim_pending.pop_back()
+		if not squad_sees_tile(tile):
+			_dim_next.append(tile)
+	if _dim_pending.is_empty():
+		_show_sight_dim()
+
+
+func _show_sight_dim() -> void:
+	var multimesh := _dim_mesh.multimesh
+	multimesh.instance_count = _dim_next.size()
+	for i in _dim_next.size():
+		multimesh.set_instance_transform(i, Transform3D(Basis(),
+			GridManager.grid_to_world(_dim_next[i]) + Vector3(0.0, SIGHT_DIM_LIFT, 0.0)))
+	_dim_mesh.visible = not _dim_next.is_empty()
 
 
 ## Fog of war over the layout: a region's floor, walls and props are drawn only

@@ -18,7 +18,7 @@ extends RefCounted
 ## Runs on the host and, from the same timeline, on every client (plan C.9).
 ## Headless runs skip it: nothing would be drawn.
 
-## A turn in place, seconds. Matches Unit.face_toward's tween.
+## A turn in place, seconds. Matches Unit.face_toward's hold.
 const TURN_SECONDS := Unit.TURN_TIME * 2.0
 
 
@@ -141,8 +141,9 @@ const HORDE_STAGGER := 0.3
 ##      is leaving waits until that one is halfway off it.
 ##   2. Everything else — the claws and whatever they knocked down — one event
 ##      at a time, in the order it was decided.
-## A Fodder closes OR swings (SwarmUnit), so a body that walks and then claws
-## only ever stepped once, and nothing it did is reordered by the split.
+## A Fodder normally walks and then claws (SwarmUnit), so playing every walk
+## first and every blow after keeps each body's own order. The rare body that
+## kills its prey and then walks on to another has that walk shown early.
 func play_horde(events: Array, tree: SceneTree) -> void:
 	events = _live(events)
 	if events.is_empty() or DisplayServer.get_name() == "headless":
@@ -367,12 +368,11 @@ func _play_step(unit: Unit, e: Dictionary, last_step: bool) -> void:
 		visual.set_stance_local(UnitVisual.WALK if unit.walks_only else UnitVisual.RUN)
 		var seconds := visual.global_position.distance_to(target) / maxf(0.1, unit.move_speed)
 		if seconds > 0.001:
+			# Facing set as the leg starts, as Unit._tween_yaw does live; the
+			# model's free-turn springs draw the turn.
+			visual.rotation.y += wrapf(local_yaw - visual.rotation.y, -PI, PI)
 			var tween := visual.create_tween()
-			tween.set_parallel(true)
 			tween.tween_property(visual, "global_position", target, seconds)
-			if absf(wrapf(local_yaw - visual.rotation.y, -PI, PI)) > 0.001:
-				tween.tween_property(visual, "rotation:y",
-					visual.rotation.y + wrapf(local_yaw - visual.rotation.y, -PI, PI), minf(Unit.TURN_TIME, seconds))
 			await tween.finished
 	if last_step:
 		visual.set_stance_local(UnitVisual.IDLE)
@@ -381,12 +381,12 @@ func _play_step(unit: Unit, e: Dictionary, last_step: bool) -> void:
 func _play_turn(unit: Unit, yaw: float) -> void:
 	var visual := unit.visual
 	var local_yaw := visual.rotation.y + wrapf(yaw - unit.rotation.y - visual.rotation.y, -PI, PI)
+	# Instant either way, then held for the turn's length when drawn: the
+	# model's free-turn springs (UnitVisual) draw the turn itself.
+	visual.rotation.y = local_yaw
 	if unit.is_instant():
-		visual.rotation.y = local_yaw
 		return
-	var tween := visual.create_tween()
-	tween.tween_property(visual, "rotation:y", local_yaw, TURN_SECONDS)
-	await tween.finished
+	await visual.get_tree().create_timer(TURN_SECONDS).timeout
 
 
 ## A shot or a swing that already resolved: the shooter's model turns onto where
@@ -399,9 +399,9 @@ func _play_shot(unit: Unit, e: Dictionary) -> void:
 		return
 	var delta := target.visual.global_position - unit.visual.global_position
 	if absf(delta.x) > 0.001 or absf(delta.z) > 0.001:
-		await _play_turn(unit, snappedf(atan2(-delta.x, -delta.z), PI / 4.0))
+		await _play_turn(unit, atan2(-delta.x, -delta.z))  # continuous, as Unit._yaw_toward
 	await unit.replay_attack(target, e["hit"], e["crit"], e["rounds"], e["strays"], e["melee"],
-		e.get("lean", Vector3i.ZERO))
+		e.get("lean", Vector3i.ZERO), e.get("doomed", false), e.get("part", -1))
 
 
 ## Hands every model back to its unit: re-zeroed on the root, drawn by the

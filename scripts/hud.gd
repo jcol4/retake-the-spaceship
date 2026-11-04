@@ -37,6 +37,8 @@ const BODY_LABEL_HEIGHT := 1.1
 ## Seconds a radio line stays up. Long enough to read twice, short enough that
 ## two notices in one round don't stack into a backlog.
 const RADIO_BANNER_SECONDS := 3.5
+## For the K tracer toggle (`_toggle_tracers`); VfxManager has no class_name.
+const VFX := preload("res://scripts/vfx_manager.gd")
 var _radio_timer: SceneTreeTimer = null
 ## Hangar index -> its Label3D over the bay. World-space rather than on this
 ## CanvasLayer so it sits over the hangar wherever the camera is; parented to the
@@ -405,18 +407,29 @@ func _build_wait_button() -> void:
 			player._issue(&"try_wait"))
 
 
+## The objective line and the mode banner share a stack under the radio banner,
+## so a multi-line objective (status + door gun) pushes the banner down instead
+## of drawing over it. Hidden rows take no space.
 func _build_mode_label() -> void:
+	var stack := VBoxContainer.new()
+	stack.name = "TopCenterStack"
+	stack.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	stack.offset_left = -300.0
+	stack.offset_right = 300.0
+	stack.offset_top = 56.0
+	stack.offset_bottom = 56.0
+	stack.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stack.add_theme_constant_override("separation", 4)
+	add_child(stack)
+	objective_label.reparent(stack, false)
+	objective_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_mode_label = Label.new()
 	_mode_label.name = "ModeLabel"
-	_mode_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
-	_mode_label.offset_left = -300.0
-	_mode_label.offset_right = 300.0
-	_mode_label.offset_top = 88.0
-	_mode_label.offset_bottom = 116.0
 	_mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_mode_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_mode_label.visible = false
-	add_child(_mode_label)
+	stack.add_child(_mode_label)
 
 
 func _build_portrait_bar() -> void:
@@ -425,6 +438,8 @@ func _build_portrait_bar() -> void:
 	_portrait_bar.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	_portrait_bar.offset_top = -116.0
 	_portrait_bar.offset_bottom = -64.0
+	# Taller content grows up, away from the action bar below.
+	_portrait_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	_portrait_bar.alignment = BoxContainer.ALIGNMENT_CENTER
 	# It spans the screen: only the buttons may take a click from the deck.
 	_portrait_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -503,6 +518,24 @@ func _refresh_portraits() -> void:
 			button.modulate = Color.WHITE
 
 
+## J: NORMAL -> ALL (debug builds only) -> NONE -> NORMAL. Every label owner
+## re-applies the new mode now, not on its next refresh, so the press is instant.
+func _cycle_name_tags() -> void:
+	NameTags.cycle()
+	get_tree().call_group("units", "_sync_label")
+	get_tree().call_group(NameTags.PROP_GROUP, "apply_name_tag_mode")
+	_refresh_body_labels()
+	_refresh_hangar_markers()
+	_show_radio_banner("Labels: %s" % NameTags.mode_name())
+
+
+## K: bullet tracers on/off (VfxManager.tracers_enabled). Local to this client;
+## a round in flight when it is pressed finishes its flight.
+func _toggle_tracers() -> void:
+	VFX.tracers_enabled = not VFX.tracers_enabled
+	_show_radio_banner("Tracers: %s" % ("ON" if VFX.tracers_enabled else "OFF"))
+
+
 func _on_command_rejected(reason: String) -> void:
 	_on_extraction_notice(reason, true)
 
@@ -512,6 +545,14 @@ func _on_command_rejected(reason: String) -> void:
 ## instead, in either mode, Shift+Tab backwards.
 func _input(event: InputEvent) -> void:
 	var key := event as InputEventKey
+	if key != null and key.pressed and not key.echo and key.keycode == KEY_J:
+		_cycle_name_tags()
+		get_viewport().set_input_as_handled()
+		return
+	if key != null and key.pressed and not key.echo and key.keycode == KEY_K:
+		_toggle_tracers()
+		get_viewport().set_input_as_handled()
+		return
 	if key == null or not key.pressed or key.echo or key.keycode != KEY_TAB:
 		return
 	if _target_bar != null and _target_bar.visible and not _skull_targets.is_empty():
@@ -579,6 +620,7 @@ func _build_target_bar() -> void:
 	# Over the portrait bar, which sits over the action bar.
 	_target_bar.offset_top = -236.0
 	_target_bar.offset_bottom = -120.0
+	_target_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	_target_bar.alignment = BoxContainer.ALIGNMENT_END
 	_target_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_target_bar.visible = false
@@ -871,7 +913,12 @@ func _build_loot_panel() -> void:
 	_loot_panel.visible = false
 	# Left side, under the unit panel: the board stays visible on the right, where
 	# the log is, and the soldier being looted for is described right above it.
-	_loot_panel.position = Vector2(12, 150)
+	# Pinned under the unit panel's actual bottom, which moves with its line count
+	# (injuries, downs, pack contents).
+	var unit_panel: Control = $UnitPanel
+	var place := func() -> void:
+		_loot_panel.position = Vector2(12, unit_panel.get_rect().end.y + 10.0)
+	unit_panel.resized.connect(place)
 	_loot_panel.custom_minimum_size = Vector2(LOOT_PANEL_WIDTH, 0)
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(LOOT_PANEL_WIDTH, 320)
@@ -881,6 +928,7 @@ func _build_loot_panel() -> void:
 	scroll.add_child(_loot_rows)
 	_loot_panel.add_child(scroll)
 	add_child(_loot_panel)
+	place.call()
 
 
 func _on_loot() -> void:
@@ -1078,7 +1126,9 @@ func _refresh_body_labels() -> void:
 				_bar(unit.downed_hp, unit.downed_bar_max()), unit.downed_hp,
 				unit.downed_bar_max(), _down_pips(unit)]
 			label.modulate = Color(1.0, 0.3, 0.25)
-		label.visible = unit.visible and unit.carried_by == null
+		# The J key's NONE mode keeps this side's own bodies but drops the VIP's.
+		label.visible = unit.visible and unit.carried_by == null \
+			and not (unit is VipUnit and NameTags.mode == NameTags.Mode.NONE)
 
 
 ## A five-cell text bar for `value` out of `max_value`, rounded up so a sliver of
@@ -1186,6 +1236,11 @@ func _on_extraction_notice(text: String, radio: bool) -> void:
 	append_log(text)
 	if not radio:
 		return
+	_show_radio_banner(text)
+
+
+## Puts `text` across the top for RADIO_BANNER_SECONDS, with no log entry.
+func _show_radio_banner(text: String) -> void:
 	radio_banner.text = text
 	radio_banner.visible = true
 	# One timer per notice; a newer notice replaces the text and only ITS timer
@@ -1242,7 +1297,7 @@ func _refresh_hangar_markers() -> void:
 		var label: Label3D = _hangar_markers[i]
 		if not is_instance_valid(label) or not rules.is_valid(i):
 			continue
-		label.visible = rules.is_discovered(i)
+		label.visible = NameTags.shows_hangar(rules.is_discovered(i))
 		var title := "[ %s ]" % ExtractionManager.hangar_name(i)
 		var s := rules.states[i]
 		var ours := s.claimed_by == ExtractionRules.PLAYER_CREW
@@ -1344,6 +1399,9 @@ func _on_mission_ended(result: MissionResult) -> void:
 	_hide_loot_panel()
 	radio_banner.visible = false
 	$Actions.visible = false
+	# Continue takes their spot at the bottom centre.
+	_portrait_bar.visible = false
+	_target_bar.visible = false
 	for key in buttons:
 		buttons[key].disabled = true
 	_reveal_continue()

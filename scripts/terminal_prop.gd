@@ -53,6 +53,8 @@ func _ready() -> void:
 	_label.outline_size = 5
 	_label.position = Vector3(0, LABEL_HEIGHT, 0)
 	add_child(_label)
+	add_to_group(NameTags.PROP_GROUP)
+	apply_name_tag_mode()
 	global_position = GridManager.grid_to_world(tile)
 
 
@@ -102,6 +104,12 @@ func _add_box_visual() -> void:
 	screen.position = Vector3(0, BODY_SIZE.y * 0.7, 0)
 	screen.scale = Vector3(1.0, 1.0, BODY_SIZE.z / SCREEN_SIZE.z + 0.2)
 	add_child(screen)
+
+
+## Hides the label under the J key's NONE mode (NameTags).
+func apply_name_tag_mode() -> void:
+	if _label:
+		_label.visible = NameTags.shows_prop()
 
 
 ## Redraws the screen and label from `rules` (every peer, on every change).

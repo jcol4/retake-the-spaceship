@@ -697,6 +697,21 @@ func cover_type_on(pos: Vector3i, side: int) -> int:
 	return edge.type if edge else MapData.Cover.NONE
 
 
+## Whether the cover on `pos`'s `side` is also cover for `other` — the same
+## CoverEdge object registered on one of `other`'s sides. Edges are shared
+## between the tiles they separate, and a block's one edge rings its whole
+## perimeter, so this catches both two units either side of one crate and two
+## at different faces of the same block. A shooter firing across cover it is
+## itself behind does not chew at it (normal fire only — deliberate
+## cover-breaking and explosives still do).
+func shares_cover_edge(pos: Vector3i, side: int, other: Vector3i) -> bool:
+	var edge := cover_edge(pos, side)
+	if edge == null:
+		return false
+	var t: GridTileData = tiles.get(other)
+	return t != null and t.cover_edges.values().has(edge)
+
+
 func covered_sides(pos: Vector3i) -> Array[int]:
 	var out: Array[int] = []
 	for side in [MapData.Side.EAST, MapData.Side.SOUTH, MapData.Side.WEST, MapData.Side.NORTH]:

@@ -231,7 +231,7 @@ func _refresh_label() -> void:
 		return
 	# The count in writing, because sprite size is not a number a player can read
 	# precisely enough to decide whether to spend a grenade.
-	if is_mass():
+	if is_mass() and life_state == LifeState.ACTIVE:
 		_name_label.text = "%s x%d%s" % [
 			tier_name(), worm_count(), STATE_GLYPH[alert_state]]
 
@@ -490,6 +490,7 @@ func _trample(target: Unit) -> void:
 	if result.hit:
 		show_impact(target.global_position, result.crit)
 		var raw := result.damage
+		target.note_hit(global_position + Vector3(0, 0.6, 0), Ragdoll.HitKind.MELEE, Combat.BodyPart.LEG_L)
 		result.damage = target.take_damage(raw)
 		result.absorbed = raw - result.damage
 	_report_incoming(target)

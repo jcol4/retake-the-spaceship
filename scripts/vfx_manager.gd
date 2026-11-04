@@ -1,8 +1,9 @@
 extends Node3D
-## Rough shot VFX: an impact flash where a round or a swing connects. Spawned
-## nodes free themselves when their tween completes.
+## Rough shot VFX: a tracer per round, and an impact flash where a round or a
+## swing connects. Spawned nodes free themselves when their tween completes.
 ##
-## THERE IS NO TRACER AND NO MUZZLE LIGHT any more. Both were stand-ins from
+## The tracer (see TRACER_SPEED) is not the old beam come back. THERE IS NO BEAM
+## AND NO MUZZLE LIGHT any more. Both were stand-ins from
 ## before the character art existed: the beam said "a shot travelled" because
 ## nothing on the shooter showed it, and the room-filling `OmniLight3D` said "a
 ## gun went off" for the same reason. The muzzle flash (MuzzleFlash) now says
@@ -33,23 +34,114 @@ const CHEST_HEIGHT := 0.9
 const CONE_TIGHT := 0.16
 
 
+## Tracers -- NOT the old beam. That was a static line standing in for a shooter
+## with no art; this is a short streak that TRAVELS, one per round, and it does
+## the job nothing else on screen does: shows where each round went, misses
+## included. Speed is far below a real round's so the eye can follow it, and
+## still fast enough that the impact it delays lands with the body's jolt.
+const TRACER_SHADER := preload("res://shaders/tracer.gdshader")
+const TRACER_SPEED := 140.0
+const TRACER_LENGTH := 2.2
+## How far a round that missed flies on when nothing stops it.
+const MISS_RANGE := 30.0
+## Lateral miss distance at the target, so a miss is visibly a miss and never
+## grazes the model. Metres, sampled between these.
+const MISS_MIN := 0.55
+const MISS_MAX := 1.1
+## Solid geometry a miss stops on: walls and cover (map_builder, layer 1).
+const SOLID_MASK := 1
+## The first stretch of a miss is not raycast, so the shooter's own cover (which
+## it leans past) does not swallow the round at the barrel.
+const RAY_SKIP := 1.0
+
+## K (HUD) toggles this. Off, rounds draw no tracer; hit flashes are untouched.
+## Static so it survives the VfxManager being rebuilt with the mission scene.
+static var tracers_enabled := true
+
+var _tracer_mesh: QuadMesh
+var _tracer_material: ShaderMaterial
+
+
 func _ready() -> void:
 	add_to_group("vfx")
+	_tracer_mesh = QuadMesh.new()
+	_tracer_material = ShaderMaterial.new()
+	_tracer_material.shader = TRACER_SHADER
 
 
-func shot_impact(from: Vector3, to: Vector3, hit: bool, crit: bool = false) -> void:
-	# A round of a burst arriving. Misses draw NOTHING: with no beam there is no
-	# near-miss to sell any more, and a flash beside the target would read as a
-	# hit that did no damage rather than as a round sailing past.
+## A round of a burst leaving the barrel: a flash where it lands if it landed,
+## and a tracer if `tracer` (Unit draws one every TRACER_EVERY rounds). A miss
+## leaves no flash -- one beside the target would read as a hit that did no
+## damage -- so a miss without a tracer draws nothing at all.
+func shot_impact(from: Vector3, to: Vector3, hit: bool, crit: bool = false,
+		tracer: bool = true) -> void:
+	tracer = tracer and tracers_enabled
+	var aim := to + Vector3(0, CHEST_HEIGHT, 0)
 	if not hit:
+		if tracer:
+			_spawn_tracer(from, _miss_end(from, aim))
 		return
-	var end := to + Vector3(0, CHEST_HEIGHT, 0)
-	# `from` outlives the beam it used to draw, because the scatter cone is built
-	# perpendicular to the LINE OF FIRE — the impact still has to know where the
-	# round came from even though nothing is drawn along the way.
-	end += _cone_offset(end - from, CONE_TIGHT)
-	_spawn_flash(end, CRIT_COLOR if crit else HIT_COLOR,
-		CRIT_FLASH_RADIUS if crit else FLASH_RADIUS)
+	# The scatter cone is built perpendicular to the LINE OF FIRE, which is why
+	# the impact has to know where the round came from.
+	var end := aim + _cone_offset(aim - from, CONE_TIGHT)
+	# Untraced rounds still arrive after the same flight, so every flash in a
+	# burst keeps the same rhythm whether or not its round was drawn.
+	var travel := _spawn_tracer(from, end) if tracer else from.distance_to(end) / TRACER_SPEED
+	var color := CRIT_COLOR if crit else HIT_COLOR
+	var radius := CRIT_FLASH_RADIUS if crit else FLASH_RADIUS
+	if travel <= 0.0:
+		_spawn_flash(end, color, radius)
+	else:
+		get_tree().create_timer(travel, false).timeout.connect(_spawn_flash.bind(end, color, radius))
+
+
+## Where a round that missed ends up: thrown wide of `aim`, on past it, and
+## stopped by the first wall or cover in its way.
+func _miss_end(from: Vector3, aim: Vector3) -> Vector3:
+	var along := aim - from
+	if along.length_squared() < 0.0001:
+		return aim
+	var wide := _cone_offset(along, 1.0)
+	if wide.length_squared() < 0.0001:
+		wide = along.cross(Vector3.UP)
+	wide = wide.normalized() * randf_range(MISS_MIN, MISS_MAX)
+	var dir := (aim + wide - from).normalized()
+	var end := from + dir * MISS_RANGE
+	if is_inside_tree():
+		var start := from + dir * RAY_SKIP
+		var query := PhysicsRayQueryParameters3D.create(start, end, SOLID_MASK)
+		var hit := get_world_3d().direct_space_state.intersect_ray(query)
+		if not hit.is_empty():
+			end = hit.position
+	return end
+
+
+## Sends a tracer streak from `from` to `to`; returns how long the head takes to
+## get there, so a caller can time the impact to its arrival.
+func _spawn_tracer(from: Vector3, to: Vector3) -> float:
+	var dist := from.distance_to(to)
+	if dist < 0.05:
+		return 0.0
+	var tracer := MeshInstance3D.new()
+	tracer.mesh = _tracer_mesh
+	tracer.material_override = _tracer_material
+	tracer.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# The shader places every vertex itself, so the node's own bounds are
+	# meaningless; keep it from being culled while any of the line is in view.
+	tracer.extra_cull_margin = dist + TRACER_LENGTH
+	add_child(tracer)
+	tracer.global_position = from
+	var dir := (to - from) / dist
+	var step := func(s: float) -> void:
+		# `s` is how far the head WOULD be; it parks at the target and the tail
+		# catches up to it, so the streak drains into the impact.
+		tracer.set_instance_shader_parameter("head", from + dir * minf(s, dist))
+		tracer.set_instance_shader_parameter("tail", from + dir * clampf(s - TRACER_LENGTH, 0.0, dist))
+	step.call(0.0)
+	var tween := tracer.create_tween()
+	tween.tween_method(step, 0.0, dist + TRACER_LENGTH, (dist + TRACER_LENGTH) / TRACER_SPEED)
+	tween.tween_callback(tracer.queue_free)
+	return dist / TRACER_SPEED
 
 
 func _cone_offset(along: Vector3, radius: float) -> Vector3:

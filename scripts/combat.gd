@@ -407,8 +407,11 @@ static func resolve_shot(shooter, target, action: ShotAction, body_part: int = B
 		result.cover_side = defence[1]
 		result.cover_type = defence[0]
 		result.cover_structural = defence[2]
-		# A wall is not a crate: corner cover is never chewed at.
-		if not result.cover_structural:
+		# A wall is not a crate: corner cover is never chewed at. Nor is cover the
+		# shooter is crouched behind too — it still protects the target (the
+		# penalty above stands), but firing across your own crate doesn't wreck it.
+		if not result.cover_structural \
+				and not GridManager.shares_cover_edge(target.grid_pos, defence[1], shooter.grid_pos):
 			var left := GridManager.damage_cover_edge(
 				target.grid_pos, defence[1], roundi(shooter.stats.weapon_damage * damage_scale))
 			result.cover_broken = left != defence[0]

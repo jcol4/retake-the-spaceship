@@ -36,6 +36,7 @@ func _initialize() -> void:
 	await _check_swarm_draws_last()
 	await _check_horde_wakes_and_acts_as_one()
 	await _check_the_huddle_all_moves()
+	await _check_label_follows_the_model()
 	_check_walk_starts()
 
 	print("")
@@ -150,6 +151,24 @@ func _check_the_huddle_all_moves() -> void:
 	_check(flags_clear, "and none is left marked as mid-horde-turn or waiting")
 	_turns.pool.clear()
 	_free(pack + [soldier])
+
+
+## A unit fog of war keeps off the screen must not give itself away by name. The
+## label is drawn by its own camera, so hiding the model used to leave it up — a
+## room of horde labels with no bodies under them.
+func _check_label_follows_the_model() -> void:
+	var swarm = await _spawn(SWARM, PACK[0], AlienPresets.swarm("Swarm"))
+	var label = swarm.get_node("NameLabel")
+	swarm.set_rendered(false)
+	_check(not swarm.visual.visible and not label.visible, "an undrawn body's label is hidden with it")
+	swarm.set_rendered(true)
+	_check(swarm.visual.visible and label.visible, "and comes back when it is drawn again")
+	swarm.begin_display()
+	swarm.set_display_visible(false)
+	_check(not label.visible, "playback hiding the model hides the label too")
+	swarm.end_display()
+	_check(label.visible, "and the label follows it back when playback ends")
+	_free([swarm])
 
 
 ## The walk phase's arithmetic: bodies start at their offsets, a body's next step

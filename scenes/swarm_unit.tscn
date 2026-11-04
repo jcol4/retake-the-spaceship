@@ -9,10 +9,10 @@ height = 1.8
 
 [node name="SwarmUnit" type="Node3D" groups=["enemy_units", "units"]]
 script = ExtResource("1_script")
-; A third of the soldier's 4.5, so the swarm visibly reads as outrunnable —
-; which is the whole point of Fodder (Sec 11.3). Unlike the soldier's, this
-; number was never fitted to a clip: the shamble cycle is drawn to read at 1.5.
-move_speed = 1.5
+; Half the soldier's 4.5, so the swarm still reads as outrunnable (Sec 11.3).
+; Fitted to the zombie run: ~1.8 m a cycle at UnitVisual's 0.8 s zombie RUN
+; time. Change the two together or the feet skate.
+move_speed = 2.25
 
 ; Drawn as the Mixamo zombie (assets/models/zombie.glb), a demo stand-in; set
 ; `variant = &"civilian"` to go back to the old model. `layers` only shapes
@@ -23,6 +23,15 @@ script = ExtResource("2_visual")
 layers = Array[StringName]([&"body"])
 variant = &"zombie"
 has_light = false
+; The zombie's skin is pale, and the character lighting is tuned for dark gear:
+; the hotspot blew it out to a glossy white in the beam, and the darkness floor
+; (an unshaded glow of the model's own colour) turned it into a flat grey
+; cut-out in the dark — and, reading the RULES' light for its tile, lifted a
+; body at a beam's edge to pale and flat as well. So the Fodder is lit like the
+; walls, and is dark until a light finds it: the horde in the dark is a threat
+; you lose track of, by choice.
+darkness_floor = false
+takes_hotspot = false
 
 ; Layer 2, mask 0 — nothing raycasts against it today (grid_manager's LOS and
 ; lighting occlusion both query layer 1 map geometry only), so this is a body

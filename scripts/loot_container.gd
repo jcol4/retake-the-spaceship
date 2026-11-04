@@ -57,6 +57,8 @@ func _ready() -> void:
 	_label.outline_size = 5
 	_label.position = Vector3(0, LABEL_HEIGHT if not is_pile else 0.5, 0)
 	add_child(_label)
+	add_to_group(NameTags.PROP_GROUP)
+	apply_name_tag_mode()
 	global_position = GridManager.grid_to_world(tile)
 	refresh()
 
@@ -87,6 +89,12 @@ func _add_box_visual() -> void:
 	mesh.position = Vector3(0, box.size.y / 2.0, 0)
 	add_child(mesh)
 	_mesh = mesh
+
+
+## Hides the label under the J key's NONE mode (NameTags).
+func apply_name_tag_mode() -> void:
+	if _label:
+		_label.visible = NameTags.shows_prop()
 
 
 ## Re-reads `items` into the label. Called by LootManager after every change.

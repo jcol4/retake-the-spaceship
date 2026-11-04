@@ -444,8 +444,10 @@ func _blast_tiles(centre: Vector3i) -> Array[Vector3i]:
 ## the throw back where it was aimed. 3 buckets rather than a signed "left/right"
 ## note because that is what's unambiguous: `direction_bucket` is a strictly
 ## increasing function of `rotation.y`, so "3 buckets short" is exactly
-## `-3 * (TAU / DIRECTIONS.size())` of yaw with no separate sign to get wrong,
-## and it round-trips through the same eight facings every other pose does.
+## `-3 * (TAU / DIRECTIONS.size())` of yaw with no separate sign to get wrong.
+## It is plain yaw arithmetic, so it holds at any facing now that facing is
+## continuous (Unit._yaw_toward). The real fix is a throw animation that
+## releases forward, which would let this constant go.
 ##
 ## Judge this against a THROWN GRENADE actually landing on the clicked tile in
 ## game, never against the rendered PNGs alone — render_sprites.py's own
@@ -574,6 +576,7 @@ func _resolve_frag_throw(target: Vector3i) -> void:
 		var victim := t.occupant as Unit
 		if victim == null or victim.is_downed:
 			continue
+		victim.note_hit(GridManager.grid_to_world(target), Ragdoll.HitKind.BLAST)
 		var dealt := victim.take_damage(FRAG_DAMAGE)
 		action_logged.emit("%s takes %d damage from the blast" % [victim.stats.display_name, dealt])
 		# Same edge-lookup a shot uses (Combat.defending_cover), just centred on
