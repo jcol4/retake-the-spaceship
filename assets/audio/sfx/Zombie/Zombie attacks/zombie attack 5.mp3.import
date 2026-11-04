@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://b6wwp4t3pv0pr"
+path="res://.godot/imported/zombie attack 5.mp3-4f05cf309cbcd56ce0907db51b2439bf.mp3str"
+
+[deps]
+
+source_file="res://assets/audio/sfx/Zombie/Zombie attacks/zombie attack 5.mp3"
+dest_files=["res://.godot/imported/zombie attack 5.mp3-4f05cf309cbcd56ce0907db51b2439bf.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

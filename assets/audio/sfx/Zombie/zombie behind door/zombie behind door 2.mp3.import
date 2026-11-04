@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://blphr7vrgvxo6"
+path="res://.godot/imported/zombie behind door 2.mp3-72f4fa2e7b20c30df8e7e285ff45a095.mp3str"
+
+[deps]
+
+source_file="res://assets/audio/sfx/Zombie/zombie behind door/zombie behind door 2.mp3"
+dest_files=["res://.godot/imported/zombie behind door 2.mp3-72f4fa2e7b20c30df8e7e285ff45a095.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

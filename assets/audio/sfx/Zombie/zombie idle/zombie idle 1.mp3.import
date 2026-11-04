@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://cdiqwbx6uva0j"
+path="res://.godot/imported/zombie idle 1.mp3-f132f5ad37a3a65536ae4fc1b8e262d1.mp3str"
+
+[deps]
+
+source_file="res://assets/audio/sfx/Zombie/zombie idle/zombie idle 1.mp3"
+dest_files=["res://.godot/imported/zombie idle 1.mp3-f132f5ad37a3a65536ae4fc1b8e262d1.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

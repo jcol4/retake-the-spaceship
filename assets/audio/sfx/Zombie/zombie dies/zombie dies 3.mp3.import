@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://cpcitbnyvx70j"
+path="res://.godot/imported/zombie dies 3.mp3-f4f2662af0075fa5e3aa4f26a4792762.mp3str"
+
+[deps]
+
+source_file="res://assets/audio/sfx/Zombie/zombie dies/zombie dies 3.mp3"
+dest_files=["res://.godot/imported/zombie dies 3.mp3-f4f2662af0075fa5e3aa4f26a4792762.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

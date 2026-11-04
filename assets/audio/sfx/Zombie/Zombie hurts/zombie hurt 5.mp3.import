@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://usyrt0hqr771"
+path="res://.godot/imported/zombie hurt 5.mp3-a9217f38a5fe888b7ed81f74b4f40730.mp3str"
+
+[deps]
+
+source_file="res://assets/audio/sfx/Zombie/Zombie hurts/zombie hurt 5.mp3"
+dest_files=["res://.godot/imported/zombie hurt 5.mp3-a9217f38a5fe888b7ed81f74b4f40730.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4
