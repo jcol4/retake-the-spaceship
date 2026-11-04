@@ -30,7 +30,7 @@ it is free.
 |---|---|---|
 | Projection | Orthographic | `scenes/camera_rig.tscn` |
 | Pitch | `atan(1/√2)` ≈ 35.264°, fixed, no input | `camera_rig.gd` `PITCH` |
-| Yaw | 45° / 135° / 225° / 315°, Q and E step between them | `camera_rig.gd` `SNAP_STEP` |
+| Yaw | 45° / 135° / 225° / 315°, Q and E step between them. L toggles free rotation (hold Q/E or MMB drag, any angle); toggling back eases to the nearest quarter turn | `camera_rig.gd` `SNAP_STEP`, `set_free_rotation` |
 | Zoom | **None.** One fixed `Camera3D.size` of 10.5 — a 1.92 m character is 14.9% of viewport height, at the bottom of `character-art-plan.md`'s 15–20% reference band. See the cosine note below | `camera_rig.tscn` |
 | Pan | WASD, camera-relative, unchanged from before | `camera_rig.gd` `_process` |
 

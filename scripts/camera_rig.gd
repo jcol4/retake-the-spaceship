@@ -1,7 +1,11 @@
 extends Node3D
-## Isometric camera rig: fixed orthographic projection at a fixed pitch, with the
-## yaw snapped to one of four quarter turns. Q/E step between them, WASD pans,
-## scroll wheel zooms.
+## Isometric camera rig: fixed orthographic projection at a fixed pitch. The yaw
+## has two modes, toggled with L:
+##   * locked (default): snapped to one of four quarter turns, Q/E step between
+##     them;
+##   * free: any angle. Holding Q/E spins smoothly, and middle-mouse drag
+##     rotates. Going back to locked eases to the nearest quarter turn.
+## WASD pans, scroll wheel zooms, in both modes.
 ##
 ## Pitch has no input at all — the deck is drawn at one angle, so hand-drawn
 ## sprite art only ever has to be authored for that angle. What the free-orbit
@@ -34,6 +38,11 @@ const SNAP_STEP := PI / 2.0
 ## Tweened rather than cut so the player keeps their bearings across a snap.
 const SNAP_TIME := 0.25
 
+## Free mode: radians per second while Q/E is held, and radians per screen
+## pixel of middle-mouse drag.
+const FREE_ROTATE_SPEED := deg_to_rad(120.0)
+const DRAG_ROTATE_SENSITIVITY := 0.008
+
 const PAN_SPEED := 12.0
 
 ## The sprite-authoring scale (see camera_rig.tscn) — the closest the player
@@ -59,6 +68,9 @@ var _snap_tween: Tween = null
 var _snap_target := START_YAW
 var _last_yaw := INF
 var _zoom_target := MIN_ZOOM_SIZE
+## False: quarter-turn snaps. True: continuous yaw. Toggled by L.
+var free_rotation := false
+var _dragging := false
 
 @onready var _camera: Camera3D = $Camera3D
 
@@ -91,13 +103,30 @@ func _make_audio_listener() -> void:
 	listener.make_current()
 
 
+## Drag motion and release go through _input, not _unhandled_input: once a
+## drag has started, the cursor crossing a HUD control must neither stall the
+## rotation nor swallow the release and leave the drag stuck on.
+func _input(event: InputEvent) -> void:
+	if not _dragging:
+		return
+	if event is InputEventMouseMotion:
+		# Grab-the-deck feel: dragging right pulls the near side of the deck right.
+		rotation.y -= event.relative.x * DRAG_ROTATE_SENSITIVITY
+	elif event.is_action_released("camera_rotate_drag"):
+		_dragging = false
+
+
 func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("camera_toggle_free_rotation"):
+		set_free_rotation(not free_rotation)
 	# Discrete presses, not held-key polling: a snap is a step, and holding Q
-	# should not spin the deck.
-	if event.is_action_pressed("camera_snap_left"):
+	# should not spin the deck. In free mode Q/E are polled in _process instead.
+	elif not free_rotation and event.is_action_pressed("camera_snap_left"):
 		snap_by(-1)
-	elif event.is_action_pressed("camera_snap_right"):
+	elif not free_rotation and event.is_action_pressed("camera_snap_right"):
 		snap_by(1)
+	elif free_rotation and event.is_action_pressed("camera_rotate_drag"):
+		_dragging = true
 	elif event.is_action_pressed("camera_zoom_in"):
 		_zoom_target = maxf(MIN_ZOOM_SIZE, _zoom_target - ZOOM_STEP)
 	elif event.is_action_pressed("camera_zoom_out"):
@@ -109,6 +138,28 @@ func _unhandled_input(event: InputEvent) -> void:
 ## double-tap mid-tween land two quarters round instead of one and a bit.
 func snap_by(steps: int) -> void:
 	_snap_target += steps * SNAP_STEP
+	_tween_to_snap_target()
+
+
+## Switches between quarter-turn snapping and continuous yaw. Leaving free
+## mode eases to the quarter turn nearest the live yaw, so the deck settles
+## back onto one of the four authored angles.
+func set_free_rotation(enabled: bool) -> void:
+	if enabled == free_rotation:
+		return
+	free_rotation = enabled
+	_dragging = false
+	if enabled:
+		# Hand the live yaw over as-is: a snap still in flight stops where it is.
+		if _snap_tween:
+			_snap_tween.kill()
+			_snap_tween = null
+		return
+	_snap_target = START_YAW + roundf((rotation.y - START_YAW) / SNAP_STEP) * SNAP_STEP
+	_tween_to_snap_target()
+
+
+func _tween_to_snap_target() -> void:
 	if _snap_tween:
 		_snap_tween.kill()
 	# Snapped instantly with no display: the headless smoke test has no frames to
@@ -128,6 +179,12 @@ func _process(delta: float) -> void:
 	if rotation.y != _last_yaw:
 		_last_yaw = rotation.y
 		yaw_changed.emit(rotation.y)
+
+	if free_rotation:
+		var spin := Input.get_axis("camera_snap_left", "camera_snap_right")
+		if spin != 0.0:
+			# Same sign as snap_by: Q (left) lowers the yaw, E raises it.
+			rotation.y += spin * FREE_ROTATE_SPEED * delta
 
 	if _camera.size != _zoom_target:
 		_camera.size = move_toward(_camera.size, _zoom_target, ZOOM_SMOOTH * delta)
