@@ -96,6 +96,8 @@ var _preview_path: Array[Vector3i] = []
 var _preview_cost: int = 0
 ## An End Turn pressed mid-action, waiting for the action to land (end_activation).
 var _end_queued := false
+## Longest end_activation waits on `is_busy` before ending the activation anyway.
+const END_WAIT_MAX_MS := 8000
 ## How long a walk may be out of combat: more than any deck, since a walk's price
 ## is time rather than a budget (plan B.5).
 const EXPLORE_PATH_CAP := 999
@@ -1447,7 +1449,16 @@ func end_activation() -> void:
 		if _end_queued:
 			return
 		_end_queued = true
+		# Bounded: an action that never clears `is_busy` (an animation signal that
+		# never fires) would otherwise hold the whole draw forever, and every later
+		# press returns on `_end_queued` above.
+		var deadline := Time.get_ticks_msec() + END_WAIT_MAX_MS
 		while is_busy and is_inside_tree():
+			if Time.get_ticks_msec() > deadline:
+				push_warning("%s: still busy %d ms after End Turn — ending anyway" % [
+					stats.display_name, END_WAIT_MAX_MS])
+				is_busy = false
+				break
 			await get_tree().process_frame
 		_end_queued = false
 		if not is_inside_tree() or TurnManager.active_unit != self:

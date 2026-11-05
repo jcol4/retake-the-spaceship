@@ -1,16 +1,18 @@
 extends Node3D
 ## Isometric camera rig: fixed orthographic projection at a fixed pitch. The yaw
 ## has two modes, toggled with L:
-##   * locked (default): snapped to one of four quarter turns, Q/E step between
-##     them;
-##   * free: any angle. Holding Q/E spins smoothly, and middle-mouse drag
-##     rotates. Going back to locked eases to the nearest quarter turn.
+##   * free (default): any angle. Holding Q/E spins smoothly, and middle-mouse
+##     drag orbits — horizontal drag turns the yaw, vertical drag raises or
+##     lowers the camera (pitch, clamped to MIN_PITCH..MAX_PITCH).
+##   * locked: snapped to one of four quarter turns at the true-isometric
+##     PITCH, Q/E step between them. Switching to locked eases to the nearest
+##     quarter turn and back to PITCH.
 ## WASD pans, scroll wheel zooms, in both modes.
 ##
-## Pitch has no input at all — the deck is drawn at one angle, so hand-drawn
-## sprite art only ever has to be authored for that angle. What the free-orbit
-## camera used to solve — a bulkhead standing between the player and the room —
-## is now MapBuilder's wall occlusion pass instead.
+## Locked mode keeps the one authored angle that pre-rendered sprite art is
+## drawn against. What the free-orbit camera used to solve — a bulkhead
+## standing between the player and the room — is MapBuilder's wall occlusion
+## pass.
 ##
 ## Zoom (Camera3D.size) does have input, within a fixed range: MIN_ZOOM_SIZE is
 ## the one-true-scale the sprite renderer authors against (see camera_rig.tscn
@@ -42,6 +44,12 @@ const SNAP_TIME := 0.25
 ## pixel of middle-mouse drag.
 const FREE_ROTATE_SPEED := deg_to_rad(120.0)
 const DRAG_ROTATE_SENSITIVITY := 0.008
+## Free mode pitch range for vertical middle-mouse drag (degrees above the
+## horizontal). The floor keeps the camera well above the horizontal so
+## MapBuilder's wall lamps (beams that never rise) still can't point at it;
+## the ceiling stops short of straight down so yaw stays meaningful.
+const MIN_PITCH := deg_to_rad(20.0)
+const MAX_PITCH := deg_to_rad(75.0)
 
 const PAN_SPEED := 12.0
 
@@ -68,8 +76,8 @@ var _snap_tween: Tween = null
 var _snap_target := START_YAW
 var _last_yaw := INF
 var _zoom_target := MIN_ZOOM_SIZE
-## False: quarter-turn snaps. True: continuous yaw. Toggled by L.
-var free_rotation := false
+## False: quarter-turn snaps. True: continuous yaw and pitch. Toggled by L.
+var free_rotation := true
 var _dragging := false
 
 @onready var _camera: Camera3D = $Camera3D
@@ -112,6 +120,10 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		# Grab-the-deck feel: dragging right pulls the near side of the deck right.
 		rotation.y -= event.relative.x * DRAG_ROTATE_SENSITIVITY
+		# Dragging up raises the camera toward top-down; down lowers it.
+		var pitch := clampf(-rotation.x - event.relative.y * DRAG_ROTATE_SENSITIVITY,
+				MIN_PITCH, MAX_PITCH)
+		rotation.x = -pitch
 	elif event.is_action_released("camera_rotate_drag"):
 		_dragging = false
 
@@ -141,9 +153,9 @@ func snap_by(steps: int) -> void:
 	_tween_to_snap_target()
 
 
-## Switches between quarter-turn snapping and continuous yaw. Leaving free
-## mode eases to the quarter turn nearest the live yaw, so the deck settles
-## back onto one of the four authored angles.
+## Switches between quarter-turn snapping and continuous yaw/pitch. Leaving
+## free mode eases to the quarter turn nearest the live yaw and back to the
+## isometric PITCH, so the deck settles onto one of the four authored angles.
 func set_free_rotation(enabled: bool) -> void:
 	if enabled == free_rotation:
 		return
@@ -166,10 +178,17 @@ func _tween_to_snap_target() -> void:
 	# tween across, and nothing in the rules depends on the camera.
 	if DisplayServer.get_name() == "headless":
 		rotation.y = _snap_target
+		if not free_rotation:
+			rotation.x = -PITCH
 		return
-	_snap_tween = create_tween()
+	_snap_tween = create_tween().set_parallel()
 	_snap_tween.tween_property(self, "rotation:y", _snap_target, SNAP_TIME) \
 		.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	# Locked mode always sits at the authored pitch; a free-mode snap_by call
+	# (screenshot tooling) keeps whatever pitch the player chose.
+	if not free_rotation:
+		_snap_tween.tween_property(self, "rotation:x", -PITCH, SNAP_TIME) \
+			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
 
 
 func _process(delta: float) -> void:

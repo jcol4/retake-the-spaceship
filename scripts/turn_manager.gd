@@ -460,17 +460,116 @@ func check_suppression_break(mover: Unit) -> void:
 	# fire it even at 0 ammo left in the mag.
 	if watcher == null or watcher.is_downed:
 		return
+	if mover.reaction_doomed:
+		return  # already dropped by reaction fire in the air: nobody shoots a falling man
 	if not GridManager.has_line_of_sight(watcher, mover):
 		return
 	watcher.release_suppression()
 	# No ammo charge: the 3 rounds for this shot were already paid in do_suppress.
-	var result: Combat.ShotResult = await watcher.fire_at(mover, Combat.ShotAction.SHOOT, Combat.BodyPart.TORSO, false, false)
-	_log("SUPPRESSING FIRE! %s breaks cover — %s fires (%d%% acc): %s" % [
-		mover.stats.display_name, watcher.stats.display_name,
-		result.accuracy, Combat.describe(result),
-	])
+	if _reacts_live(mover):
+		_react(watcher, mover, Combat.ShotAction.SHOOT, false, false, "SUPPRESSING FIRE")
+	else:
+		await _react(watcher, mover, Combat.ShotAction.SHOOT, false, false, "SUPPRESSING FIRE")
+
+
+## Reaction fire on a runner (Unit, "Reaction fire on a runner"). The shot no
+## longer stops the runner: once its roll is made the burst plays alongside the
+## rest of the run, and `Unit.move_along` waits it out before it returns. Only
+## for a runner on screen, mid-walk — an unseen one resolves the old way, shot
+## and all, before its next step, which is also exactly what a tick's logic pass
+## records (and TickPlayback then draws overlapping, from `"reaction"`).
+func _reacts_live(mover: Unit) -> bool:
+	return mover.is_walking() and not mover.is_instant()
+
+
+## One reaction burst at a runner, not awaited by `check_overwatch` or
+## `check_suppression_break`. `fire_at` runs up to the burst without
+## suspending, so the roll and `reaction_doomed` are settled when this returns
+## to its caller; the rest lands while the runner keeps going.
+func _react(watcher: Unit, mover: Unit, action: Combat.ShotAction, charge_ammo: bool,
+		penetrates: bool, label: String) -> void:
+	mover.reaction_began()
+	var result: Combat.ShotResult = await watcher.fire_at(mover, action, Combat.BodyPart.TORSO,
+		charge_ammo, penetrates, true)
+	_log_reaction(label, watcher, mover, result)
+	mover.reaction_ended()
+
+
+func _log_reaction(label: String, watcher: Unit, mover: Unit, result: Combat.ShotResult) -> void:
+	if label == "SUPPRESSING FIRE":
+		_log("SUPPRESSING FIRE! %s breaks cover — %s fires (%d%% acc): %s" % [
+			mover.stats.display_name, watcher.stats.display_name,
+			result.accuracy, Combat.describe(result),
+		])
+	else:
+		_log("OVERWATCH! %s fires at %s (%d%% acc): %s" % [
+			watcher.stats.display_name, mover.stats.display_name, result.accuracy, Combat.describe(result),
+		])
 	if mover.is_downed:
 		_log("%s is DOWN!" % mover.stats.display_name)
+
+
+## Called by `Unit.move_along` before each stride of a drawn runner. Every
+## watcher whose reaction this run is about to trigger — on overwatch and
+## hostile to it, or the suppressor pinning it — within Unit.REACTION_LEAD
+## seconds of running starts tracking it now (`Unit.begin_reaction_track`), so
+## its weapon is on the runner when the rules fire and the first round goes
+## out as the trigger tile is reached. A tracker the run no longer looks like
+## reaching stands down. Presentation only: the rules still fire from
+## `check_overwatch` / `check_suppression_break` on arrival, and a prediction
+## they do not bear out costs nothing (overwatch is kept).
+##
+## The prediction is plain sight from the watcher's tile (`tiles_have_sight`),
+## not the full penetration test the rules make — close enough for a lead-in.
+func anticipate_reactions(mover: Unit, path: Array[Vector3i], from_index: int) -> void:
+	if not _is_authority() or mission_over or mover.is_downed or mover.is_instant() \
+			or mover.reaction_doomed:
+		return
+	# The tiles this run reaches within the lead, the next one always included.
+	var ahead: Array[Vector3i] = []
+	var budget := Unit.REACTION_LEAD * maxf(0.1, mover.move_speed)
+	var prev := mover.global_position
+	var run := 0.0
+	for k in range(from_index, path.size()):
+		var at := GridManager.grid_to_world(path[k])
+		run += prev.distance_to(at)
+		if run > budget and not ahead.is_empty():
+			break
+		ahead.append(path[k])
+		prev = at
+	for node in get_tree().get_nodes_in_group("units"):
+		var watcher := node as Unit
+		if watcher == null or watcher == mover or watcher.is_downed or watcher.is_reacting():
+			continue
+		var reacts := (watcher.on_overwatch and watcher.is_hostile_to(mover) and watcher.can_shoot()) \
+			or mover.suppressed_by == watcher
+		var tracking := watcher.reaction_track_target() == mover
+		if not reacts:
+			if tracking:
+				watcher.end_reaction_track()
+			continue
+		if watcher.reaction_track_target() != null and not tracking:
+			continue  # already following somebody else
+		var trigger := Vector3i.ZERO
+		var found := false
+		for tile in ahead:
+			if GridManager.tiles_have_sight(watcher, watcher.grid_pos, tile, watcher.can_peek(), false):
+				trigger = tile
+				found = true
+				break
+		if found and not tracking:
+			watcher.begin_reaction_track(mover, trigger)
+		elif not found and tracking:
+			watcher.end_reaction_track()
+
+
+## Every watcher still tracking `mover` without having fired stands down — its
+## run is over. Called by `Unit.move_along` as a walk ends.
+func end_reaction_tracks(mover: Unit) -> void:
+	for node in get_tree().get_nodes_in_group("units"):
+		var watcher := node as Unit
+		if watcher != null and watcher.reaction_track_target() == mover and not watcher.is_reacting():
+			watcher.end_reaction_track()
 
 
 func check_overwatch(mover: Unit) -> void:
@@ -491,6 +590,10 @@ func check_overwatch(mover: Unit) -> void:
 			continue
 		if not watcher.can_shoot() or not watcher.has_shot_at(mover):
 			continue
+		# A reaction burst already in the air drops it: later watchers hold their
+		# reserve, as they would have for a runner already lying on the deck.
+		if mover.reaction_doomed:
+			return
 		watcher.on_overwatch = false  # the reserved shot is spent
 		# A shot involving the squad is contact whether or not the target lives to
 		# notice — a kill never reaches `come_under_fire`, and a soldier has no
@@ -498,12 +601,12 @@ func check_overwatch(mover: Unit) -> void:
 		if ExplorationRules.targets_squad(watcher.faction) or ExplorationRules.targets_squad(mover.faction):
 			_last_squad_combat_round = turn_number
 			_begin_contact()
-		var result: Combat.ShotResult = await watcher.fire_at(mover, Combat.ShotAction.OVERWATCH)
-		_log("OVERWATCH! %s fires at %s (%d%% acc): %s" % [
-			watcher.stats.display_name, mover.stats.display_name, result.accuracy, Combat.describe(result),
-		])
+		if _reacts_live(mover):
+			# Every watcher triggered on this tile fires together: a crossfire.
+			_react(watcher, mover, Combat.ShotAction.OVERWATCH, true, true, "OVERWATCH")
+			continue
+		await _react(watcher, mover, Combat.ShotAction.OVERWATCH, true, true, "OVERWATCH")
 		if mover.is_downed:
-			_log("%s is DOWN!" % mover.stats.display_name)
 			return
 
 
@@ -547,6 +650,11 @@ func _rpc_request_end_activation(unit_path: NodePath) -> void:
 
 func _finish_activation(unit: Unit) -> void:
 	if mode != Mode.TURN or unit != active_unit or not _awaiting_player:
+		# Said out loud: a silent drop here is a frozen co-op game with nothing in
+		# either log to say why.
+		print("[NET] end_activation for %s ignored: mode=%s active_unit=%s awaiting_player=%s" % [
+			unit.stats.display_name if is_instance_valid(unit) else "<freed>", Mode.keys()[mode],
+			active_unit.stats.display_name if is_instance_valid(active_unit) else "null", _awaiting_player])
 		return
 	_awaiting_player = false
 	active_unit = null
@@ -1015,18 +1123,20 @@ func _play_tick(events: Array) -> void:
 ## models, display layer and visibility. The host's paused walks resume when the
 ## HOST's playback ends; nothing waits on this one.
 @rpc("authority", "call_remote", "reliable")
-func _rpc_play_tick(wire: Array) -> void:
+func _rpc_play_tick(wire: Array, poses: Dictionary) -> void:
 	if _playback == null:
 		_playback = TickPlayback.new()
+	TickPlayback.apply_final_poses(poses, get_tree().root)
 	await _playback.play(TickPlayback.from_wire(wire, get_tree().root), get_tree())
 
 
 ## A horde's activation, played on a client from the host's timeline — the
 ## horde counterpart of `_rpc_play_tick`.
 @rpc("authority", "call_remote", "reliable")
-func _rpc_play_horde(wire: Array) -> void:
+func _rpc_play_horde(wire: Array, poses: Dictionary) -> void:
 	if _playback == null:
 		_playback = TickPlayback.new()
+	TickPlayback.apply_final_poses(poses, get_tree().root)
 	await _playback.play_horde(TickPlayback.from_wire(wire, get_tree().root), get_tree())
 
 

@@ -91,7 +91,13 @@ const PASSIVE_ACTIVATION_LIMIT := 3
 ## shoot-vs-advance decision on its own.
 const MIN_VIABLE_ACCURACY := 15
 
+## The actions available THIS activation. `run` restores it from `_library` at
+## the top of every activation, so pruning an action that failed lasts one
+## activation as intended. It used to filter the one list in place — which made a
+## single refused shot (a squadmate in the line of fire, once) remove Attack from
+## that merc for the rest of the mission: it never fired again.
 var actions: Array = []
+var _library: Array = []
 ## Authored highest priority first. Each entry:
 ##   {"name": StringName, "goal": {...}, "when": StringName?, "relevance": Callable?}
 ##
@@ -110,13 +116,15 @@ var _passive_activations: int = 0
 
 
 func _init(action_library: Array, goal_list: Array, board: SquadBlackboard = null) -> void:
-	actions = action_library
+	_library = action_library
+	actions = action_library.duplicate()
 	goals = goal_list
 	blackboard = board
 
 
 ## Runs `unit`'s whole activation. Coroutine — callers MUST await.
 func run(unit: Unit, target: Unit) -> void:
+	actions = _library.duplicate()
 	if blackboard:
 		# Swept once at the top of the activation rather than on a signal per way
 		# a claim can die. See SquadBlackboard.revalidate.
@@ -139,8 +147,8 @@ func run(unit: Unit, target: Unit) -> void:
 		var ap_before := unit.ap
 		if not await step.execute(unit, ctx):
 			# The step turned out to be impossible after all. Dropping it from
-			# this activation rather than retrying is what stops an unreachable
-			# flank tile becoming an infinite loop.
+			# this activation (only — see `actions`) rather than retrying is what
+			# stops an unreachable flank tile becoming an infinite loop.
 			actions = actions.filter(func(a): return a != step)
 			continue
 		if step.effects.get(GoapAction.TARGET_DAMAGED, false) \
@@ -247,6 +255,67 @@ func _commit_to(goal_name: StringName) -> void:
 	_committed_turn = TurnManager.turn_number
 
 
+## Accuracy `unit` would have on `target` if it were standing on `tile`.
+##
+## `Combat.compute_accuracy` reads the shooter's position only through
+## `grid_pos` (cover, distance, height), so the tile is swapped in for the call
+## and straight back out. Synchronous — nothing can run between the two writes —
+## and nothing else about the unit (its occupancy, its node position) is touched.
+static func accuracy_from(unit: Unit, tile: Vector3i, target: Unit) -> int:
+	var real := unit.grid_pos
+	unit.grid_pos = tile
+	var acc := Combat.compute_accuracy(unit, target, Combat.ShotAction.SHOOT)
+	unit.grid_pos = real
+	return acc
+
+
+## Whether a shot worth taking exists from `tile`: line of sight (the unit will
+## be at rest there, so it may lean; the target leans if it can) and accuracy at
+## or above the viability floor.
+static func shot_viable_from(unit: Unit, tile: Vector3i, target: Unit) -> bool:
+	if target == null:
+		return false
+	if not GridManager.tiles_have_sight(unit, tile, target.grid_pos, true, target.can_peek()):
+		return false
+	# A body in the way. From where the unit stands the real test answers it;
+	# from a candidate tile it cannot (sight is cast from the node's position),
+	# so any other unit on the line rules the tile out. Without this a wounded
+	# merc flanked to a tile its target's own squadmates screened, found no shot,
+	# advanced a tile, wanted cover again, flanked back — all turn.
+	if tile == unit.grid_pos:
+		if not unit.has_shot_at(target):
+			return false
+	elif _screened(unit, tile, target):
+		return false
+	return accuracy_from(unit, tile, target) >= MIN_VIABLE_ACCURACY
+
+
+## Whether any unit other than `unit` and `target` stands on the grid line from
+## `tile` to the target. Conservative: a round that could punch through a body
+## still counts as screened here, so a candidate tile is only ever chosen when
+## the line is clear.
+static func _screened(unit: Unit, tile: Vector3i, target: Unit) -> bool:
+	var d := target.grid_pos - tile
+	var n := maxi(absi(d.x), absi(d.z))
+	for i in range(1, n):
+		var f := float(i) / float(n)
+		var p := Vector3i(tile.x + roundi(d.x * f), tile.y, tile.z + roundi(d.z * f))
+		var t: GridTileData = GridManager.get_tile(p)
+		if t != null and t.occupant != null and t.occupant != unit and t.occupant != target:
+			var body := t.occupant as Unit
+			if body == null or not body.is_downed:
+				return true
+	return false
+
+
+## Tiles `unit` can walk this activation while still keeping the AP for a shot
+## afterwards. Every move that is a step toward shooting (Flank, cover, Advance)
+## searches within this, so arriving somewhere means arriving able to fire.
+static func move_reach_keeping_shot(unit: Unit) -> int:
+	var spare := unit.ap - unit.action_cost(UnitStats.Action.SHOOT)
+	return maxi(0, spare / unit.move_ap_per_tile())
+
+
 ## Snapshot of the world as symbolic facts. The planner reasons over this and
 ## nothing else, which is what keeps it faction-neutral.
 func read_state(unit: Unit, target: Unit) -> Dictionary:
@@ -257,7 +326,11 @@ func read_state(unit: Unit, target: Unit) -> Dictionary:
 	# worth taking", not "is the target within N tiles" — a merc with a clean
 	# angle at range 9 is in range; one at range 3 through heavy cover, hunkered
 	# target, and bad light may not be.
-	var in_range := has_los \
+	# And the round has to be able to GET there (`has_shot_at`: no body in front
+	# it cannot punch through). Line of sight alone counted a target screened by
+	# its own squadmates as "in range", so the unit neither closed nor fired —
+	# Attack refused it — and held overwatch in place, round after round.
+	var in_range := has_los and unit.has_shot_at(target) \
 		and Combat.compute_accuracy(unit, target, Combat.ShotAction.SHOOT) >= MIN_VIABLE_ACCURACY
 	# Corner cover counts too (GDD §6.1): a wall is not a CoverEdge, so a merc
 	# that took cover at a corner would otherwise read as exposed next activation
@@ -274,6 +347,7 @@ func read_state(unit: Unit, target: Unit) -> Dictionary:
 		GoapAction.IN_RANGE: in_range,
 		GoapAction.MAGAZINE_READY: unit.can_shoot(),
 		GoapAction.IN_COVER: covered,
+		GoapAction.OUT_OF_RANGE: not in_range,
 		GoapAction.TARGET_SUPPRESSED: target != null and target.is_suppressed(),
 		GoapAction.COVER_BROKEN: target != null \
 			and Combat.defending_cover(unit.grid_pos, target.grid_pos)[0] == MapData.Cover.NONE,

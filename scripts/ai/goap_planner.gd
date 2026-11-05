@@ -35,7 +35,12 @@ static func plan(unit: Unit, actions: Array, state: Dictionary, goal: Dictionary
 		return []
 	# Each frontier entry: {state, plan, cost}. Kept as a plain sorted array —
 	# with a handful of actions a priority queue would be more code than search.
-	var frontier: Array = [{"state": state, "plan": [], "cost": 0}]
+	# Each node also carries the AP the unit would have LEFT at that point. Without
+	# it every action was checked against the unit's current AP, so a plan like
+	# [walk five tiles to cover, shoot] passed even when the walk spent the shot —
+	# the unit walked, replanned, could not afford the shot, and ended its turn
+	# having fired nothing.
+	var frontier: Array = [{"state": state, "plan": [], "cost": 0, "ap": unit.ap}]
 	var best_plan: Array = []
 	var best_cost := 1 << 30
 	var expanded := 0
@@ -58,17 +63,25 @@ static func plan(unit: Unit, actions: Array, state: Dictionary, goal: Dictionary
 			# search happily builds Reload-Reload-Reload.
 			if action in node["plan"]:
 				continue
-			var next_state := action.apply_effects(node["state"])
-			var next_cost: int = node["cost"] + action.ap_cost(unit, ctx)
+			var step_cost := action.ap_cost(unit, ctx)
+			if step_cost > int(node["ap"]):
+				continue  # cannot be afforded after the steps before it
+			var next_state: Dictionary = node["state"].duplicate()
+			var fx: Dictionary = action.planned_effects(unit, ctx)
+			for key: StringName in fx:
+				next_state[key] = fx[key]
+			var next_cost: int = node["cost"] + step_cost
 			if next_cost >= best_cost:
 				continue
+			var next_ap: int = 0 if action.ends_activation else int(node["ap"]) - step_cost
 			var next_plan: Array = node["plan"].duplicate()
 			next_plan.append(action)
 			if _satisfies(next_state, goal):
 				best_plan = next_plan
 				best_cost = next_cost
 				continue
-			frontier.append({"state": next_state, "plan": next_plan, "cost": next_cost})
+			frontier.append({"state": next_state, "plan": next_plan, "cost": next_cost,
+				"ap": next_ap})
 	return best_plan
 
 

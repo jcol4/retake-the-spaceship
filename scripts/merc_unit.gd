@@ -94,7 +94,35 @@ func _combat_turn() -> void:
 	# unit's own `target`) onto whoever the squad has decided matters most, if
 	# this unit can actually see that pick and it clears the switch margin.
 	quarry = _reconsider_priority_target(quarry, mates)
+	quarry = _reconsider_screened_target(quarry)
 	await _brain.run(self, quarry)
+
+
+## Keeping a contact is easier than making one. Spotting someone is capped at
+## `detection_range` (8), but the planner's shot test is probabilistic and a
+## merc can have a 90% shot at 9-12 tiles. Under the inherited rule such a merc
+## "lost" a lit target it was looking straight at, after `lose_contact_turns`,
+## and settled back to UNAWARE with a clean shot unfired — in simulation, nearly
+## nine in ten of the shots mercs passed up.
+##
+## So contact also holds while the target is LIT, in line of sight, and a shot at
+## it would be worth taking. Darkness still breaks the lock (the flashlight
+## discipline the faction is built around), as does walking out of sight or
+## beyond any real shot. First sighting is untouched.
+func _check_contact() -> void:
+	if target != null and not target.is_downed and _tracks(target):
+		_last_contact_turn = TurnManager.turn_number
+		return
+	super()
+
+
+func _tracks(unit: Unit) -> bool:
+	var t: GridTileData = GridManager.get_tile(unit.grid_pos)
+	if t == null or t.light_value < sight_light_threshold:
+		return false
+	if not GridManager.has_line_of_sight(self, unit):
+		return false
+	return Combat.compute_accuracy(self, unit, Combat.ShotAction.SHOOT) >= GoapBrain.MIN_VIABLE_ACCURACY
 
 
 ## Rival mercs finish downed contractors only when it is CHEAP (GDD §4.4/§11.10,
@@ -182,6 +210,35 @@ func _reconsider_priority_target(current: Unit, mates: Array) -> Unit:
 	last_known_pos = pick.grid_pos
 	_has_last_known = true
 	return pick
+
+
+## When the round cannot reach `current` — another body is standing in front of
+## it — and this merc has a worthwhile shot at some other hostile it would fight,
+## it takes that one instead (the nearest, which is usually the body in the way).
+## Without this a merc fixed on a target screened by its own squadmates stood
+## with a clean line to the soldier in front and fired at nobody, all fight.
+## Player crew is preferred over third parties, as everywhere else.
+func _reconsider_screened_target(current: Unit) -> Unit:
+	if current == null or has_shot_at(current):
+		return current
+	var best: Unit = null
+	var best_rank := -INF
+	for other: Unit in engageable_hostiles():
+		# `_tracks`: lit, in sight, worth a shot — the same rule that holds a
+		# contact, so a soldier standing in the dark is never switched onto.
+		if other == current or other.is_downed or not _tracks(other) or not has_shot_at(other):
+			continue
+		var rank := _target_rank(other, GridManager.chebyshev_dist(grid_pos, other.grid_pos))
+		if rank > best_rank:
+			best_rank = rank
+			best = other
+	if best == null:
+		return current
+	target = best
+	last_known_pos = best.grid_pos
+	_has_last_known = true
+	_last_contact_turn = TurnManager.turn_number
+	return best
 
 
 ## Whether an UNAWARE merc walks the squad's patrol instead of holding still.

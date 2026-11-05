@@ -38,8 +38,23 @@ const HURT := &"is_hurt"
 ## doctrine goal equally, the planner picks arbitrarily, and every merc flanks
 ## for itself while nobody ever covers anybody.
 const SQUAD_NEEDS_PIN := &"squad_needs_pin"
+## The unit has no viable shot from where it stands (the negation of IN_RANGE).
+## A gate, not an effect: it is what lets a plain "close the distance" goal sit
+## at the bottom of a doctrine without ever walking a unit that already has a
+## shot further toward its target with the AP it had left over.
+const OUT_OF_RANGE := &"out_of_range"
+## Produced only by `Advance`: the unit spent movement getting nearer. The goal a
+## doctrine falls back on when no shot is reachable this activation at all.
+const CLOSED_DISTANCE := &"closed_distance"
+## Produced only by `HoldOverwatch`. Its own fact rather than `IN_COVER` — saying
+## overwatch put the unit in cover let the planner satisfy "fight from cover" by
+## going on overwatch, which ends the activation without a shot.
+const HOLDING_ANGLE := &"holding_angle"
 
 var name: StringName = &"action"
+## Whether executing this action ends the unit's activation (Suppress, Overwatch).
+## The planner treats the AP after it as zero, so nothing can be planned behind it.
+var ends_activation := false
 ## World-state keys this action needs true before it can be planned.
 var preconditions: Dictionary = {}
 ## World-state keys it makes true. The planner treats these as facts once the
@@ -84,6 +99,13 @@ func expected_value(_unit: Unit, _ctx: Dictionary) -> float:
 ## rather than walk the rest of a plan built on a false assumption.
 func execute(_unit: Unit, _ctx: Dictionary) -> bool:
 	return false
+
+
+## The effects the planner should assume for `unit` right now. Defaults to the
+## static `effects`; overridden by an action whose outcome depends on the board
+## (an `Advance` that cannot reach a shot this activation does not promise one).
+func planned_effects(_unit: Unit, _ctx: Dictionary) -> Dictionary:
+	return effects
 
 
 ## Writes this action's effects into a symbolic state during planning. Overridden

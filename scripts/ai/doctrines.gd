@@ -76,8 +76,15 @@ static func merc_brain(board: SquadBlackboard) -> GoapBrain:
 		{"name": &"pin_for_the_squad", "role": SquadBlackboard.Role.SUPPRESSOR,
 			"when": GoapAction.SQUAD_NEEDS_PIN,
 			"goal": {GoapAction.TARGET_SUPPRESSED: true}},
+		# Demands DAMAGE as well as the angle, for the same reason the cover goal
+		# does. Asking for the angle alone made reaching a flank tile a finished
+		# job: the next replan wanted cover, walked away from the angle to get it,
+		# lost the angle, and flanked again — a whole turn running between two
+		# tiles without a shot. Now the plan is [Flank, Attack] (or just [Attack]
+		# when the target is already in the open), and the planner only accepts it
+		# when the walk leaves the shot affordable.
 		{"name": &"flank", "role": SquadBlackboard.Role.FLANKER,
-			"goal": {GoapAction.FLANKED: true}},
+			"goal": {GoapAction.FLANKED: true, GoapAction.TARGET_DAMAGED: true}},
 		# COVER IS A MEANS, NOT AN END (fix B), and no longer gated on being hurt.
 		#
 		# The gate was there to stop a merc ducking on turn one instead of
@@ -109,8 +116,25 @@ static func merc_brain(board: SquadBlackboard) -> GoapBrain:
 				var missing := 1.0 - float(unit.current_hp) / float(maxi(unit.stats.max_hp(), 1))
 				return missing * 24.0},
 		{"name": &"engage", "goal": {GoapAction.TARGET_DAMAGED: true}},
+		_close_goal(),
+		# The plan of last resort: has AP and a shot ready but nothing above could
+		# use it. Its own goal now that overwatch no longer poses as cover.
+		{"name": &"hold", "goal": {GoapAction.HOLDING_ANGLE: true}},
 	]
 	return GoapBrain.new(library, goals, board)
+
+
+## No shot is reachable this activation: walk toward one. Needed now that the
+## planner checks a whole plan fits in the AP — [Advance, Attack] is only offered
+## when the walk really ends somewhere with a shot and still affords it, so a unit
+## far beyond range would otherwise plan nothing and stand still (the bug Advance
+## was added to fix in the first place).
+##
+## Gated on having no shot from here, so it never walks a unit that already has
+## one further in with the AP it has left over.
+static func _close_goal() -> Dictionary:
+	return {"name": &"close", "when": GoapAction.OUT_OF_RANGE,
+		"goal": {GoapAction.CLOSED_DISTANCE: true}}
 
 
 ## Cerberus: forward pressure, and NO FLANKING EVER (Sec 5.2, locked).
@@ -139,6 +163,7 @@ static func cerberus_brain(board: SquadBlackboard) -> GoapBrain:
 		{"name": &"pin_and_close", "goal": {
 			GoapAction.TARGET_SUPPRESSED: true, GoapAction.IN_RANGE: true}},
 		{"name": &"engage", "goal": {GoapAction.TARGET_DAMAGED: true}},
+		_close_goal(),
 	]
 	return GoapBrain.new(library, goals, board)
 

@@ -168,6 +168,22 @@ func _check_recruits() -> void:
 	s.credits = 99999
 	_check(s.recruits.is_empty() or s.hire(0) != "", "hiring past the roster cap is refused")
 
+	# Renaming: trimmed, capped, distinct from roster and board (ignoring case).
+	var n = _state.new_campaign(11)
+	var a = n.roster[0]
+	var b = n.roster[1]
+	var a_id: String = a.id
+	_check(n.rename(a_id, "  Ghost  ") == "" and a.display_name == "Ghost" and a.id == a_id,
+		"rename trims the name and keeps the id")
+	_check(n.rename(a_id, "   ") != "" and a.display_name == "Ghost", "a blank name is refused")
+	_check(n.rename(b.id, "ghost") != "" and b.display_name != "ghost", "a name already on the roster is refused (any case)")
+	var board_name: String = n.recruits[0]["record"].display_name
+	_check(n.rename(b.id, board_name) != "", "a name on the recruit board is refused")
+	_check(n.rename(a_id, "X".repeat(50)) == "" and a.display_name.length() == _state.MAX_NAME_LENGTH,
+		"a long name is capped at %d" % _state.MAX_NAME_LENGTH)
+	_check(n.rename("nobody", "Z") != "", "renaming an unknown soldier is refused")
+	_check(_state.from_dict(n.to_dict()).record(a_id).display_name == a.display_name, "a new name survives the save")
+
 
 func _check_shop_and_treat() -> void:
 	var s = _state.new_campaign(5)

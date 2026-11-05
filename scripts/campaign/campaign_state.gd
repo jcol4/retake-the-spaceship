@@ -33,6 +33,9 @@ const NAMES: Array[String] = [
 	"Doyle", "Iwu", "Rasmussen", "Bauer", "Kaur", "Mendes", "Volkov", "Asante",
 ]
 
+## Longest name a player can give a soldier (rename) — fits the hub and HUD rows.
+const MAX_NAME_LENGTH := 20
+
 var roster: Array[SoldierRecord] = []
 var credits: int = 0
 ## AttachmentPresets id -> copies owned. Copies fitted to a soldier stay counted
@@ -108,18 +111,18 @@ func _new_id() -> String:
 func _unique_name() -> String:
 	var taken := {}
 	for r in roster:
-		taken[r.display_name] = true
+		taken[r.display_name.to_lower()] = true
 	for c in recruits:
-		taken[(c["record"] as SoldierRecord).display_name] = true
+		taken[(c["record"] as SoldierRecord).display_name.to_lower()] = true
 	var free: Array[String] = []
 	for n in NAMES:
-		if not taken.has(n):
+		if not taken.has(n.to_lower()):
 			free.append(n)
 	if not free.is_empty():
 		return free[rng.randi_range(0, free.size() - 1)]
 	var base: String = NAMES[rng.randi_range(0, NAMES.size() - 1)]
 	var k := 2
-	while taken.has("%s %d" % [base, k]):
+	while taken.has(("%s %d" % [base, k]).to_lower()):
 		k += 1
 	return "%s %d" % [base, k]
 
@@ -178,6 +181,30 @@ func hire(index: int) -> String:
 	credits -= price
 	roster.append(recruits[index]["record"])
 	recruits.remove_at(index)
+	return ""
+
+
+## Renames a soldier on the roster. The name is trimmed, capped at MAX_NAME_LENGTH,
+## and must be distinct (ignoring case) from everyone else on the roster and the
+## recruit board, so two soldiers are never indistinguishable (see _unique_name).
+## The record's id is unchanged, so the debrief still credits the right soldier.
+func rename(record_id: String, new_name: String) -> String:
+	var r := record(record_id)
+	if r == null:
+		return "No such soldier"
+	var clean := new_name.strip_edges().left(MAX_NAME_LENGTH)
+	if clean.is_empty():
+		return "A name cannot be blank"
+	if clean == r.display_name:
+		return ""
+	var lower := clean.to_lower()
+	for other in roster:
+		if other != r and other.display_name.to_lower() == lower:
+			return "%s is already on the roster" % other.display_name
+	for c in recruits:
+		if (c["record"] as SoldierRecord).display_name.to_lower() == lower:
+			return "%s is already on the recruit board" % clean
+	r.display_name = clean
 	return ""
 
 

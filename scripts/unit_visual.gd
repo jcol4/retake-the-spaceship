@@ -176,10 +176,11 @@ const VARIANT_LOOP_TIME := {
 	# tools/retarget_mixamo_robot.py). Its walk covers ~2.36 m a cycle, authored
 	# at 1.42 s; played at 1.2 s so its move_speed (securus_unit.tscn) is
 	# 1.95 m/s — change the two together. Idle and flinch play at their
-	# authored 22 and 12 frames. The hook punch is 26 frames (2.17 s) of guard,
+	# authored 47 and 12 frames (the idle is tools/roboticize_robot.py's head
+	# scan, IDLE_FRAMES). The hook punch is 26 frames (2.17 s) of guard,
 	# wind-up, swing and recovery, played at 1.6 s; see STRIKE_AT for when it
 	# connects.
-	&"securus": {WALK: 1.2, IDLE: 22 / 12.0, MELEE: 1.6, HIT_REACT: 12 / 12.0, DOWNED: 12 / 12.0},
+	&"securus": {WALK: 1.2, IDLE: 47 / 12.0, MELEE: 1.6, HIT_REACT: 12 / 12.0, DOWNED: 12 / 12.0},
 }
 
 ## When a variant's MELEE connects, as a fraction of the action's length:
@@ -190,9 +191,10 @@ const VARIANT_LOOP_TIME := {
 ## MEASURED, not tuned: the frame the striking hand stops dead at full
 ## extension. Re-measure when the clip changes.
 const STRIKE_AT := {
-	# Right hook: wound back on frames 5-11, whips forward at 13.5 m/s on 12-13,
-	# full extension on 14 of the 27 keys (26 intervals) -> 12.5 / 26.
-	&"securus": 12.5 / 26.0,
+	# Right hook, re-timed by tools/roboticize_robot.py: held coiled on frames
+	# 6-10, swings on 11-12, stops dead at full extension on 12 of the 27 keys
+	# (26 intervals) -> 11 / 26. PUNCH_STRIKE_FRAME there.
+	&"securus": 11.0 / 26.0,
 }
 
 ## Crossfade between poses, in seconds. Short: the game's actions are brisk and
@@ -1422,17 +1424,18 @@ func _play_stance_exit(action: StringName, next: StringName) -> void:
 	await _play_action(action)
 
 
-func play_burst(rounds: int, mirror: bool = true) -> void:
+func play_burst(rounds: int, mirror: bool = true, raised: bool = false) -> void:
 	# Coroutine — callers MUST await. Weapon comes up, fires `rounds` rounds on a
 	# fixed cadence, holds, then hands back to the stance. One `muzzle` per round.
 	# `mirror` false is for a caller that sends the burst itself, with what each
-	# round hits — see Unit._play_armed_burst.
+	# round hits — see Unit._play_armed_burst. `raised` skips the raise: the
+	# weapon is already up (reaction fire — overwatch, a suppression break).
 	if mirror:
 		_mirror_one_shot(&"_rpc_play_burst", [rounds])
-	await _play_burst(rounds)
+	await _play_burst(rounds, raised)
 
 
-func _play_burst(rounds: int) -> void:
+func _play_burst(rounds: int, raised := false) -> void:
 	if _instant():
 		for _i in rounds:
 			muzzle.emit()
@@ -1443,9 +1446,12 @@ func _play_burst(rounds: int) -> void:
 	# shouldering a rifle on the spot.
 	var begin := _resolved_base(BEGIN_SHOOT)
 	var end := _resolved_base(END_SHOOT)
-	_play(BEGIN_SHOOT if begin != &"" else AIM_HOLD, true)
-	await get_tree().create_timer(
-		_phase_time(BEGIN_SHOOT, begin, RAISE_TIME, COVER_RAISE_TIME)).timeout
+	if raised:
+		_play(AIM_HOLD, true)
+	else:
+		_play(BEGIN_SHOOT if begin != &"" else AIM_HOLD, true)
+		await get_tree().create_timer(
+			_phase_time(BEGIN_SHOOT, begin, RAISE_TIME, COVER_RAISE_TIME)).timeout
 	await _hold_for_barrel()
 	# FIRE has no cover variant BY DESIGN: the unit has already stepped out, so
 	# it fires exactly as it does in the open.
@@ -1629,6 +1635,10 @@ var _barrel_yaw := 0.0
 var _barrel_error := 0.0
 ## True from a burst's first round to its last: the loop holds its correction.
 var _barrel_frozen := false
+## The aim point is a moving target being tracked (Unit reaction fire): while
+## the rounds go out the loop keeps following it in YAW, holding only the
+## pitch, which is where the kick shows.
+var _barrel_tracking := false
 ## True while the legs are turning onto the aim, until BODY_SETTLE.
 var _body_turning := false
 ## 0..1, how much of the twist is applied. Follows `_twist_target`.
@@ -1675,6 +1685,16 @@ func set_aim_point(point: Vector3) -> void:
 
 func clear_aim_point() -> void:
 	_has_aim_point = false
+
+
+## See `_barrel_tracking`. Cosmetic.
+func set_barrel_tracking(on: bool) -> void:
+	_barrel_tracking = on
+
+
+## Whether the model is in its run or walk cycle right now.
+func is_moving() -> bool:
+	return _moving()
 
 
 ## Puts every layer straight onto the current facing, no swing. For a unit
@@ -1829,7 +1849,11 @@ func _aim_barrel(delta: float) -> void:
 			var pitch_err := _elevation(to) - _elevation(bore)
 			_barrel_error = Vector2(yaw_err, pitch_err).length()
 			if _barrel_frozen:
-				return  # rounds going out: hold the aim, let the kick show on top
+				# Rounds going out: hold the aim, let the kick show on top — except
+				# that a tracked runner is followed sideways, the kick being pitch.
+				if _barrel_tracking:
+					_barrel_yaw = clampf(_barrel_yaw + yaw_err * gain, -MAX_BARREL_YAW, MAX_BARREL_YAW)
+				return
 			_barrel_yaw = clampf(_barrel_yaw + yaw_err * gain, -MAX_BARREL_YAW, MAX_BARREL_YAW)
 			_pitch = clampf(_pitch + pitch_err * gain, -MAX_PITCH, MAX_PITCH)
 			_pitch_vel = 0.0
@@ -1922,15 +1946,18 @@ func collapse(hit: Dictionary) -> void:
 ## the burst; every round after that jolts the falling body. A round into a
 ## unit that stays up changes nothing here — it flinches after the burst, as
 ## before. `part` is Combat.BodyPart for the round that was rolled, or -1.
-func take_round(from: Vector3, doomed: bool, part: int) -> void:
+func take_round(from: Vector3, doomed: bool, part: int, carry := Vector3.ZERO) -> void:
 	if _ragdoll != null:
 		if is_instance_valid(_ragdoll) and _ragdoll.is_simulating():
 			_ragdoll.add_round(from, part)
 		return
 	if not doomed:
 		return
+	# `carry` is the speed a runner dropped mid-stride falls with (Unit reaction
+	# fire), so it goes down forward rather than stopping dead and toppling.
 	if _start_ragdoll({"kind": Ragdoll.HitKind.BULLET, "from": from,
-			"part": part if part >= 0 else Combat.BodyPart.TORSO, "seed": _round_rng.randi()}):
+			"part": part if part >= 0 else Combat.BodyPart.TORSO, "seed": _round_rng.randi(),
+			"carry": carry}):
 		# The light goes out with the soldier the moment it falls, not when the
 		# burst's damage lands half a second later (Unit._present_life_state).
 		_set_flashlight_enabled(false)

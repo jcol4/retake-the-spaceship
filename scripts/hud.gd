@@ -97,14 +97,14 @@ const CONTINUE_DELAY := 1.0
 ## Exploration (GDD §4.7, plan B.11): which loop the mission is in and, out of
 ## combat, the step clock. Code-built beside the other late additions.
 var _mode_label: Label
-## The squad, one button per soldier, in both modes (E24). Unit -> Button. Your own
-## select on click (exploration only); a co-op partner's are read-only and greyed;
-## whoever is drawn or selected is tinted.
-var _portrait_bar: HBoxContainer
+## The squad feed, top-left, in both modes (E24): one SquadFeedCard per soldier,
+## a live helmet-cam of their face over an ECG trace of their vitals.
+## Unit -> SquadFeedCard. Your own select on click (exploration only); a co-op
+## partner's are read-only; whoever is drawn or selected is outlined. The unit
+## panel is pushed down beneath it.
+var _portrait_bar: VBoxContainer
 var _portraits: Dictionary = {}
-const PORTRAIT_ACTIVE := Color(0.55, 1.0, 0.65)
-const PORTRAIT_DOWN := Color(1.0, 0.45, 0.4)
-const PORTRAIT_PARTNER := Color(0.6, 0.6, 0.65)
+const SQUAD_FEED_MARGIN := 12.0
 ## The tile the unit panel was last drawn for. Out of combat a walk spends no AP, so
 ## nothing else says the context buttons (Loot, Call ship) may have changed.
 var _shown_tile := Vector3i(0, -9999, 0)
@@ -433,17 +433,21 @@ func _build_mode_label() -> void:
 
 
 func _build_portrait_bar() -> void:
-	_portrait_bar = HBoxContainer.new()
-	_portrait_bar.name = "PortraitBar"
-	_portrait_bar.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-	_portrait_bar.offset_top = -116.0
-	_portrait_bar.offset_bottom = -64.0
-	# Taller content grows up, away from the action bar below.
-	_portrait_bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	_portrait_bar.alignment = BoxContainer.ALIGNMENT_CENTER
-	# It spans the screen: only the buttons may take a click from the deck.
+	_portrait_bar = VBoxContainer.new()
+	_portrait_bar.name = "SquadFeed"
+	_portrait_bar.position = Vector2(SQUAD_FEED_MARGIN, SQUAD_FEED_MARGIN)
+	_portrait_bar.add_theme_constant_override("separation", 4)
+	# Only the cards may take a click from the deck.
 	_portrait_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_portrait_bar)
+	# The unit panel (and the loot panel pinned under it) sits below the feed.
+	var unit_panel: Control = $UnitPanel
+	var place := func() -> void:
+		var below := _portrait_bar.get_rect().end.y if _portrait_bar.get_child_count() > 0 \
+			else SQUAD_FEED_MARGIN - 8.0
+		unit_panel.position.y = below + 8.0
+	_portrait_bar.resized.connect(place)
+	place.call()
 
 
 ## The banner and the clock: "EXPLORING — round 7 · 12 / 20 steps", or just the
@@ -488,34 +492,20 @@ func _refresh_portraits() -> void:
 		if not is_instance_valid(unit) or not squad.has(unit):
 			_portraits[unit].queue_free()
 			_portraits.erase(unit)
-	for unit in squad:
-		var button: Button = _portraits.get(unit)
-		if button == null:
-			button = Button.new()
-			button.focus_mode = Control.FOCUS_NONE
-			button.pressed.connect(TurnManager.select.bind(unit))
-			_portrait_bar.add_child(button)
-			_portraits[unit] = button
-		var status := ""
-		if unit.life_state == Unit.LifeState.DEAD:
-			status = "DEAD"
-		elif unit.is_downed:
-			status = "DOWN %d/%d" % [unit.downed_hp, unit.downed_bar_max()]
-		else:
-			status = "HP %d/%d" % [unit.current_hp, unit.stats.max_hp()]
-		if unit.carrying != null:
-			status += " +%s" % unit.carrying.stats.display_name
-		button.text = "%s\n%s" % [unit.stats.display_name, status]
-		var mine := unit.is_owned_by_local_player()
-		button.disabled = not mine or unit.is_downed
-		if unit == TurnManager.active_unit:
-			button.modulate = PORTRAIT_ACTIVE
-		elif unit.is_downed:
-			button.modulate = PORTRAIT_DOWN
-		elif not mine:
-			button.modulate = PORTRAIT_PARTNER
-		else:
-			button.modulate = Color.WHITE
+	# No renderer, no faces: a headless run keeps the cards (and their vitals)
+	# but skips the cameras.
+	var live_feed := DisplayServer.get_name() != "headless"
+	for i in squad.size():
+		var unit := squad[i]
+		var card: SquadFeedCard = _portraits.get(unit)
+		if card == null:
+			card = SquadFeedCard.new()
+			_portrait_bar.add_child(card)
+			card.setup(unit, live_feed)
+			_portraits[unit] = card
+		if card.get_index() != i:
+			_portrait_bar.move_child(card, i)
+		card.refresh(unit == TurnManager.active_unit, unit.is_owned_by_local_player())
 
 
 ## J: NORMAL -> ALL (debug builds only) -> NONE -> NORMAL. Every label owner
@@ -918,7 +908,8 @@ func _build_loot_panel() -> void:
 	var unit_panel: Control = $UnitPanel
 	var place := func() -> void:
 		_loot_panel.position = Vector2(12, unit_panel.get_rect().end.y + 10.0)
-	unit_panel.resized.connect(place)
+	# item_rect_changed, not resized: the squad feed above moves the panel too.
+	unit_panel.item_rect_changed.connect(place)
 	_loot_panel.custom_minimum_size = Vector2(LOOT_PANEL_WIDTH, 0)
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(LOOT_PANEL_WIDTH, 320)

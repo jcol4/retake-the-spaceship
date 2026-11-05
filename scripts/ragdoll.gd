@@ -662,6 +662,12 @@ func _apply_hit(hit: Dictionary) -> void:
 			_strike(_struck_body(int(hit.get("part", 1)), rng), from,
 				BULLET_IMPULSE if kind == HitKind.BULLET else MELEE_IMPULSE, rng)
 			_cap_shove()
+			# A body dropped mid-run keeps its run (Unit reaction fire). After the
+			# cap, which holds the SHOT's shove, not momentum the body already had.
+			var carry: Vector3 = hit.get("carry", Vector3.ZERO)
+			if not follow_up and carry != Vector3.ZERO:
+				for b: RigidBody3D in _bodies.values():
+					b.linear_velocity += Vector3(carry.x, 0.0, carry.z)
 		HitKind.BLAST:
 			for b: RigidBody3D in _bodies.values():
 				var away := b.global_position - from

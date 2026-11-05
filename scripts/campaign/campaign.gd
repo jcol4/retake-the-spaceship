@@ -115,6 +115,10 @@ func hire(index: int) -> String:
 	return _saved(state.hire(index))
 
 
+func rename(record_id: String, new_name: String) -> String:
+	return _saved(state.rename(record_id, new_name))
+
+
 func treat(record_id: String, part: int) -> String:
 	return _saved(state.treat(record_id, part))
 

@@ -407,6 +407,50 @@ var _burst_strays: Array[int] = []
 ## only; set by `fire_at` on the host, carried to clients with the burst.
 var _burst_doomed := false
 var _burst_part: int = -1
+## The armed burst is REACTION fire (overwatch, a suppression break) at a unit
+## that keeps running through it: no raise (the weapon is already up), the aim
+## tracks the runner, and misses trail behind it. Carried to clients and into
+## the tick's record with the burst.
+var _burst_reaction := false
+
+# --- Reaction fire on a runner ---------------------------------------------------
+#
+# A reaction shot never stops the unit it is fired at. The watcher starts
+# tracking the runner a beat BEFORE it reaches the tile that will trigger the
+# shot (`begin_reaction_track`, from TurnManager.anticipate_reactions), so the
+# weapon is already on it when the rules fire, and the first round leaves the
+# moment it arrives. The runner keeps running while the burst plays; its walk
+# only returns once every reaction burst at it has landed (`_await_reactions`).
+# A burst that drops it halts the run on the round that does it (`halt_for_fall`).
+
+## Seconds of run ahead of a runner within which a watcher starts tracking it.
+const REACTION_LEAD := 0.7
+## How fast a tracked aim point closes on the runner's chest, 1/s. Low enough to
+## read as a shooter following a moving target, not a lock-on.
+const TRACK_RATE := 9.0
+## How far behind a runner a missed round goes, metres at full run speed.
+const TRAIL_MISS := 0.9
+## How much of a runner's speed its falling body keeps, 0..1.
+const FALL_CARRY := 0.8
+
+## The unit this one is tracking with its weapon, or null.
+var _track_target: Unit = null
+## The lagged aim point and the target's measured velocity (world).
+var _track_point := Vector3.ZERO
+var _track_vel := Vector3.ZERO
+## True while a reaction burst of this unit's is in the air.
+var _reacting := false
+## Reaction bursts in the air at THIS unit, and the raw damage they will land.
+var _reactions_in_flight := 0
+var _reaction_raw_pending := 0
+signal _reactions_settled
+## A reaction burst already in the air will drop this unit: nobody else need
+## fire at it, and its run halts on the round that does it.
+var reaction_doomed := false
+## Set by `halt_for_fall`: the walk stops where the body is, mid-stride.
+var _halted := false
+var _step_tween: Tween = null
+signal _step_ended
 ## Corner peeking (GDD §6.1.2) is cosmetic: the shot resolves from the unit's own
 ## tile, and only the model slides this far toward the lean tile to fire, over
 ## LEAN_SECONDS each way.
@@ -626,14 +670,26 @@ func _setup_replication() -> void:
 			"hit_kind", "hit_from", "hit_part", "hit_seed"]:
 		var path := NodePath(".:%s" % prop)
 		config.add_property(path)
-		config.property_set_replication_mode(path, SceneReplicationConfig.REPLICATION_MODE_ALWAYS)
+		# ON_CHANGE, not ALWAYS. ALWAYS re-sent every property of every unit on
+		# every rendered frame — ~30 units x ~300 bytes x the frame rate, well
+		# past Steam's default send-rate cap. The excess queued up behind the
+		# reliable RPCs (every click, every log line, every draw), which a client
+		# felt as input lag, and a full send buffer can drop messages outright.
+		# On-change deltas go out only for what moved (a walking unit's position
+		# each frame, nothing at all for one standing still), and a peer made
+		# visible late still gets every value once: Godot sends it everything
+		# changed since it last heard, which for a new peer is all of it.
+		config.property_set_replication_mode(path, SceneReplicationConfig.REPLICATION_MODE_ON_CHANGE)
 	sync.replication_config = config
 	if multiplayer.is_server():
 		sync.public_visibility = false
 		for peer_id in SteamLobby.ready_peers:
 			sync.set_visibility_for(peer_id, true)
 	_sync = sync
+	# On-change properties arrive as deltas, which fire `delta_synchronized`
+	# rather than `synchronized`; both are hooked in case a mode is ever mixed.
 	sync.synchronized.connect(_after_replication)
+	sync.delta_synchronized.connect(_after_replication)
 	add_child(sync)
 
 
@@ -656,7 +712,7 @@ func _after_replication() -> void:
 	# own (a switch changes no carry link).
 	_apply_drawn()
 	# The pack (extraction plan 3.1) arrives as codes; rebuilt only when they
-	# differ, since REPLICATION_MODE_ALWAYS re-sends them every batch.
+	# differ, since a batch carrying anything else re-runs this too.
 	if inventory_codes != ItemPresets.codes_of(inventory):
 		inventory = ItemPresets.items_from(inventory_codes)
 		inventory_changed.emit(self)
@@ -894,9 +950,25 @@ func move_along(path: Array[Vector3i]) -> void:
 			# picked up mid-stride, a reload cannot.
 			visual.set_stance(UnitVisual.WALK if walking else UnitVisual.RUN)
 		was_hidden = hidden
+		if _halted:
+			break
+		# Any watcher this run is about to trigger starts tracking it now, so its
+		# rounds go out the moment the trigger tile is reached, not a beat later.
+		TurnManager.anticipate_reactions(self, path, i)
 		GridManager.set_occupant(step, self)
 		var from_yaw := rotation.y
 		await _step_to(GridManager.grid_to_world(step), speed)
+		if _halted:
+			# Dropped mid-stride by a reaction round: the body falls where it is, on
+			# whichever of the two tiles it is nearer. The other is let go.
+			var here := global_position
+			if here.distance_squared_to(GridManager.grid_to_world(step)) \
+					< here.distance_squared_to(GridManager.grid_to_world(grid_pos)):
+				GridManager.release_occupant(grid_pos, self)
+				grid_pos = step
+			else:
+				GridManager.release_occupant(step, self)
+			break
 		# Never a soldier's: their walk is real time, and one finishing the tile it
 		# was on as the tick began is not part of what the tick decided.
 		if not is_player_controlled:
@@ -923,13 +995,13 @@ func move_along(path: Array[Vector3i]) -> void:
 		# angle held on this specific unit, where an overwatcher is reacting to
 		# movement in general. Both can fire on the same step.
 		await TurnManager.check_suppression_break(self)
-		if is_downed:
+		if is_downed or _halted:
 			break
 		await TurnManager.check_overwatch(self)
-		if is_downed:
+		if is_downed or _halted:
 			break
 		await TurnManager.after_step(self)
-		if is_downed or _walk_cancelled:
+		if is_downed or _walk_cancelled or _halted:
 			break
 		if _redirected:
 			_redirected = false
@@ -942,6 +1014,14 @@ func move_along(path: Array[Vector3i]) -> void:
 	_walk_cancelled = false
 	_redirected = false
 	GridManager.release_reservation(self)
+	# Watchers that tracked this run and never fired stand down, overwatch kept.
+	TurnManager.end_reaction_tracks(self)
+	var halted := _halted
+	if halted or reaction_doomed:
+		# The burst that drops it is still landing: the rules settle when it does.
+		await _await_reactions()
+	_halted = false
+	reaction_doomed = false
 	if is_downed:
 		TurnManager.unregister_walk(self)
 		return  # the collapse is already playing — don't stand it back up
@@ -965,6 +1045,9 @@ func move_along(path: Array[Vector3i]) -> void:
 		# falls through to the plain skid until then.
 		refresh_cover_pose()
 		await visual.play_stance_exit(UnitVisual.RUN_STOP, UnitVisual.IDLE)
+	# A wound still in the air lands before the walk is over: whatever this unit
+	# does next must see the rules as they stand after it.
+	await _await_reactions()
 	TurnManager.unregister_walk(self)
 	moved.emit(self)
 
@@ -1004,10 +1087,150 @@ func _step_to(target: Vector3, speed: float) -> void:
 		return
 	var seconds := dist / speed
 	var tween := create_tween()
+	_step_tween = tween
 	tween.set_parallel(true)
 	tween.tween_property(self, "global_position", target, seconds)
 	_tween_yaw(tween, target, seconds)
-	await tween.finished
+	# Awaited through `_step_ended` rather than `tween.finished`, which a killed
+	# tween never emits: `halt_for_fall` stops a stride part way.
+	tween.finished.connect(_step_ended.emit)
+	await _step_ended
+	_step_tween = null
+
+
+## Stops a walk in flight where the body is, mid-stride: the reaction round that
+## drops this unit has just landed (Unit._on_muzzle), and the fall is already
+## playing from here. `move_along` settles the tile. A no-op when not walking.
+func halt_for_fall() -> void:
+	if not _walking or _halted:
+		return
+	_halted = true
+	if _step_tween != null and _step_tween.is_valid():
+		_step_tween.kill()
+		_step_ended.emit()
+
+
+## Host. Starts this watcher tracking `target` ahead of the reaction shot it is
+## about to take (TurnManager.anticipate_reactions): faces `toward`, the tile
+## that will trigger it, and lets the aim follow the runner from there. Mirrored
+## to every ready client. A no-op when already tracking it.
+func begin_reaction_track(target: Unit, toward: Vector3i) -> void:
+	if target == null or _track_target == target:
+		return
+	var yaw := _yaw_toward(GridManager.grid_to_world(toward))
+	if not is_nan(yaw):
+		# Rules facing, as `face_toward` sets it, minus the hold: the springs draw
+		# the swing, and the beam has to be where the weapon is going.
+		rotation.y = yaw
+		refresh_cover_pose()
+		if has_flashlight and flashlight_on:
+			LightingManager.recompute_dynamic()
+	if visual.mirrors():
+		for peer_id in SteamLobby.ready_peers:
+			_rpc_reaction_track.rpc_id(peer_id, target.get_path())
+	_start_track(target)
+
+
+## Host. Stands this watcher down from a track that never became a shot (or
+## whose shot is over). Overwatch, if held, is kept. Mirrored.
+func end_reaction_track() -> void:
+	if _track_target == null:
+		return
+	if visual.mirrors():
+		for peer_id in SteamLobby.ready_peers:
+			_rpc_reaction_track.rpc_id(peer_id, NodePath())
+	_stop_track()
+
+
+## TickPlayback's lead-in to a replayed reaction shot: the aim picks `target`
+## up, locally, with no rules facing and no RPC (every peer plays the timeline
+## itself). `replay_attack` stops it once the burst is over.
+func track_local(target: Unit) -> void:
+	_start_track(target)
+
+
+## The unit this one is tracking with its weapon, or null.
+func reaction_track_target() -> Unit:
+	return _track_target
+
+
+## True while a reaction burst of this unit's is in the air.
+func is_reacting() -> bool:
+	return _reacting
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_reaction_track(target_path: NodePath) -> void:
+	var target := get_node_or_null(target_path) as Unit if not target_path.is_empty() else null
+	if target != null:
+		_start_track(target)
+	else:
+		_stop_track()
+
+
+## Local: the aim follows `target`'s chest, lagging it, until `_stop_track`.
+func _start_track(target: Unit) -> void:
+	if target == null or not is_instance_valid(target):
+		return
+	var restart := _track_target != target
+	_track_target = target
+	if not restart:
+		return
+	_track_point = target.visual.global_position + Vector3(0.0, AIM_CHEST_HEIGHT, 0.0)
+	_track_vel = Vector3.ZERO
+	visual.set_barrel_tracking(true)
+	visual.set_aim_point(_track_point)
+	_track_loop(target)
+
+
+func _stop_track() -> void:
+	if _track_target == null:
+		return
+	_track_target = null
+	_track_vel = Vector3.ZERO
+	visual.set_barrel_tracking(false)
+	visual.clear_aim_point()
+
+
+## Each frame while tracking: the runner's velocity measured off its drawn
+## model, and the aim point eased onto its chest at TRACK_RATE. The ease is the
+## lag — a shooter following a target, a step behind it.
+func _track_loop(target: Unit) -> void:
+	var prev := target.visual.global_position
+	while _track_target == target and is_inside_tree() and is_instance_valid(target):
+		await get_tree().process_frame
+		if _track_target != target or not is_instance_valid(target):
+			return
+		var dt := get_process_delta_time()
+		if dt <= 0.0:
+			continue
+		var at := target.visual.global_position
+		# Smoothed, so a single frame's hitch does not throw a miss sideways.
+		_track_vel = _track_vel.lerp((at - prev) / dt, 0.35)
+		prev = at
+		_track_point = _track_point.lerp(at + Vector3(0.0, AIM_CHEST_HEIGHT, 0.0),
+			1.0 - exp(-TRACK_RATE * dt))
+		visual.set_aim_point(_track_point)
+
+
+## Returns once every reaction burst in the air at this unit has landed.
+func _await_reactions() -> void:
+	while _reactions_in_flight > 0:
+		await _reactions_settled
+
+
+## TurnManager's bookkeeping around a reaction burst fired at this unit.
+func reaction_began() -> void:
+	_reactions_in_flight += 1
+
+
+func reaction_ended() -> void:
+	_reactions_in_flight = maxi(0, _reactions_in_flight - 1)
+	if _reactions_in_flight == 0:
+		_reaction_raw_pending = 0
+		if not _walking:
+			reaction_doomed = false  # a walk clears its own, as it ends
+		_reactions_settled.emit()
 
 
 ## Faces the leg toward `target` as it starts. INSTANT: the facing is rules
@@ -1038,10 +1261,12 @@ func _yaw_toward(world_pos: Vector3) -> float:
 	return rotation.y + wrapf(target - rotation.y, -PI, PI)
 
 
-func face_toward(world_pos: Vector3) -> void:
+func face_toward(world_pos: Vector3, quick := false) -> void:
 	# Turn in place. Coroutine — callers MUST `await`. Matters beyond looking
 	# right: the flashlight cone rotates with facing (Sec 5.2), so which tiles
 	# this unit lights, and therefore which aliens notice it, follow from here.
+	# `quick` skips the hold — reaction fire, whose weapon is already on target
+	# (`begin_reaction_track`) — and then never suspends the caller.
 	var yaw := _yaw_toward(world_pos)
 	if is_nan(yaw):
 		return
@@ -1050,7 +1275,7 @@ func face_toward(world_pos: Vector3) -> void:
 	# The model shows the turn on its own springs (UnitVisual free turn), and
 	# its `aim_direction` already answers with the settled beam.
 	rotation.y = yaw
-	if not is_instant():
+	if not is_instant() and not quick:
 		is_busy = true
 		await get_tree().create_timer(TURN_TIME * 2.0).timeout
 		is_busy = false
@@ -2358,16 +2583,21 @@ func has_shot_at(target: Unit) -> bool:
 ## `penetrates` is false for suppressing fire, the one shot that does not travel
 ## the penetration path (docs/design/systems/penetration §6).
 func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.BodyPart.TORSO,
-		charge_ammo: bool = true, penetrates: bool = true) -> Combat.ShotResult:
+		charge_ammo: bool = true, penetrates: bool = true, reaction: bool = false) -> Combat.ShotResult:
 	# Coroutine — callers MUST `await`. Damage lands when the shot animation
 	# finishes. The target's BODY drops earlier, on the first round that lands
 	# (`_burst_doomed`, UnitVisual.take_round), so the fall plays with the
 	# gunfire; the rules still only change once the burst is done.
+	#
+	# `reaction` is overwatch or a suppression break at a unit that keeps moving
+	# (see "Reaction fire on a runner"): no turn hold and no raise, the aim
+	# tracks it, and everything up to the burst runs WITHOUT suspending, so a
+	# caller that does not await has the roll — and `reaction_doomed` — at once.
 	# Swing onto the target before anything else. The weapon points where the
 	# body faces, so firing without this sprays the burst off toward whatever
 	# direction the last move left — and face_toward also swings the flashlight,
 	# which changes what is lit before the shot resolves.
-	await face_toward(target.global_position)
+	await face_toward(target.global_position, reaction)
 	# No vertical aim. A sprite has no spine to tilt, so a shot at a target on
 	# another deck reads flatter than it did; if that comes back it will be
 	# per-pitch-band art on an arm layer, not a bone solve.
@@ -2391,18 +2621,36 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	# `take_damage` is about to do — `would_collapse`. Rolls only `_hit_rng`.
 	var vis_part := shot_part(action, body_part)
 	_burst_part = vis_part
-	_burst_doomed = result.hit and target.carrying == null and target.would_collapse(result.damage)
+	# A reaction counts what the other reaction bursts already in the air at the
+	# same runner will land, since they all play at once (TurnManager._react).
+	var incoming := target._reaction_raw_pending if reaction else 0
+	_burst_doomed = result.hit and target.carrying == null \
+		and target.would_collapse(result.damage + incoming)
+	_burst_reaction = reaction
+	if reaction:
+		_reacting = true
+		if result.hit:
+			target._reaction_raw_pending += result.damage
+		if _burst_doomed:
+			target.reaction_doomed = true
+		if _track_target != target and not is_instant():
+			# Fired with no warning (no lead to track it in): pick it up now.
+			_start_track(target)
 	# Decided here, on the host, and carried to every client and into the
 	# tick's record: which way, if any, the model leans out to fire.
 	var lean := _lean_step_toward(target)
 	_record(ExplorationRules.EV_SHOT, {"target": target, "hit": result.hit, "crit": result.crit,
 		"rounds": rounds, "strays": PackedInt32Array(_burst_strays), "melee": false, "lean": lean,
-		"doomed": _burst_doomed, "part": vis_part})
+		"doomed": _burst_doomed, "part": vis_part, "reaction": reaction})
 	await _play_armed_burst(rounds, lean)  # emits `muzzle` once per round
 	var doomed := _burst_doomed
 	_burst_doomed = false
+	_burst_reaction = false
 	_pending_shot = null
 	_pending_target = null
+	if reaction:
+		_reacting = false
+		end_reaction_track()
 	if result.hit:
 		# The raw roll is kept because two different consumers want two different
 		# numbers: HP takes what got through the target's armor, while a component
@@ -2578,13 +2826,24 @@ func _on_muzzle() -> void:
 	# The tracer leaves the drawn barrel (where the flash is), not `from`. Drawn
 	# on the first round and every TRACER_EVERY after it, so a 4-6 round burst
 	# shows 2-3 streaks instead of a solid stream.
-	vfx.shot_impact(visual.barrel_tip(), _pending_target.visual.global_position, lands, crit,
-		round_index % TRACER_EVERY == 0)
+	var at := _pending_target.visual.global_position
+	# A runner tracked through a reaction burst: a round that misses goes where
+	# the shooter's aim is lagging, just behind it, not anywhere round it.
+	var runner_vel := Vector3(_track_vel.x, 0.0, _track_vel.z) \
+		if _burst_reaction and _track_target == _pending_target else Vector3.ZERO
+	if not lands and runner_vel.length() > 0.5:
+		at -= runner_vel.normalized() * TRAIL_MISS * clampf(runner_vel.length() / maxf(0.1,
+			_pending_target.move_speed), 0.0, 1.0)
+	vfx.shot_impact(visual.barrel_tip(), at, lands, crit, round_index % TRACER_EVERY == 0)
 	# The round into the body: the one that drops it starts the fall, every one
 	# after jolts it (UnitVisual.take_round). The first landing round strikes
 	# where the shot was rolled to land; the rest go where rounds go.
 	if lands:
-		_pending_target.visual.take_round(from, _burst_doomed, _burst_part)
+		if _burst_doomed:
+			# A runner dropped by reaction fire falls from mid-stride, keeping some
+			# of its run; the walk stops here (rules: on the host only).
+			_pending_target.halt_for_fall()
+		_pending_target.visual.take_round(from, _burst_doomed, _burst_part, runner_vel * FALL_CARRY)
 		_burst_part = -1
 	# ONCE PER BURST, not once per round — unlike `shot_impact` above, which is
 	# per-round because each round leaves its own separate mark.
@@ -2646,7 +2905,7 @@ func _play_armed_burst(rounds: int, lean := Vector3i.ZERO) -> void:
 		var strays := PackedInt32Array(_burst_strays)
 		for peer_id in SteamLobby.ready_peers:
 			_rpc_play_armed_burst.rpc_id(peer_id, target_path, rounds, has_shot, hit, crit, strays, lean,
-				_burst_doomed, _burst_part)
+				_burst_doomed, _burst_part, _burst_reaction)
 	await _play_burst_leaning(rounds, lean)
 
 
@@ -2665,16 +2924,23 @@ func _lean_step_toward(target: Unit) -> Vector3i:
 ## running on this model — a second one stacked on it could leave it displaced.
 func _play_burst_leaning(rounds: int, lean: Vector3i) -> void:
 	# The upper body pitches onto the target's chest for the burst. Cosmetic.
-	if _pending_target != null and is_instance_valid(_pending_target):
+	# A tracked target owns the aim point (`_track_loop`), which follows it.
+	var tracked := _track_target != null
+	if not tracked and _pending_target != null and is_instance_valid(_pending_target):
 		visual.set_aim_point(_pending_target.visual.global_position + Vector3(0.0, AIM_CHEST_HEIGHT, 0.0))
+	# Reaction fire skips the raise: the weapon is already up on overwatch or
+	# holding a suppressed unit down, and a raise would make the runner wait.
+	var raised := _burst_reaction
 	if lean == Vector3i.ZERO or is_instant() or (_lean_tween != null and _lean_tween.is_running()):
-		await visual.play_burst(rounds, false)
-		visual.clear_aim_point()
+		await visual.play_burst(rounds, false, raised)
+		if not tracked:
+			visual.clear_aim_point()
 		return
 	var offset := global_transform.basis.inverse() * (Vector3(lean).normalized() * LEAN_DISTANCE)
 	await _tween_lean(offset)
-	await visual.play_burst(rounds, false)
-	visual.clear_aim_point()
+	await visual.play_burst(rounds, false, raised)
+	if not tracked:
+		visual.clear_aim_point()
 	if is_instant():
 		_set_lean(Vector3.ZERO)  # hidden mid-burst: nothing to watch it slide back
 	else:
@@ -2696,7 +2962,8 @@ func _set_lean(offset: Vector3) -> void:
 
 @rpc("authority", "call_remote", "reliable")
 func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, hit: bool,
-		crit: bool, strays: PackedInt32Array, lean: Vector3i, doomed := false, part := -1) -> void:
+		crit: bool, strays: PackedInt32Array, lean: Vector3i, doomed := false, part := -1,
+		reaction := false) -> void:
 	# Only what `_on_muzzle` reads; the rest of the result stays on the host.
 	var shot: Combat.ShotResult = null
 	if has_shot:
@@ -2709,8 +2976,18 @@ func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, h
 	_burst_strays.assign(strays)
 	_burst_doomed = doomed
 	_burst_part = part
+	_burst_reaction = reaction
+	# A reaction burst tracks its runner; picked up here when the lead-in that
+	# would have started it (`_rpc_reaction_track`, a tick's playback) did not.
+	var started_track := false
+	if reaction and _pending_target != null and _track_target != _pending_target and not is_instant():
+		_start_track(_pending_target)
+		started_track = true
 	await _play_burst_leaning(rounds, lean)
 	_burst_doomed = false
+	_burst_reaction = false
+	if started_track or (reaction and _track_target != null):
+		_stop_track()
 	# Unless a later burst took the arming over meanwhile — the suppression-break
 	# case `_disarm_covering_fire` describes.
 	if _pending_shot == shot:
@@ -2723,7 +3000,8 @@ func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, h
 ## was hit and is still standing. No roll, no damage, no RPC — every peer plays
 ## the timeline itself. Coroutine.
 func replay_attack(target: Unit, hit: bool, crit: bool, rounds: int,
-		strays: PackedInt32Array, melee: bool, lean := Vector3i.ZERO, doomed := false, part := -1) -> void:
+		strays: PackedInt32Array, melee: bool, lean := Vector3i.ZERO, doomed := false, part := -1,
+		reaction := false) -> void:
 	if melee:
 		# The flash and the flinch land on the contact frame, as they did live
 		# (`melee_at`), not after the recovery.
@@ -2738,8 +3016,11 @@ func replay_attack(target: Unit, hit: bool, crit: bool, rounds: int,
 			visual.strike.disconnect(land)
 			land.call()
 		return
-	await _rpc_play_armed_burst(target.get_path(), rounds, true, hit, crit, strays, lean, doomed, part)
-	if hit and not target.is_downed:
+	await _rpc_play_armed_burst(target.get_path(), rounds, true, hit, crit, strays, lean, doomed, part,
+		reaction)
+	# A runner hit by reaction fire keeps running (move_along keeps its stance
+	# live the same way, via `is_busy`); one that has stopped flinches as usual.
+	if hit and not target.is_downed and not (reaction and target.visual.is_moving()):
 		target.visual.play_hit_react_local()
 
 

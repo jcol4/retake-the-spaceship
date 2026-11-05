@@ -119,6 +119,14 @@ func _check_scheduler() -> void:
 	var shot_slots: Array = R.schedule(shot)
 	_check(shot_slots[2] == 2, "a shot at a mover lands after its last step (got %d)" % shot_slots[2])
 	_check(shot_slots[3] == 3, "and the collapse after the shot (got %d)" % shot_slots[3])
+	# Overwatch on A as it reaches (1,0): the burst shares the slot of the step
+	# that triggered it, and A runs on to (2,0) without holding still for it.
+	var ow := events.slice(0, 1)
+	ow.append({"unit": "S", "kind": R.EV_SHOT, "target": "A", "reaction": true})
+	ow.append(events[1])
+	var ow_slots: Array = R.schedule(ow)
+	_check(ow_slots[1] == 0, "a reaction shot shares its trigger step's slot (got %d)" % ow_slots[1])
+	_check(ow_slots[2] == 1, "and its target runs straight on (got %d)" % ow_slots[2])
 	var groups: Array = R.by_slot(slots)
 	_check(groups.size() == 3 and groups[0] == [0, 3], "by_slot groups a slot's events")
 

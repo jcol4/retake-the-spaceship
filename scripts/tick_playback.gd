@@ -41,11 +41,12 @@ func play_host(events: Array, tree: SceneTree, horde := false) -> void:
 		return
 	if SteamLobby.is_networked() and SteamLobby.is_host() and not SteamLobby.ready_peers.is_empty():
 		var wire := to_wire(events)
+		var poses := final_poses(events)
 		for peer_id in SteamLobby.ready_peers:
 			if horde:
-				TurnManager._rpc_play_horde.rpc_id(peer_id, wire)
+				TurnManager._rpc_play_horde.rpc_id(peer_id, wire, poses)
 			else:
-				TurnManager._rpc_play_tick.rpc_id(peer_id, wire)
+				TurnManager._rpc_play_tick.rpc_id(peer_id, wire, poses)
 	if horde:
 		await play_horde(events, tree)
 	else:
@@ -64,6 +65,36 @@ static func to_wire(events: Array) -> Array:
 				w[key] = (node as Node).get_path() if is_instance_valid(node) else NodePath()
 		out.append(w)
 	return out
+
+
+## Host: where every unit in the timeline stands once the tick is decided — its
+## root's position and facing, by node path. Rides along with the timeline.
+##
+## The client's roots get there by replication, which the host sends on its next
+## network poll — AFTER this RPC, which went out the moment it was called. So the
+## timeline used to land first: `_prepare` put each model at its start tile while
+## the root was still standing there too, then the replicated jump to the final
+## tile dragged the model (its child) along with it, and the first step's tween
+## walked it from the end of its route back to the start before playing forward.
+static func final_poses(events: Array) -> Dictionary:
+	var out := {}
+	for e: Dictionary in events:
+		var unit := e.get("unit") as Unit
+		if unit != null and is_instance_valid(unit) and not out.has(unit.get_path()):
+			out[unit.get_path()] = [unit.global_position, unit.rotation.y]
+	return out
+
+
+## Client: puts every root where the host's already is before playback rewinds
+## the models, so the late replicated update moves nothing (see `final_poses`).
+static func apply_final_poses(poses: Dictionary, root: Node) -> void:
+	for path: NodePath in poses:
+		var unit := root.get_node_or_null(path) as Unit
+		if unit == null:
+			continue
+		var pose: Array = poses[path]
+		unit.global_position = pose[0]
+		unit.rotation.y = pose[1]
 
 
 ## Back from the wire on a client; events naming a unit it cannot resolve are
@@ -115,17 +146,93 @@ func play(events: Array, tree: SceneTree) -> void:
 	_prepare(events, units, unspawned)
 	LightingManager.begin_display()
 	var map := tree.get_first_node_in_group("map")
+	# Reaction bursts play detached from the slots (ExplorationRules.schedule):
+	# each one's Join, by shooter and by target, until it lands.
+	var by_shooter := {}
+	var by_target := {}
 	for group: Array in groups:
+		# Held until any reaction burst it must not overlap has landed: anything
+		# the shooter does next, and the target going down or being shot again.
+		for index: int in group:
+			for j: Join in _reaction_waits(events[index], by_shooter, by_target):
+				if j.left > 0:
+					await j.finished
 		_update_visibility(units, unspawned, map, events, group)
 		var join := Join.new()
-		join.left = group.size()
+		join.left = 0
 		for index: int in group:
-			_run(events[index], index == last_step.get(events[index]["unit"], -1), unspawned, join)
+			var e: Dictionary = events[index]
+			if e["kind"] == ExplorationRules.EV_SHOT and e.get("reaction", false) \
+					and not e.get("melee", false):
+				var rj := Join.new()
+				rj.left = 1
+				by_shooter[e["unit"]] = rj
+				if not by_target.has(e["target"]):
+					by_target[e["target"]] = []
+				by_target[e["target"]].append(rj)
+				_play_reaction(e["unit"], e, _arrival_in(events, group, e["target"]), rj)
+				continue
+			join.left += 1
+			_run(e, index == last_step.get(e["unit"], -1), unspawned, join)
 		if join.left > 0:
 			await join.finished
 		LightingManager.recompute_display()
+	for rj: Join in by_shooter.values():
+		if rj.left > 0:
+			await rj.finished
 	_finish(units)
 	LightingManager.end_display()
+
+
+## The reaction bursts still in the air that `e` must wait for: one by its own
+## unit, and — unless `e` is just its target running on — any at its unit.
+func _reaction_waits(e: Dictionary, by_shooter: Dictionary, by_target: Dictionary) -> Array:
+	var out: Array = []
+	var unit: Variant = e.get("unit")
+	if by_shooter.has(unit):
+		out.append(by_shooter[unit])
+	var runs_on: bool = e["kind"] in [ExplorationRules.EV_STEP, ExplorationRules.EV_TURN,
+		ExplorationRules.EV_LIGHT]
+	if not runs_on and by_target.has(unit):
+		out.append_array(by_target[unit])
+	if e["kind"] == ExplorationRules.EV_SHOT and by_target.has(e.get("target")) \
+			and not e.get("reaction", false):
+		out.append_array(by_target[e["target"]])
+	return out
+
+
+## Seconds until `target`'s model arrives where its step in `group` takes it,
+## from now (the slot's start) — or 0 when it is not stepping in this slot.
+func _arrival_in(events: Array, group: Array, target: Unit) -> float:
+	if target == null or not is_instance_valid(target) or target.is_instant():
+		return 0.0
+	for index: int in group:
+		var e: Dictionary = events[index]
+		if e["kind"] == ExplorationRules.EV_STEP and e["unit"] == target:
+			return target.visual.global_position.distance_to(GridManager.grid_to_world(e["to"])) \
+				/ maxf(0.1, target.move_speed)
+	return 0.0
+
+
+## A reaction shot (overwatch, a suppression break) at a runner, played the way
+## it plays live: the shooter's aim picks the runner up as its step onto the
+## trigger tile begins, follows it, and the first round goes out as it arrives —
+## then the burst plays on while it keeps running. Never holds a slot up.
+func _play_reaction(unit: Unit, e: Dictionary, arrival: float, join: Join) -> void:
+	var target := e.get("target") as Unit
+	if unit != null and is_instance_valid(unit) and unit.is_inside_tree() \
+			and target != null and is_instance_valid(target):
+		if not unit.is_instant():
+			var delta := target.visual.global_position - unit.visual.global_position
+			if absf(delta.x) > 0.001 or absf(delta.z) > 0.001:
+				_play_turn(unit, atan2(-delta.x, -delta.z), false)
+			unit.track_local(target)
+			if arrival > 0.0:
+				await unit.get_tree().create_timer(arrival).timeout
+		if is_instance_valid(target):
+			await unit.replay_attack(target, e["hit"], e["crit"], e["rounds"], e["strays"], false,
+				e.get("lean", Vector3i.ZERO), e.get("doomed", false), e.get("part", -1), true)
+	join.done()
 
 
 ## Most a horde body's walk starts behind the pack's first, seconds. Enough that
@@ -378,13 +485,13 @@ func _play_step(unit: Unit, e: Dictionary, last_step: bool) -> void:
 		visual.set_stance_local(UnitVisual.IDLE)
 
 
-func _play_turn(unit: Unit, yaw: float) -> void:
+func _play_turn(unit: Unit, yaw: float, hold := true) -> void:
 	var visual := unit.visual
 	var local_yaw := visual.rotation.y + wrapf(yaw - unit.rotation.y - visual.rotation.y, -PI, PI)
 	# Instant either way, then held for the turn's length when drawn: the
 	# model's free-turn springs (UnitVisual) draw the turn itself.
 	visual.rotation.y = local_yaw
-	if unit.is_instant():
+	if unit.is_instant() or not hold:
 		return
 	await visual.get_tree().create_timer(TURN_SECONDS).timeout
 

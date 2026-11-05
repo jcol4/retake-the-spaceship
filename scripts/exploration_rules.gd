@@ -102,6 +102,11 @@ const EV_SPAWN := "spawn"
 ##   - for a shot, the target's own last event so far — the shot lands where the
 ##     target is drawn, after its last step has played,
 ##   - for a spawn, the spawner's last event.
+## A REACTION shot ("reaction": overwatch, a suppression break — Unit's
+## "Reaction fire on a runner") is the exception both ways: it goes in the
+## same slot as its target's step onto the trigger tile, and its target does
+## NOT hold still for it. TickPlayback plays it detached from the slots, timed
+## so its first round lands as that step arrives.
 static func schedule(events: Array) -> Array[int]:
 	var slots: Array[int] = []
 	var own_last := {}
@@ -115,8 +120,11 @@ static func schedule(events: Array) -> Array[int]:
 		if shot_at.has(unit):
 			slot = maxi(slot, shot_at[unit] + 1)
 		var kind: String = e.get("kind", "")
+		var reaction: bool = kind == EV_SHOT and e.get("reaction", false)
 		if kind == EV_STEP and vacated.has(e.get("to")):
 			slot = maxi(slot, vacated[e.get("to")] + 1)
+		elif reaction and own_last.has(e.get("target")):
+			slot = maxi(slot, own_last[e.get("target")])
 		elif kind == EV_SHOT and own_last.has(e.get("target")):
 			slot = maxi(slot, own_last[e.get("target")] + 1)
 		elif kind == EV_SPAWN and own_last.has(e.get("by")):
@@ -125,7 +133,7 @@ static func schedule(events: Array) -> Array[int]:
 		own_last[unit] = slot
 		if kind == EV_STEP:
 			vacated[e.get("from")] = maxi(vacated.get(e.get("from"), -1), slot)
-		elif kind == EV_SHOT:
+		elif kind == EV_SHOT and not reaction:
 			shot_at[e.get("target")] = maxi(shot_at.get(e.get("target"), -1), slot)
 	return slots
 

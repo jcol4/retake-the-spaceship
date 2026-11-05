@@ -23,6 +23,9 @@ const MERC := "res://scenes/merc_unit.tscn"
 const TARGET_TILE := Vector3i(8, 0, 4)
 const EAST_A := Vector3i(11, 0, 4)
 const EAST_B := Vector3i(11, 0, 5)
+## The west compartment, through a wall from the target — no line, far out of
+## range, reachable only through the door at (5,7).
+const FAR_WEST := Vector3i(1, 0, 1)
 
 var _failures := 0
 var _grid: Node
@@ -74,6 +77,12 @@ func _initialize() -> void:
 	await _check_attack_gated_on_viable_accuracy_not_flat_range()
 	await _check_overwatch_awareness()
 	await _check_priority_targets()
+	await _check_plans_fit_in_the_ap()
+	await _check_overwatch_is_not_cover()
+	await _check_no_flank_cover_shuttle()
+	await _check_advance_stops_at_first_shot()
+	await _check_pruning_lasts_one_activation()
+	await _check_contact_holds_on_a_lit_shot()
 
 	print("")
 	if _failures == 0:
@@ -243,6 +252,10 @@ func _check_planner_chains_suppress_into_flank() -> void:
 		"the second merc does NOT re-pin an already-pinned target")
 	_check(board.holder(FLANKER) == b, "it takes the flanker role instead")
 	_check(b.grid_pos != b_start, "and actually moves (%s -> %s)" % [b_start, b.grid_pos])
+	# The flank goal ends in a shot, and the walk is budgeted to leave one: a
+	# flanker that reaches its angle and then has nothing left to fire with has
+	# spent its turn walking.
+	_check(brain_b._passive_activations == 0, "and fires in the same activation it flanks")
 	# The payoff, stated as the thing the player would feel: the second merc used
 	# the window to IMPROVE ITS POSITION — either it took an angle the target's
 	# cover does not reach, or it got behind something itself.
@@ -672,6 +685,191 @@ func _check_priority_targets() -> void:
 ## so mag_size 0, so ammo 0 — and every action that needs a magazine reports
 ## itself unavailable. The planner then correctly finds nothing, and the test
 ## looks like a planner bug instead of a setup one.
+## AI FIX 1 — the planner budgets AP across the WHOLE plan.
+##
+## It used to check each action against the unit's current AP only, so a plan
+## whose walk spent the shot's AP still passed: the merc walked, replanned,
+## could not afford the shot, and ended its turn having fired nothing. Asserted
+## as a property over every goal at every AP level, from close and from far.
+func _check_plans_fit_in_the_ap() -> void:
+	var near = await _spawn(MERC, EAST_A)
+	var far = await _spawn(MERC, FAR_WEST)
+	var target = await _spawn(PLAYER, TARGET_TILE)
+	var brain = _doctrines.merc_brain(null)
+	var overspent := []
+	var plans_seen := 0
+	for merc in [near, far]:
+		merc.begin_activation()
+		var full: int = merc.ap
+		for hurt in [false, true]:
+			merc.current_hp = 1 if hurt else merc.stats.max_hp()
+			for ap in range(0, full + 1):
+				merc.ap = ap
+				for entry: Dictionary in brain.goals:
+					var ctx := {"target": target, "blackboard": null}
+					var state: Dictionary = brain.read_state(merc, target)
+					var plan: Array = _planner.plan(merc, brain.actions, state, entry["goal"], ctx)
+					if plan.is_empty():
+						continue
+					plans_seen += 1
+					var left: int = ap
+					for step in plan:
+						left -= step.ap_cost(merc, ctx)
+						if left < 0:
+							break
+						if step.ends_activation:
+							left = 0
+					if left < 0:
+						overspent.append("%s @%d AP: %s" % [entry["name"], ap,
+							", ".join(plan.map(func(a): return String(a.name)))])
+		merc.current_hp = merc.stats.max_hp()
+	_check(plans_seen > 0, "plans were produced to check (%d)" % plans_seen)
+	_check(overspent.is_empty(), "no plan costs more AP than the unit has (%s)"
+		% "; ".join(overspent))
+	_free([near, far, target])
+
+
+## AI FIX 2 — overwatch is not cover.
+##
+## `HoldOverwatch` used to list IN_COVER as an effect, so "fight from cover" was
+## satisfiable by [HoldOverwatch, AttackFromCover] — and overwatch ends the
+## activation, so the shot never came. It is now its own last-resort goal.
+func _check_overwatch_is_not_cover() -> void:
+	var merc = await _spawn(MERC, EAST_A)
+	var target = await _spawn(PLAYER, TARGET_TILE)
+	merc.begin_activation()
+	var brain = _doctrines.merc_brain(null)
+	var ctx := {"target": target, "blackboard": null}
+	var state: Dictionary = brain.read_state(merc, target)
+	state[_action_cls.IN_COVER] = false  # force the cover goal to have to plan for it
+	var cover_goal := {}
+	var hold_goal := {}
+	for entry: Dictionary in brain.goals:
+		if entry["name"] == &"fight_from_cover":
+			cover_goal = entry["goal"]
+		if entry["name"] == &"hold":
+			hold_goal = entry["goal"]
+	var plan: Array = _planner.plan(merc, brain.actions, state, cover_goal, ctx)
+	var names: Array = plan.map(func(a): return String(a.name))
+	_check(not ("HoldOverwatch" in names),
+		"fighting from cover never routes through overwatch (%s)" % ", ".join(names))
+	_check(not hold_goal.is_empty(), "overwatch has a last-resort goal of its own")
+	var hold: Array = _planner.plan(merc, brain.actions, state, hold_goal, ctx)
+	_check(hold.size() == 1 and String(hold[0].name) == "HoldOverwatch",
+		"which plans exactly one overwatch")
+	_free([merc, target])
+
+
+## AI FIX 3 — a lone merc against a target in cover does not shuttle between a
+## flank tile and a cover tile all turn. One activation, start to finish: it
+## makes at most one move and it shoots.
+func _check_no_flank_cover_shuttle() -> void:
+	var merc = await _spawn(MERC, EAST_B)
+	var target = await _spawn(PLAYER, TARGET_TILE)
+	var brain = _doctrines.merc_brain(_blackboard_cls.new())
+	var lines: Array[String] = []
+	merc.action_logged.connect(func(t: String) -> void: lines.append(t))
+	merc.begin_activation()
+	await brain.run(merc, target)
+	var moves := 0
+	for line in lines:
+		if "flank" in line or "takes cover" in line or "advances" in line:
+			moves += 1
+	_check(moves <= 1, "the merc moves at most once in its activation (%d: %s)"
+		% [moves, " | ".join(lines)])
+	_check(brain._passive_activations == 0, "and it shoots (%s)" % " | ".join(lines))
+	_free([merc, target])
+
+
+## AI FIX 4 — Advance stops at the first tile with a viable shot, is charged for
+## the tiles it actually walks, and only promises a shot when it gets one.
+## And a merc far out of range still closes rather than standing still.
+func _check_advance_stops_at_first_shot() -> void:
+	var merc = await _spawn(MERC, FAR_WEST)
+	var target = await _spawn(PLAYER, TARGET_TILE)
+	merc.begin_activation()
+	var brain = _doctrines.merc_brain(null)
+	var advance = null
+	for action in brain.actions:
+		if String(action.name) == "Advance":
+			advance = action
+	var ctx := {"target": target, "blackboard": null}
+	var walk: Dictionary = advance._walk(merc, ctx)
+	_check(not walk.is_empty(), "a merc out of range has somewhere to advance to")
+	var path: Array = walk["path"]
+	_check(advance.ap_cost(merc, ctx) == merc.move_cost_for(path.size()),
+		"Advance is charged for the %d tiles it walks, not one" % path.size())
+	var first_viable := -1
+	for i in path.size():
+		if brain.shot_viable_from(merc, path[i], target):
+			first_viable = i
+			break
+	_check(first_viable == -1 or first_viable == path.size() - 1,
+		"it stops at the first tile with a shot (first at %d of %d)" % [first_viable, path.size()])
+	var fx: Dictionary = advance.planned_effects(merc, ctx)
+	_check(fx.has(_action_cls.IN_RANGE) == walk["shot"],
+		"and promises a shot only when the walk reaches one (shot=%s)" % walk["shot"])
+
+	var start: Vector3i = merc.grid_pos
+	await brain.run(merc, target)
+	_check(merc.grid_pos != start, "a merc far out of range still closes (%s -> %s, goal %s)"
+		% [start, merc.grid_pos, brain._committed_goal])
+	_check(_grid.chebyshev_dist(merc.grid_pos, target.grid_pos) > 1,
+		"without walking up next to the target")
+
+	# The close goal is gated: a merc that already has a shot never takes it.
+	var near = await _spawn(MERC, EAST_A)
+	near.begin_activation()
+	var state: Dictionary = brain.read_state(near, target)
+	_check(state[_action_cls.OUT_OF_RANGE] == not state[_action_cls.IN_RANGE],
+		"OUT_OF_RANGE is exactly the negation of having a shot")
+	_free([merc, near, target])
+
+
+## A failed step is dropped for the rest of THAT activation only. It used to be
+## filtered out of the brain's one list for good, so a single refused shot left a
+## merc unable to plan Attack for the rest of the mission.
+func _check_pruning_lasts_one_activation() -> void:
+	var merc = await _spawn(MERC, EAST_A)
+	var target = await _spawn(PLAYER, TARGET_TILE)
+	var brain = _doctrines.merc_brain(null)
+	var full: int = brain.actions.size()
+	brain.actions = brain.actions.filter(func(a): return String(a.name) != "Attack")
+	merc.ap = 0  # the activation does nothing; only the restore is under test
+	await brain.run(merc, target)
+	_check(brain.actions.size() == full,
+		"an action pruned in one activation is back for the next (%d of %d)" % [brain.actions.size(), full])
+	_free([merc, target])
+
+
+## A merc keeps a contact it is looking at, lit, with a shot worth taking — even
+## beyond `detection_range`, which caps only first sighting. In the dark it loses
+## it as before. (Simulation: ~9 in 10 passed-up shots were this.)
+func _check_contact_holds_on_a_lit_shot() -> void:
+	var merc = await _spawn(MERC, Vector3i(13, 0, 12))
+	var target = await _spawn(PLAYER, Vector3i(6, 0, 1))
+	var turns = root.get_node("TurnManager")
+	var saved_turn: int = turns.turn_number
+	var dist: int = _grid.chebyshev_dist(merc.grid_pos, target.grid_pos)
+	_check(dist > merc.detection_range, "the target is beyond first-sighting range (%d > %d)" % [dist, merc.detection_range])
+	_grid.get_tile(target.grid_pos).light_value = 100.0
+	var acc: int = _combat.compute_accuracy(merc, target, _combat.ShotAction.SHOOT)
+	var los: bool = _grid.has_line_of_sight(merc, target)
+	merc._enter_combat(target, "")
+	turns.turn_number = saved_turn + 10  # long past lose_contact_turns
+	merc._check_contact()
+	var viable: bool = los and acc >= 15
+	_check((merc.alert_state == 2) == viable,
+		"lit, in sight, %d%% shot: contact held=%s (expected %s)" % [acc, merc.alert_state == 2, viable])
+	merc._enter_combat(target, "")
+	_grid.get_tile(target.grid_pos).light_value = 0.0
+	turns.turn_number = saved_turn + 20
+	merc._check_contact()
+	_check(merc.alert_state != 2, "and in the dark it is lost, as the flashlight design requires")
+	turns.turn_number = saved_turn
+	_free([merc, target])
+
+
 func _spawn(scene_path: String, at: Vector3i):
 	var unit = load(scene_path).instantiate()
 	if scene_path == MERC:

@@ -153,10 +153,7 @@ func _build_roster() -> Control:
 	var s: CampaignState = Campaign.state
 	for r in s.roster:
 		var block := VBoxContainer.new()
-		var name_line := Label.new()
-		name_line.text = "%s — %s — %d mission(s) survived" % [r.display_name, r.class_name_text(), r.missions_survived]
-		name_line.add_theme_font_size_override("font_size", 18)
-		block.add_child(name_line)
+		block.add_child(_name_row(r))
 		block.add_child(_dim_label(r.stats_text()))
 		block.add_child(_dim_label("Loadout: %s" % r.loadout_text()))
 		var injuries := HBoxContainer.new()
@@ -179,6 +176,40 @@ func _build_roster() -> Control:
 		list.add_child(block)
 		list.add_child(HSeparator.new())
 	return list
+
+
+## The soldier's name as an editable field (Enter or the Rename button commits),
+## then class and record. A refused name puts the old one back in the field.
+func _name_row(r: SoldierRecord) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var field := LineEdit.new()
+	field.text = r.display_name
+	field.max_length = CampaignState.MAX_NAME_LENGTH
+	field.placeholder_text = "Name"
+	field.custom_minimum_size = Vector2(220, 0)
+	field.add_theme_font_size_override("font_size", 18)
+	field.select_all_on_focus = true
+	row.add_child(field)
+	var rename := Button.new()
+	rename.text = "Rename"
+	row.add_child(rename)
+	var info := Label.new()
+	info.text = "— %s — %d mission(s) survived" % [r.class_name_text(), r.missions_survived]
+	info.add_theme_font_size_override("font_size", 18)
+	row.add_child(info)
+	var id := r.id
+	var old_name := r.display_name
+	var commit := func(_t: String = "") -> void:
+		if field.text.strip_edges() == old_name:
+			return
+		var err := Campaign.rename(id, field.text)
+		if err != "":
+			field.text = old_name
+		_after(err, "Renamed %s to %s." % [old_name, Campaign.state.record(id).display_name] if err == "" else "")
+	field.text_submitted.connect(commit)
+	rename.pressed.connect(commit)
+	return row
 
 
 # --- Recruit ----------------------------------------------------------------------

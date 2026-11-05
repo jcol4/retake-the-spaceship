@@ -77,7 +77,9 @@ MODELS = {
     "zombie": "art_src/zombie_mixamo.blend",
     # JXM-2 Securus. Its walk, idle, punch and flinch are Mixamo clips run
     # through tools/retarget_mixamo_robot.py; `die` is tools/build_robot_die.py.
-    "securus": "assets/sec_robot_v2.blend",
+    # v3 is v2 after tools/roboticize_robot.py (machine timing, steady head,
+    # scanning idle); v2 keeps the raw retargets.
+    "securus": "assets/sec_robot_v3.blend",
 }
 ## Poses a variant's .blend has an action for that must NOT ship. The robot's
 ## hand-keyed `run` predates the Mixamo set and Securus is walks_only, so it
