@@ -476,6 +476,13 @@ func _spawn_and_start() -> void:
 	# without this needing to know that.
 	_spawn_security_robots()
 
+	# Testing mode (F8): the host places any creature mid-mission. Every
+	# networked peer gets the node, menu or not, because it is also what
+	# RECEIVES the host's spawns — a client launched without `--dev` must still
+	# build the unit the host just placed.
+	if DevSpawn.enabled() or SteamLobby.is_networked():
+		add_child(DevSpawn.new(self))
+
 	# A deck with a hangar is an extraction deck (GDD §7): the mission ends when
 	# the ship leaves with someone aboard, or on a wipe — never by "every hostile
 	# down", so `clear_out_mode` goes off. A deck without one (every legacy test

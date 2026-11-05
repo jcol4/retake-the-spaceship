@@ -291,6 +291,10 @@ VARIANT_BUCKET_ZERO = {
     # zombie_mixamo.blend: a stock Mixamo import, facing -Y like the civilian.
     # Not yet judged on a moving unit.
     "zombie": 180.0,
+    # assets/sec_robot_v2.blend: the merc's rig, but every action on it is
+    # retargeted from Mixamo (tools/retarget_mixamo_robot.py) and faces -Y in
+    # armature space like the zombie. Not yet judged on a moving unit.
+    "securus": 180.0,
     # worm_anims.blend: the Z rotation that points the head (the spiked +Y end)
     # along Blender +Y, MEASURED off the rest mesh -- its tail-to-head axis sits
     # 5.3 deg anticlockwise of +Y with the rig at 25.5. The rig also lies ~93 deg
@@ -388,6 +392,11 @@ POSE_ACTION = {
     "merc": {"overwatch_hold": "overwatch", "throw_grenade": "grenade",
              "hit_react": "get_hit", "hit_react_low": "get_hit_low",
              "downed": "die"},
+    # The security robot (JXM-2 Securus). Retargeted Mixamo clips: the hook
+    # punch is its melee swing and the standing react its flinch. `die` is a
+    # scripted PLACEHOLDER slump (tools/build_robot_die.py): the death the
+    # player sees is the ragdoll, and `downed` mostly exists to allow it.
+    "securus": {"melee": "hook_punch", "hit_react": "get_hit", "downed": "die"},
     # The worm has three actions and no attack: its bite plays the idle thrash,
     # by decision, the way the brawler's swing plays its stance. Its third
     # action, `just emerged`, is not wired to any pose yet.

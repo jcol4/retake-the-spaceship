@@ -75,6 +75,15 @@ MODELS = {
     # Fodder's demo stand-in, built from Mixamo downloads by
     # tools/build_zombie_mixamo.py. The civilian stays exported as the fallback.
     "zombie": "art_src/zombie_mixamo.blend",
+    # JXM-2 Securus. Its walk, idle, punch and flinch are Mixamo clips run
+    # through tools/retarget_mixamo_robot.py; `die` is tools/build_robot_die.py.
+    "securus": "assets/sec_robot_v2.blend",
+}
+## Poses a variant's .blend has an action for that must NOT ship. The robot's
+## hand-keyed `run` predates the Mixamo set and Securus is walks_only, so it
+## would only be dead weight in the .glb.
+SKIP_POSES = {
+    "securus": ["run"],
 }
 ## Game-budget reductions, applied in memory on the way out. The sources were
 ## made for 256 px sprite renders and a Mixamo download, not for a scene with
@@ -187,6 +196,8 @@ def pose_actions(variant, character):
     uses. Returns the poses exported."""
     wanted = {}
     for pose in rs.POSES + EXTRA_POSES:
+        if pose in SKIP_POSES.get(variant, ()):
+            continue
         src = bpy.data.actions.get(rs.source_action(pose, variant))
         if src is not None:
             wanted[pose] = src

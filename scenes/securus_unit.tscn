@@ -10,8 +10,13 @@ height = 2.3
 [node name="SecurusUnit" type="Node3D" groups=["enemy_units", "units"]]
 script = ExtResource("1_script")
 ; Slow, but it walks the whole way. Faster than Sagittarii because arriving is
-; the entire threat.
-move_speed = 2.6
+; the entire threat. ONE gait, the walk (Unit.walks_only): it is animated to a
+; walk and nothing else.
+walks_only = true
+; 1.95 m/s, and NOT a free dial: the walk covers ~2.36 m a cycle and
+; UnitVisual.VARIANT_LOOP_TIME plays it over 1.2 s, so this keeps the feet
+; planted. Change one and the other is owed the same edit.
+move_speed = 1.95
 ; The thickest plate in either roster. With the head intact, the answer is EMP
 ; or an Aimed Shot; with it broken, ordinary gunfire finally works.
 ; Rescaled with weapon damage (~0.65x), not with HP: armor is subtracted FROM a

@@ -2486,16 +2486,32 @@ func _pick_strays(rounds: int, hit: bool) -> Array[int]:
 
 
 func melee_at(target: Unit) -> Combat.ShotResult:
-	# Coroutine — callers MUST `await`. Mirrors fire_at: damage lands when the
-	# animation finishes, so the target reacts in time with the swing rather than
-	# before it. No ammo is spent and nothing travels — the only mark a swing
-	# leaves is the impact flash where it connects.
+	# Coroutine — callers MUST `await`, and it returns only once the swing has
+	# fully recovered. Mirrors fire_at's per-round `muzzle`: the damage lands on
+	# the visual's `strike`, the frame the blow connects (UnitVisual.STRIKE_AT),
+	# so the target reels as the fist arrives rather than when the attacker has
+	# finished recovering its guard. No ammo is spent and nothing travels — the
+	# only mark a swing leaves is the impact flash where it connects.
 	var result := Combat.resolve_melee(self, target)
 	_record(ExplorationRules.EV_SHOT, {"target": target, "hit": result.hit, "crit": result.crit,
 		"rounds": 0, "strays": PackedInt32Array(), "melee": true})
 	is_busy = true
+	var land := _land_melee.bind(target, result)
+	visual.strike.connect(land, CONNECT_ONE_SHOT)
 	await visual.play_action(UnitVisual.MELEE)
-	if result.hit:
+	# `strike` always fires inside play_action; this only guards the damage
+	# against ever being skipped if that contract breaks.
+	if visual.strike.is_connected(land):
+		visual.strike.disconnect(land)
+		land.call()
+	is_busy = false
+	return result
+
+
+## The blow connecting: damage, the impact flash and the target's alarm. Fired
+## by `UnitVisual.strike` mid-swing (see `melee_at`).
+func _land_melee(target: Unit, result: Combat.ShotResult) -> void:
+	if result.hit and is_instance_valid(target):
 		show_impact(target.global_position, result.crit)
 		var raw := result.damage
 		target.note_hit(global_position + Vector3(0, GridManager.EYE_HEIGHT, 0),
@@ -2504,9 +2520,8 @@ func melee_at(target: Unit) -> Combat.ShotResult:
 		result.absorbed = raw - result.damage
 	# Outside the `if result.hit`, like the one in `fire_at`: a swing that missed
 	# still happened, and being swung at is the least ambiguous stimulus there is.
-	_report_incoming(target)
-	is_busy = false
-	return result
+	if is_instance_valid(target):
+		_report_incoming(target)
 
 
 ## Tells `target` this unit just attacked it — the stimulus an attack creates in
@@ -2710,11 +2725,20 @@ func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, h
 func replay_attack(target: Unit, hit: bool, crit: bool, rounds: int,
 		strays: PackedInt32Array, melee: bool, lean := Vector3i.ZERO, doomed := false, part := -1) -> void:
 	if melee:
+		# The flash and the flinch land on the contact frame, as they did live
+		# (`melee_at`), not after the recovery.
+		var land := func() -> void:
+			if hit and is_instance_valid(target):
+				_show_impact(target.visual.global_position, crit)
+				if not target.is_downed:
+					target.visual.play_hit_react_local()
+		visual.strike.connect(land, CONNECT_ONE_SHOT)
 		await visual.play_action_local(UnitVisual.MELEE)
-		if hit:
-			_show_impact(target.visual.global_position, crit)
-	else:
-		await _rpc_play_armed_burst(target.get_path(), rounds, true, hit, crit, strays, lean, doomed, part)
+		if visual.strike.is_connected(land):
+			visual.strike.disconnect(land)
+			land.call()
+		return
+	await _rpc_play_armed_burst(target.get_path(), rounds, true, hit, crit, strays, lean, doomed, part)
 	if hit and not target.is_downed:
 		target.visual.play_hit_react_local()
 

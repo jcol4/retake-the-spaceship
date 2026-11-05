@@ -25,6 +25,12 @@ extends Node3D
 ## order was given.
 signal muzzle
 
+## Fired once per MELEE action, at the frame the blow connects (STRIKE_AT).
+## Unit.melee_at lands the damage on it, so the target reels as the fist
+## arrives rather than when the swing has finished recovering. Always fires,
+## art or not, on screen or not — `_play_action` guarantees it.
+signal strike
+
 ## Fired as each boot lands during the run stance. Hook for footstep SFX and a
 ## camera shake — half of "heavy" is impact feedback, not joint angles.
 signal footstep
@@ -164,7 +170,29 @@ const VARIANT_LOOP_TIME := {
 	# is 2.25 m/s to keep the feet planted — change the two together. The rest
 	# are its clips' own lengths, or close: the neck bite plays whole at its
 	# authored 4.2 s. Not loops, but `_duration` reads any pose from this table.
+	# (Melee contact moments live in STRIKE_AT, below.)
 	&"zombie": {RUN: 0.8, IDLE: 4.0, MELEE: 4.2, DOWNED: 3.0, ALERT_SCREAM: 2.8},
+	# The security robot (assets/sec_robot_v2.blend, Mixamo clips retargeted by
+	# tools/retarget_mixamo_robot.py). Its walk covers ~2.36 m a cycle, authored
+	# at 1.42 s; played at 1.2 s so its move_speed (securus_unit.tscn) is
+	# 1.95 m/s — change the two together. Idle and flinch play at their
+	# authored 22 and 12 frames. The hook punch is 26 frames (2.17 s) of guard,
+	# wind-up, swing and recovery, played at 1.6 s; see STRIKE_AT for when it
+	# connects.
+	&"securus": {WALK: 1.2, IDLE: 22 / 12.0, MELEE: 1.6, HIT_REACT: 12 / 12.0, DOWNED: 12 / 12.0},
+}
+
+## When a variant's MELEE connects, as a fraction of the action's length:
+## `strike` fires there and the damage lands with it. Absent means 1.0 — the
+## end of the swing, which is right for every attack whose clip is all lunge
+## and no recovery (and for the brawler and civilian, which swing their idle).
+##
+## MEASURED, not tuned: the frame the striking hand stops dead at full
+## extension. Re-measure when the clip changes.
+const STRIKE_AT := {
+	# Right hook: wound back on frames 5-11, whips forward at 13.5 m/s on 12-13,
+	# full extension on 14 of the 27 keys (26 intervals) -> 12.5 / 26.
+	&"securus": 12.5 / 26.0,
 }
 
 ## Crossfade between poses, in seconds. Short: the game's actions are brisk and
@@ -323,6 +351,10 @@ var _muzzle: Node3D = null
 var _flash: MuzzleFlash = null
 ## The model's MOUNT_NODE, or null for a model that holds no gun.
 var _mount: Node3D = null
+## The glowing eye's lens material and light, or null for a model with no
+## EYE_NODE. See `_build_eye`.
+var _eye_material: StandardMaterial3D = null
+var _eye_light: OmniLight3D = null
 ## Placeholder only: the node posed to crouch or lie down, and the status light.
 var _pose_root: Node3D = null
 var _status_material: StandardMaterial3D = null
@@ -393,6 +425,8 @@ func _build_model() -> void:
 	_muzzle = null
 	_flash = null
 	_mount = null
+	_eye_material = null
+	_eye_light = null
 	_aim_mod = null
 	_health_band = null
 	_band_glow = null
@@ -435,6 +469,88 @@ func set_dead_tint(on: bool) -> void:
 		_tint_materials(DEAD_TINT)
 	else:
 		_tint_materials(Color(1.0 / DEAD_TINT.r, 1.0 / DEAD_TINT.g, 1.0 / DEAD_TINT.b))
+	_apply_eye()
+
+
+# --- The glowing eye -----------------------------------------------------------
+#
+# A model that has an EYE_NODE (an Empty on its head bone in the .blend, placed
+# by tools/add_eye_socket.py — the security robot's camera lens) gets a lit red
+# lens there and a small light that throws red on whatever is close: the read,
+# across a dark deck, that one of the things is looking at you. It rides the
+# head through every animation and the ragdoll, and goes dark with the body.
+
+const EYE_NODE := "eye"
+const EYE_COLOR := Color(1.0, 0.06, 0.03)
+## Lens radius, in the model's own units (the robot's rig is scaled 0.93).
+const EYE_RADIUS := 0.032
+## Well over the environment's glow_hdr_threshold (main.tscn), so it blooms.
+const EYE_EMISSION := 6.0
+## Kept low: at 0.8 / 1.4 m it washed the whole chest red and the eye stopped
+## reading as a point. This is a spill on the deck and the shoulders.
+const EYE_LIGHT_ENERGY := 0.35
+const EYE_LIGHT_RANGE := 1.0
+## How far in front of the lens the light sits, metres, along the facing.
+const EYE_LIGHT_LEAD := 0.25
+
+
+func _build_eye(inst: Node) -> void:
+	var socket := inst.find_child(EYE_NODE, true, false) as Node3D
+	if socket == null:
+		return
+	var lens := MeshInstance3D.new()
+	lens.name = "EyeLens"
+	var sphere := SphereMesh.new()
+	sphere.radius = EYE_RADIUS
+	sphere.height = EYE_RADIUS * 2.0
+	sphere.radial_segments = 12
+	sphere.rings = 6
+	lens.mesh = sphere
+	lens.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_eye_material = _glow_material()
+	lens.material_override = _eye_material
+	socket.add_child(lens)
+	_eye_light = OmniLight3D.new()
+	_eye_light.name = "EyeGlow"
+	_eye_light.light_color = EYE_COLOR
+	_eye_light.omni_range = EYE_LIGHT_RANGE
+	_eye_light.omni_attenuation = 2.0
+	_eye_light.shadow_enabled = false
+	_eye_light.light_specular = 0.0
+	_eye_light.light_volumetric_fog_energy = 0.0
+	socket.add_child(_eye_light)
+	# In front of the face, so it lights what the robot looks at and not the
+	# inside of its own head. The socket's axes are the head bone's, so "in
+	# front" (model -Z) is carried into them through the REST pose — the bone
+	# attachment has not been posed yet while the model is being built.
+	var socket_in_model := _rest_in(socket, inst)
+	var ahead := socket_in_model.basis.inverse() * Vector3(0, 0, -1)
+	_eye_light.position = ahead.normalized() * EYE_LIGHT_LEAD / socket_in_model.basis.get_scale().x
+	_apply_eye()
+
+
+## `node`'s transform relative to `top` with every skeleton at rest: a bone
+## attachment counts as sitting on its bone's rest, whatever it was last posed to.
+static func _rest_in(node: Node3D, top: Node) -> Transform3D:
+	var t := Transform3D.IDENTITY
+	var n: Node = node
+	while n != null and n != top:
+		if n is BoneAttachment3D and n.get_parent() is Skeleton3D:
+			var skel := n.get_parent() as Skeleton3D
+			t = skel.get_bone_global_rest(skel.find_bone((n as BoneAttachment3D).bone_name)) * t
+		elif n is Node3D:
+			t = (n as Node3D).transform * t
+		n = n.get_parent()
+	return t
+
+
+## Lit while the unit lives; a dark lens once it is dead.
+func _apply_eye() -> void:
+	if _eye_material == null:
+		return
+	var lit := not _dead_tinted
+	_set_glow(_eye_material, EYE_COLOR, EYE_EMISSION if lit else 0.0)
+	_eye_light.visible = lit
 
 
 func _tint_materials(tint: Color) -> void:
@@ -466,6 +582,7 @@ func _build_single(sidecar: Dictionary) -> bool:
 	_dress_surfaces(inst)
 	# After dressing, which would otherwise tint and outline the flash too.
 	_mount_flash()
+	_build_eye(inst)  # likewise: a glow, not a surface
 	_bind_aim(inst)
 	return true
 
@@ -1229,15 +1346,25 @@ func _play_action(action: StringName) -> void:
 		# comes into view.
 		if action == DOWNED:
 			_settle_dead()
+		if action == MELEE:
+			strike.emit()
 		return
 	_action = action
 	_play(action, true)
 	# The same length with or without a model, which is what keeps every
 	# timing-dependent caller behaving the same before and after art exists.
 	var resolved := _resolved_base(action)
-	await get_tree().create_timer(
-		_duration(resolved) if resolved != &"" and _authored
-			else FALLBACK_TIME.get(action, DEFAULT_FALLBACK_TIME)).timeout
+	var length: float = _duration(resolved) if resolved != &"" and _authored \
+			else FALLBACK_TIME.get(action, DEFAULT_FALLBACK_TIME)
+	if action == MELEE:
+		# Split at the contact frame. The placeholder swings on the same beat,
+		# so the hit lands at the same moment with or without art.
+		var contact := length * clampf(STRIKE_AT.get(variant, 1.0), 0.0, 1.0)
+		await get_tree().create_timer(contact).timeout
+		strike.emit()
+		length -= contact
+	if length > 0.0:
+		await get_tree().create_timer(length).timeout
 	_action = &""
 	# DOWNED hands over to the corpse; every other action returns to the stance.
 	if action == DOWNED:

@@ -9,11 +9,11 @@ extends SceneTree
 ##
 ##   LAB_OUT=<dir>     write the frames somewhere else
 ##   LAB_POSE=idle     the pose each one is killed in
-##   LAB_MODEL=merc    which model (assets/models/<name>.glb): merc, zombie (Fodder)
+##   LAB_MODEL=merc    which model (assets/models/<name>.glb): merc, zombie (Fodder), securus
 ##   LAB_ROUNDS=3      follow-up rounds after the one that drops a shot case
 
 ## Which way each model faces at rest, so every case is turned to face +X.
-const FACING_YAW := {"merc": 0.0, "zombie": -90.0, "civilian": -90.0}
+const FACING_YAW := {"merc": 0.0, "zombie": -90.0, "civilian": -90.0, "securus": -90.0}
 const GUN := "res://assets/models/guns/rifle.glb"
 const SPACING := 2.6
 const SHOTS := [0.0, 0.2, 0.4, 0.6, 0.9, 1.3, 2.0, 3.5]

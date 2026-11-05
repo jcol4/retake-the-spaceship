@@ -1,0 +1,11 @@
+{
+  "variant": "securus",
+  "poses": [
+    "downed",
+    "hit_react",
+    "idle",
+    "melee",
+    "walk"
+  ],
+  "pose_yaw_degrees": {}
+}

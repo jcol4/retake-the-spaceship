@@ -17,6 +17,8 @@ const REQUIRED := {
 	&"nest": [&"idle"],
 	&"civilian": [&"idle", &"run", &"melee", &"downed"],
 	&"zombie": [&"idle", &"run", &"melee", &"downed", &"alert_scream"],
+	# walks_only, so `walk` and no `run`; `downed` is what lets it ragdoll.
+	&"securus": [&"idle", &"walk", &"melee", &"hit_react", &"downed"],
 }
 ## WormUnit.TIER_FLOOR tops, per pile layout.
 const PILE_COUNTS := {&"worm_clutch": 5, &"worm_knot": 9, &"worm_tide": 16}
