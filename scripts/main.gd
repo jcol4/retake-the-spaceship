@@ -476,7 +476,7 @@ func _spawn_and_start() -> void:
 	# without this needing to know that.
 	_spawn_security_robots()
 
-	# Testing mode (F8): the host places any creature mid-mission. Every
+	# Testing mode (P): the host places any creature mid-mission. Every
 	# networked peer gets the node, menu or not, because it is also what
 	# RECEIVES the host's spawns — a client launched without `--dev` must still
 	# build the unit the host just placed.

@@ -2,7 +2,7 @@ class_name DevSpawn
 extends Node
 ## TESTING MODE: the host places any creature on any free tile, mid-mission.
 ##
-##   F8            open / close the spawn menu
+##   P             open / close the spawn menu
 ##   pick a type   arms it; the tile under the cursor is outlined (green = free)
 ##   left-click    places one there (stays armed, so you can place several)
 ##   right-click / Esc   disarms
@@ -25,7 +25,7 @@ const HUNTER_SCENE := preload("res://scenes/agile_hunter_unit.tscn")
 const WORM_SCENE := preload("res://scenes/worm_unit.tscn")
 const NEST_SCENE := preload("res://scenes/nest_unit.tscn")
 
-const TOGGLE_KEY := KEY_F8
+const TOGGLE_KEY := KEY_P
 
 ## Menu order: [id, label, faction heading]. `horde` and `worm_tide` place more
 ## than one tile's worth; everything else is one unit on the clicked tile.
@@ -288,7 +288,7 @@ func _build_ui() -> void:
 	var box := VBoxContainer.new()
 	_panel.add_child(box)
 	var title := Label.new()
-	title.text = "TESTING — spawn (F8)"
+	title.text = "TESTING — spawn (P)"
 	box.add_child(title)
 	var heading := ""
 	for k in KINDS:
