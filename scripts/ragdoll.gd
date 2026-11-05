@@ -214,6 +214,16 @@ const RIGS := [
 		"follow": {},
 		"parts": {0: ["Head"], 1: ["Spine2", "Spine2", "Spine"], 2: ["LeftArm", "LeftForeArm"],
 			3: ["RightArm", "RightForeArm"], 4: ["LeftUpLeg", "LeftLeg"], 5: ["RightUpLeg", "RightLeg"]},
+		## Fodder dismemberment (FodderGibs): GibPlanner part -> the bone whose
+		## whole subtree comes off, and the stump's radius there, metres. A rig
+		## with no "gib" block never gibs.
+		"gib": {
+			"head": {"bone": "Head", "stump": 0.065},
+			"arm_l": {"bone": "LeftArm", "stump": 0.05},
+			"arm_r": {"bone": "RightArm", "stump": 0.05},
+			"leg_l": {"bone": "LeftUpLeg", "stump": 0.07},
+			"leg_r": {"bone": "RightUpLeg", "stump": 0.07},
+		},
 	},
 ]
 
@@ -248,6 +258,36 @@ static func _has_all(skeleton: Skeleton3D, rig: Dictionary, prefix: String) -> b
 ## Whether `skeleton` is a rig this can ragdoll.
 static func supports(skeleton: Skeleton3D) -> bool:
 	return not profile_for(skeleton).is_empty()
+
+
+## The parts `skeleton` can lose (RIGS "gib"), as part -> {bone: index, stump:
+## radius}; {} for a rig that never gibs.
+static func gib_parts(skeleton: Skeleton3D) -> Dictionary:
+	var profile := profile_for(skeleton)
+	if profile.is_empty() or not profile.rig.has("gib"):
+		return {}
+	var out := {}
+	for part: String in profile.rig.gib:
+		var spec: Dictionary = profile.rig.gib[part]
+		var bi := skeleton.find_bone(profile.prefix + String(spec.bone))
+		if bi >= 0:
+			out[StringName(part)] = {"bone": bi, "stump": float(spec.stump)}
+	return out
+
+
+## `root` and every bone under it.
+static func subtree(skeleton: Skeleton3D, root: int) -> PackedInt32Array:
+	var out := PackedInt32Array([root])
+	var i := 0
+	while i < out.size():
+		out.append_array(skeleton.get_bone_children(out[i]))
+		i += 1
+	return out
+
+
+## The scale a severed part's root bone is drawn at: everything under it folds
+## into its head. Not zero, so nothing downstream inverts a singular basis.
+const SEVERED_SCALE := Vector3.ONE * 1e-4
 
 
 var _rig: Dictionary = {}
@@ -300,9 +340,12 @@ var _counted := false
 ##   part  Combat.BodyPart or -1      seed  int, for the small random choices
 ## `gun` is the node holding the weapon model (dropped as its own body, or
 ## left alone when null); `anchor` is where it is parked once it settles.
-## `floor_y` is the deck height the unit stands on.
+## `floor_y` is the deck height the unit stands on. `severed` holds the root
+## bone indices of parts that came off (FodderGibs): no body is built anywhere
+## in their subtrees — no invisible colliders — and each root is drawn folded
+## away (SEVERED_SCALE). `clear` puts them back with the rest of the pose.
 func start(skeleton: Skeleton3D, hit: Dictionary, floor_y: float,
-		gun: Node3D = null, anchor: Node3D = null) -> void:
+		gun: Node3D = null, anchor: Node3D = null, severed: PackedInt32Array = PackedInt32Array()) -> void:
 	_skel = skeleton
 	var profile := profile_for(skeleton)
 	_rig = profile.rig
@@ -331,18 +374,32 @@ func start(skeleton: Skeleton3D, hit: Dictionary, floor_y: float,
 		_follow[fi] = [ti, skeleton.get_bone_global_pose(ti).affine_inverse() \
 			* skeleton.get_bone_global_pose(fi)]
 
+	var gone := {}
+	for root_bi in severed:
+		for bi in subtree(skeleton, root_bi):
+			gone[bi] = true
+	for fi: int in _follow.keys():
+		if gone.has(fi) or gone.has(int(_follow[fi][0])):
+			_follow.erase(fi)
+
 	# Bodies, built on the REST pose: the joints take their zero from where the
 	# bodies are when the joint is made, and the limits are written against the
 	# rest pose (a straight leg, a T-pose arm). Moved onto the current pose after.
 	for spec: Dictionary in _rig.bodies:
 		var bi := _bone(spec.bone)
+		if gone.has(bi):
+			continue
 		var body := _make_body(spec, bi, rest_g)
 		_bodies[bi] = body
 		_rest_frame[bi] = body.global_transform
 	for spec: Dictionary in _rig.bodies:
-		if spec.has("limits"):
-			var bi := _bone(spec.bone)
+		var bi := _bone(spec.bone)
+		if spec.has("limits") and _bodies.has(bi):
 			_make_joint(spec, bi, _driven_ancestor(bi))
+	# After `_pose0` was taken, so `clear` restores the scale too. Nothing drives
+	# these bones from here on (they have no bodies), so the fold stays put.
+	for root_bi in severed:
+		skeleton.set_bone_pose_scale(root_bi, SEVERED_SCALE)
 	# Overlapping pairs never collide with each other, or the solver's first act
 	# is to blow them apart — checked on the rest pose AND the pose the body falls
 	# from (hands meet on a rifle, in front of the chest).
@@ -426,6 +483,12 @@ func add_round(from: Vector3, part: int = -1) -> void:
 
 func is_simulating() -> bool:
 	return _simulating
+
+
+## The live bodies, for FodderGibs to keep its parts from colliding with the
+## body they came off.
+func bodies() -> Array:
+	return _bodies.values()
 
 
 func _exit_tree() -> void:
@@ -765,7 +828,14 @@ func _upper_share(bi: int) -> float:
 func _struck_body(part: int, rng: RandomNumberGenerator) -> RigidBody3D:
 	var names: Array = _rig.parts.get(part, _rig.parts[1])
 	var name: String = names[rng.randi() % names.size()]
-	return _bodies[_bone(name)]
+	# A part that came off (FodderGibs) has no body: the round goes into the
+	# torso instead.
+	var bi := _bone(name)
+	if not _bodies.has(bi):
+		bi = _bone(String(_rig.parts[1][0]))
+	if not _bodies.has(bi):
+		bi = _bone(_rig.root)
+	return _bodies[bi]
 
 
 func _bone(name: String) -> int:

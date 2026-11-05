@@ -652,3 +652,8 @@ func _add_worm(node_name: String, pos: Vector3i, hp: int) -> void:
 		worm.action_logged.connect(connection["callable"])
 	worm.current_hp = hp
 	worm._apply_count()
+
+
+## Not Fodder: keeps the whole-body death (FodderGibs is the basic zombie only).
+func is_fodder() -> bool:
+	return false

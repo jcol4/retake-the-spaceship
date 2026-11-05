@@ -407,6 +407,10 @@ var _burst_strays: Array[int] = []
 ## only; set by `fire_at` on the host, carried to clients with the burst.
 var _burst_doomed := false
 var _burst_part: int = -1
+## Damage past what drops the target, for a doomed burst (FodderGibs: a big
+## enough overkill takes a Fodder body apart). Presentation only, carried
+## alongside `_burst_doomed`.
+var _burst_overkill := 0
 ## The armed burst is REACTION fire (overwatch, a suppression break) at a unit
 ## that keeps running through it: no raise (the weapon is already up), the aim
 ## tracks the runner, and misses trail behind it. Carried to clients and into
@@ -667,7 +671,7 @@ func _setup_replication() -> void:
 			"downed_hp", "down_count", "carrying_path", "carried_by_path",
 			"stowed_ammo", "stowed_reserve", "stowed_reserve_mags",
 			"inventory_codes", "sidearm_selected",
-			"hit_kind", "hit_from", "hit_part", "hit_seed"]:
+			"hit_kind", "hit_from", "hit_part", "hit_seed", "hit_overkill"]:
 		var path := NodePath(".:%s" % prop)
 		config.add_property(path)
 		# ON_CHANGE, not ALWAYS. ALWAYS re-sent every property of every unit on
@@ -1506,6 +1510,9 @@ var hit_kind: int = 0
 var hit_from := Vector3.ZERO
 var hit_part: int = -1
 var hit_seed: int = 0
+## Damage past what killed it, set by `take_damage` on a killing hit (0
+## otherwise). Drives FodderGibs' heavy gib. Presentation only, like the rest.
+var hit_overkill: int = 0
 ## Its own generator, never the global one: seeded tests (test_carry's redirect
 ## loop, for one) replay the global sequence and a presentation roll in the
 ## middle of `fire_at` would shift every number after it.
@@ -1519,6 +1526,7 @@ func note_hit(from: Vector3, kind: int, part: int = -1) -> void:
 	hit_from = from
 	hit_part = part
 	hit_seed = _hit_rng.randi()
+	hit_overkill = 0
 
 
 ## Whether a landed hit of `raw` would take this unit off its feet — downed or
@@ -1528,7 +1536,14 @@ func would_collapse(raw: int) -> bool:
 
 
 func hit_record() -> Dictionary:
-	return {"kind": hit_kind, "from": hit_from, "part": hit_part, "seed": hit_seed}
+	return {"kind": hit_kind, "from": hit_from, "part": hit_part, "seed": hit_seed,
+		"overkill": hit_overkill}
+
+
+## Whether this body may come apart when it dies (FodderGibs). Presentation
+## only. Only the basic Fodder zombie says yes (SwarmUnit).
+func is_fodder() -> bool:
+	return false
 
 
 ## Where an ordinary shot lands, for the fall: an Aimed Shot hits what it aimed
@@ -1568,6 +1583,9 @@ func take_damage(amount: int) -> int:
 		if downed_hp == 0:
 			die()
 		return amount
+	# Before `die` presents the fall, which reads it (hit_record).
+	if amount >= current_hp:
+		hit_overkill = amount - current_hp
 	current_hp = maxi(current_hp - amount, 0)
 	hp_changed.emit(self)
 	if current_hp == 0:
@@ -2626,6 +2644,8 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	var incoming := target._reaction_raw_pending if reaction else 0
 	_burst_doomed = result.hit and target.carrying == null \
 		and target.would_collapse(result.damage + incoming)
+	_burst_overkill = maxi(target.damage_taken(result.damage + incoming) - target.current_hp, 0) \
+		if _burst_doomed else 0
 	_burst_reaction = reaction
 	if reaction:
 		_reacting = true
@@ -2641,7 +2661,7 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	var lean := _lean_step_toward(target)
 	_record(ExplorationRules.EV_SHOT, {"target": target, "hit": result.hit, "crit": result.crit,
 		"rounds": rounds, "strays": PackedInt32Array(_burst_strays), "melee": false, "lean": lean,
-		"doomed": _burst_doomed, "part": vis_part, "reaction": reaction})
+		"doomed": _burst_doomed, "part": vis_part, "reaction": reaction, "overkill": _burst_overkill})
 	await _play_armed_burst(rounds, lean)  # emits `muzzle` once per round
 	var doomed := _burst_doomed
 	_burst_doomed = false
@@ -2843,7 +2863,8 @@ func _on_muzzle() -> void:
 			# A runner dropped by reaction fire falls from mid-stride, keeping some
 			# of its run; the walk stops here (rules: on the host only).
 			_pending_target.halt_for_fall()
-		_pending_target.visual.take_round(from, _burst_doomed, _burst_part, runner_vel * FALL_CARRY)
+		_pending_target.visual.take_round(from, _burst_doomed, _burst_part, runner_vel * FALL_CARRY,
+			_burst_overkill)
 		_burst_part = -1
 	# ONCE PER BURST, not once per round — unlike `shot_impact` above, which is
 	# per-round because each round leaves its own separate mark.
@@ -2905,7 +2926,7 @@ func _play_armed_burst(rounds: int, lean := Vector3i.ZERO) -> void:
 		var strays := PackedInt32Array(_burst_strays)
 		for peer_id in SteamLobby.ready_peers:
 			_rpc_play_armed_burst.rpc_id(peer_id, target_path, rounds, has_shot, hit, crit, strays, lean,
-				_burst_doomed, _burst_part, _burst_reaction)
+				_burst_doomed, _burst_part, _burst_reaction, _burst_overkill)
 	await _play_burst_leaning(rounds, lean)
 
 
@@ -2963,7 +2984,7 @@ func _set_lean(offset: Vector3) -> void:
 @rpc("authority", "call_remote", "reliable")
 func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, hit: bool,
 		crit: bool, strays: PackedInt32Array, lean: Vector3i, doomed := false, part := -1,
-		reaction := false) -> void:
+		reaction := false, overkill := 0) -> void:
 	# Only what `_on_muzzle` reads; the rest of the result stays on the host.
 	var shot: Combat.ShotResult = null
 	if has_shot:
@@ -2976,6 +2997,7 @@ func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, h
 	_burst_strays.assign(strays)
 	_burst_doomed = doomed
 	_burst_part = part
+	_burst_overkill = overkill
 	_burst_reaction = reaction
 	# A reaction burst tracks its runner; picked up here when the lead-in that
 	# would have started it (`_rpc_reaction_track`, a tick's playback) did not.
@@ -3001,7 +3023,7 @@ func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, h
 ## the timeline itself. Coroutine.
 func replay_attack(target: Unit, hit: bool, crit: bool, rounds: int,
 		strays: PackedInt32Array, melee: bool, lean := Vector3i.ZERO, doomed := false, part := -1,
-		reaction := false) -> void:
+		reaction := false, overkill := 0) -> void:
 	if melee:
 		# The flash and the flinch land on the contact frame, as they did live
 		# (`melee_at`), not after the recovery.
@@ -3017,7 +3039,7 @@ func replay_attack(target: Unit, hit: bool, crit: bool, rounds: int,
 			land.call()
 		return
 	await _rpc_play_armed_burst(target.get_path(), rounds, true, hit, crit, strays, lean, doomed, part,
-		reaction)
+		reaction, overkill)
 	# A runner hit by reaction fire keeps running (move_along keeps its stance
 	# live the same way, via `is_busy`); one that has stopped flinches as usual.
 	if hit and not target.is_downed and not (reaction and target.visual.is_moving()):

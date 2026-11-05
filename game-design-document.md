@@ -281,6 +281,13 @@ Stray area damage (grenades) hits downed soldiers regardless.
 - Their **corpse stays on the map** and can be:
   - **looted (1 AP per item):** an adjacent ally moves its gear into their own inventory slots, or
   - **carried out** like a downed soldier, which recovers everything they had.
+- **How a body falls is visual only.** The death ragdoll, and Fodder dismemberment (a basic
+  Fodder zombie may lose its head or limbs to the hit that kills it, or come apart entirely to a
+  blast or heavy overkill), change nothing in the game: no tile, cover, line of sight, path, AI
+  read, save or replay. Corpse parts and gibs collide only on their own physics layer (never
+  layer 1, which sight rays use), their rolls come from the replicated hit's own seed, never the
+  gameplay RNG, and a death the ragdoll can't show (off-screen, instant, over budget) stays whole.
+  Only Fodder gibs; elites, mercs and players keep the whole-body death.
 
 **Carrying**
 - An adjacent ally spends **2 AP** to pick up a downed soldier or a corpse. Dropping one is free.
