@@ -27,8 +27,9 @@ var _waiting := false
 func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
 	if "--auto" in args or Array(args).any(func(a: String) -> bool: return a.begins_with("--auto-campaign=")):
-		get_tree().change_scene_to_file.call_deferred(Campaign.MISSION_SCENE)
+		_go_to_mission()
 		return
+	Music.play("menu")
 	var bg_layer := CanvasLayer.new()
 	bg_layer.layer = -1
 	add_child(bg_layer)
@@ -135,7 +136,7 @@ func _show_hub() -> void:
 	_swap(hub)
 	hub.setup()
 	hub.launched.connect(func() -> void:
-		get_tree().change_scene_to_file(Campaign.MISSION_SCENE))
+		_go_to_mission())
 	hub.game_over.connect(_show_game_over)
 	hub.quit_requested.connect(_back_to_title)
 
@@ -175,7 +176,7 @@ func _show_game_over() -> void:
 
 func _show_waiting() -> void:
 	if Campaign.deployment_fresh:
-		get_tree().change_scene_to_file.call_deferred(Campaign.MISSION_SCENE)
+		_go_to_mission()
 		return
 	var box := _dialog("Waiting for the host")
 	var info := Label.new()
@@ -189,7 +190,7 @@ func _show_waiting() -> void:
 
 func _on_deployment_received() -> void:
 	if _waiting:
-		get_tree().change_scene_to_file.call_deferred(Campaign.MISSION_SCENE)
+		_go_to_mission()
 
 
 func _on_debrief_received(_summary: Dictionary) -> void:
@@ -201,6 +202,14 @@ func _on_host_left() -> void:
 	SteamLobby.leave()
 	Campaign.close()
 	get_tree().change_scene_to_file.call_deferred(Campaign.FRONT_END_SCENE)
+
+
+## Every way out of the front end into a mission — the host's Launch, a co-op
+## client following the host in, `--auto` — goes through here so the menu music
+## stops at the moment of deployment.
+func _go_to_mission() -> void:
+	Music.stop()
+	get_tree().change_scene_to_file.call_deferred(Campaign.MISSION_SCENE)
 
 
 ## Leaves the campaign (it is saved already — every action saved) and any lobby.
