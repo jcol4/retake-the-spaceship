@@ -652,6 +652,17 @@ func _ready() -> void:
 ## simply lost. `show_to_peer` opens it up once that client reports ready (see
 ## main.gd's `_rpc_client_ready`); a unit spawned AFTER that (a worm shed from a
 ## pile) opens straight up for whoever is already in `SteamLobby.ready_peers`.
+## The streamed property set (see `_setup_replication`). Also what a mission
+## snapshot carries per unit (MissionSnapshot, MULTIPLAYER_PLAN.md §2.5), so a
+## rejoining client or a resumed host lands on exactly what a client sees.
+const REPLICATED: Array[String] = ["global_position", "rotation:y", "current_hp", "ap", "life_state",
+	"ammo", "reserve", "reserve_mags", "hunkered", "on_overwatch", "flashlight_on",
+	"downed_hp", "down_count", "carrying_path", "carried_by_path",
+	"stowed_ammo", "stowed_reserve", "stowed_reserve_mags",
+	"inventory_codes", "sidearm_selected",
+	"hit_kind", "hit_from", "hit_part", "hit_seed", "hit_overkill"]
+
+
 func _setup_replication() -> void:
 	var sync := MultiplayerSynchronizer.new()
 	# Fixed name, for the same reason main.gd names the units themselves: the
@@ -666,12 +677,7 @@ func _setup_replication() -> void:
 	# `carrying_path`) and the stowed weapon's rounds are the extraction plan 2.1–2.5
 	# additions; `_after_replication` turns the links and life-state changes back
 	# into visuals on the client.
-	for prop in ["global_position", "rotation:y", "current_hp", "ap", "life_state",
-			"ammo", "reserve", "reserve_mags", "hunkered", "on_overwatch", "flashlight_on",
-			"downed_hp", "down_count", "carrying_path", "carried_by_path",
-			"stowed_ammo", "stowed_reserve", "stowed_reserve_mags",
-			"inventory_codes", "sidearm_selected",
-			"hit_kind", "hit_from", "hit_part", "hit_seed", "hit_overkill"]:
+	for prop in REPLICATED:
 		var path := NodePath(".:%s" % prop)
 		config.add_property(path)
 		# ON_CHANGE, not ALWAYS. ALWAYS re-sent every property of every unit on
@@ -760,7 +766,8 @@ func show_to_peer(peer_id: int) -> void:
 func _on_moved_broadcast_grid_pos(_unit: Unit) -> void:
 	if multiplayer.is_server():
 		print("[NET] host broadcasting grid_pos for %s -> %s" % [stats.display_name, grid_pos])
-		_rpc_sync_grid_pos.rpc(grid_pos)
+		for peer_id in SteamLobby.ready_peers:  # in the mission (MULTIPLAYER_PLAN.md)
+			_rpc_sync_grid_pos.rpc_id(peer_id, grid_pos)
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -2068,7 +2075,8 @@ func relocate_to(tile: Vector3i) -> void:
 		grid_pos = tile
 		GridManager.set_occupant(grid_pos, self)
 		if multiplayer.has_multiplayer_peer() and multiplayer.is_server():
-			_rpc_sync_grid_pos.rpc(grid_pos)
+			for peer_id in SteamLobby.ready_peers:  # in the mission (MULTIPLAYER_PLAN.md)
+				_rpc_sync_grid_pos.rpc_id(peer_id, grid_pos)
 	else:
 		grid_pos = tile
 	global_position = GridManager.grid_to_world(grid_pos)

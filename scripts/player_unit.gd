@@ -76,6 +76,11 @@ var grenade_charges: int = 1
 ## by main.gd before add_child on every peer; the debrief maps units back to the
 ## roster through it.
 var record_id: String = ""
+## Co-op (MULTIPLAYER_PLAN.md §2.1): the player key (Steam ID) whose SAVE this
+## soldier is from — "" solo. Stable across a drop and a rejoin, unlike
+## `owner_peer_id`, which main.gd re-derives from it whenever the player's peer
+## changes. Record ids are per save, so `owner_key` + `record_id` names a soldier.
+var owner_key: String = ""
 ## The grenades drawn from the campaign stock for this mission (CampaignEconomy:
 ## grenades are stocked gear, allotted per soldier in the hub). Kept apart from
 ## `grenade_charges`, which counts down as they are thrown, so the debrief can tell
@@ -799,7 +804,8 @@ func _apply_loadout(weapon_id: int, attachment_ids: PackedInt32Array, ammo_id: i
 	_loadout_ammo_id = ammo_id
 	_equip(weapon_id, attachment_ids, ammo_id)
 	if multiplayer.has_multiplayer_peer() and multiplayer.is_server():
-		_rpc_sync_loadout.rpc(weapon_id, attachment_ids, ammo_id)
+		for peer_id in SteamLobby.ready_peers:  # in the mission (MULTIPLAYER_PLAN.md)
+			_rpc_sync_loadout.rpc_id(peer_id, weapon_id, attachment_ids, ammo_id)
 
 
 ## Swaps in the weapon and refills to ITS magazine and reserve — the attachments

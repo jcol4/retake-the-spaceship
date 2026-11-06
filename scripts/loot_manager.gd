@@ -124,7 +124,10 @@ func put(tile: Vector3i, code: String) -> bool:
 func _changed(c: LootContainer) -> void:
 	_present(c)
 	if SteamLobby.is_networked() and SteamLobby.is_host():
-		_rpc_contents.rpc(c.tile, c.codes(), c.is_pile)
+		# Peers in the mission only: a lobby member waiting in their hub has no deck
+		# to put a pile on (MULTIPLAYER_PLAN.md); a rejoiner catches up from the snapshot.
+		for peer_id in SteamLobby.ready_peers:
+			_rpc_contents.rpc_id(peer_id, c.tile, c.codes(), c.is_pile)
 
 
 ## A client applies the host's snapshot of one tile's container.

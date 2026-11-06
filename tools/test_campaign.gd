@@ -341,7 +341,7 @@ func _check_report_from_units() -> void:
 	var baker_items: Array = by_id["T1"]["items"]
 	_check(baker_items.has("weapon:%d:%d:-1" % [ASSAULT_RIFLE, HOLO_SIGHT]) and baker_items.has("grenade")
 		and baker_items.has("crew_tags"), "report: the carried corpse's pack holds its converted gear %s" % [baker_items])
-	_check(report["benched"] == [{"id": "T9", "grenades": 2}], "report: a deployed record with no unit is benched")
+	_check(report["benched"] == [{"id": "T9", "owner": "", "grenades": 2}], "report: a deployed record with no unit is benched")
 	s.apply_report(report)
 	_check(s.attachment_count(HOLO_SIGHT) == 1 and s.attachment_count(EXTENDED_MAG) == 0
 		and s.attachment_count(VERTICAL_GRIP) == 1, "a carried corpse's gear is recovered; the left-behind soldier's is not")

@@ -135,8 +135,10 @@ func spawn_unit(kind: SpawnKind, tile: Vector3i) -> Unit:
 	spawned += 1
 	var node_name := "%s_spawn_%d" % [name, spawned]
 	var stat_seed := randi()
+	MissionSnapshot.note(["nest", String(name), node_name, int(kind), tile, stat_seed])
 	if multiplayer.has_multiplayer_peer() and multiplayer.is_server():
-		_rpc_spawn.rpc(node_name, int(kind), tile, stat_seed)
+		for peer_id in SteamLobby.ready_peers:  # in the mission (MULTIPLAYER_PLAN.md)
+			_rpc_spawn.rpc_id(peer_id, node_name, int(kind), tile, stat_seed)
 	var unit := _spawn_at(node_name, kind, tile, stat_seed)
 	if unit != null:
 		# A spawn during a tick is played back at its slot (plan B.12): hidden
