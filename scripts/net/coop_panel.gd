@@ -17,6 +17,10 @@ var _chat_log: RichTextLabel
 var _chat_field: LineEdit
 var _friends: Array = []
 var _friends_box: VBoxContainer
+## Refreshes the friends' list every few seconds while it is on screen, on top of
+## Steam's own rich-presence pushes (`_on_steam_presence`).
+var _friends_timer: Timer
+const FRIENDS_REFRESH_SECONDS := 4.0
 var _expanded: Dictionary = {}  # key -> showing their roster
 var _armed_kick := ""
 var _status_label: Label
@@ -35,18 +39,31 @@ func _ready() -> void:
 	CoopLobby.table_changed.connect(_redraw)
 	CoopLobby.chat_received.connect(_on_chat)
 	SteamLobby.lobby_ready.connect(func(_id: int) -> void:
-		_say("")
+		# Replaces "Creating lobby..." / "Joining..." in the hub's status line too —
+		# left there, it read as the lobby never having opened.
+		_say("Lobby open — invite friends from the Co-op tab, or they can join from their Friends' lobbies list."
+			if SteamLobby.is_host() else "Joined the lobby. Pick your soldiers on Deploy, then Ready.")
 		_redraw())
 	SteamLobby.join_failed.connect(func(reason: String) -> void: _say(reason))
 	CoopPlayers.colors_changed.connect(_redraw)
+	if SteamLobby.steam_available:
+		# A friend opening (or leaving) a lobby shows up without a Refresh press.
+		Steam.friend_rich_presence_update.connect(_on_steam_presence)
+		Steam.persona_state_change.connect(_on_steam_presence)
+	_friends_timer = Timer.new()
+	_friends_timer.wait_time = FRIENDS_REFRESH_SECONDS
+	_friends_timer.timeout.connect(_on_friends_timer)
+	add_child(_friends_timer)
+	_friends_timer.start()
 	_refresh_friends()
 	_redraw()
 
 
+## Shows `text` here and in the hub's status line — always, empty included, so a
+## progress message ("Creating lobby...") never outlives what it was waiting for.
 func _say(text: String) -> void:
 	_status_label.text = text
-	if text != "":
-		status.emit(text)
+	status.emit(text)
 
 
 func _redraw() -> void:
@@ -87,6 +104,7 @@ func _draw_no_lobby() -> void:
 	var refresh := Button.new()
 	refresh.text = "Refresh"
 	refresh.pressed.connect(func() -> void:
+		SteamLobby.request_friends_presence()
 		_refresh_friends()
 		_redraw())
 	row.add_child(refresh)
@@ -94,20 +112,24 @@ func _draw_no_lobby() -> void:
 	_friends_box = VBoxContainer.new()
 	_body.add_child(_friends_box)
 	if _friends.is_empty():
-		_friends_box.add_child(_dim("No friends are in a lobby right now. A friend can also invite you from Steam."))
+		_friends_box.add_child(_dim("None of your Steam friends are playing right now. A friend can also invite you: "
+			+ "Invite friends in their lobby sends a Steam invite you accept from the overlay."))
 	for f: Dictionary in _friends:
 		var line := HBoxContainer.new()
 		var label := Label.new()
-		label.text = "%s's lobby" % f["name"]
-		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		line.add_child(label)
-		var join := Button.new()
-		join.text = "Join"
 		var lobby: int = f["lobby_id"]
-		join.pressed.connect(func() -> void:
-			_say("Joining...")
-			SteamLobby.join_game(lobby))
-		line.add_child(join)
+		label.text = "%s's lobby" % f["name"] if lobby != 0 else "%s — playing, no open lobby" % f["name"]
+		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		if lobby == 0:
+			label.modulate = Color(0.7, 0.7, 0.7)
+		line.add_child(label)
+		if lobby != 0:
+			var join := Button.new()
+			join.text = "Join"
+			join.pressed.connect(func() -> void:
+				_say("Joining...")
+				SteamLobby.join_game(lobby))
+			line.add_child(join)
 		_friends_box.add_child(line)
 
 	if dev:
@@ -154,6 +176,30 @@ func _draw_enet() -> void:
 
 func _refresh_friends() -> void:
 	_friends = SteamLobby.friends_lobbies()
+
+
+## Steam pushed a friend's presence or rich presence: redraw the list if it changed.
+## Untyped, optional arguments: the two signals carry different ones.
+func _on_steam_presence(_a: Variant = null, _b: Variant = null) -> void:
+	_update_friends()
+
+
+## Every few seconds on screen: ask Steam for fresh rich presence (the answer comes
+## back through `_on_steam_presence`), and redraw from what it already has.
+func _on_friends_timer() -> void:
+	if CoopLobby.in_lobby() or not is_visible_in_tree():
+		return
+	SteamLobby.request_friends_presence()
+	_update_friends()
+
+
+func _update_friends() -> void:
+	if CoopLobby.in_lobby() or not is_visible_in_tree():
+		return
+	var before := _friends
+	_refresh_friends()
+	if _friends != before:
+		_redraw()
 
 
 # --- In a lobby ----------------------------------------------------------------------
