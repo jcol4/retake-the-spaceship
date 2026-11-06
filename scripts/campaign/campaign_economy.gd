@@ -25,6 +25,28 @@ const MAX_SQUAD := 4
 ## four, few enough that every name on it is someone the player knows.
 const MAX_ROSTER := 8
 
+# --- Co-op (MULTIPLAYER_PLAN.md) ------------------------------------------------------
+
+## Up to four players, each bringing 1–2 of their own soldiers: a co-op squad is
+## 2–8 (still at least MIN_SQUAD in total).
+const COOP_MAX_PLAYERS := 4
+const COOP_MIN_PER_PLAYER := 1
+const COOP_MAX_PER_PLAYER := 2
+const COOP_MAX_SQUAD := COOP_MAX_PLAYERS * COOP_MAX_PER_PLAYER
+
+
+## How much a squad of `soldiers` scales the mission (MULTIPLAYER_PLAN.md: enemies
+## and payout scale with squad size): 1 up to a full solo squad, then in
+## proportion — eight soldiers face twice the horde for twice the payout, which
+## split between their players is about a solo squad's per soldier.
+static func squad_scale(soldiers: int) -> float:
+	return maxf(1.0, float(soldiers) / MAX_SQUAD)
+
+
+## A payout scaled by `scale`, rounded like every other price.
+static func scaled_payout(payout: int, scale: float) -> int:
+	return roundi(payout * scale / PAYOUT_ROUNDING) * PAYOUT_ROUNDING
+
 # --- Starting state -----------------------------------------------------------------
 
 ## One soldier per class (GDD §4.5), so a new player meets the whole roster before

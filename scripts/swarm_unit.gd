@@ -54,6 +54,12 @@ func _ready() -> void:
 	_vary_body()
 
 
+## The basic Fodder zombie comes apart when it dies (FodderGibs); the brute,
+## and the brawler and worm that extend this, do not.
+func is_fodder() -> bool:
+	return not is_brute
+
+
 ## Thirty copies of one model moving in lockstep read as a copy-paste, not a
 ## horde. A few percent of size and a random point in each looping clip breaks
 ## that up. Seeded off the node name rather than the global RNG — the name is

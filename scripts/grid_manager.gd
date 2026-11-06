@@ -731,6 +731,9 @@ func damage_cover_edge(pos: Vector3i, side: int, amount: int) -> int:
 	# Only the host resolves the fire that does this, so each ready client is
 	# handed the same damage to apply to its own copy — the edge HP starts the
 	# same everywhere, so the same hits leave it at the same tier.
+	# The same reasoning lets a mission snapshot carry cover as the list of hits
+	# (MissionSnapshot), replayed onto a freshly built board.
+	MissionSnapshot.note(["cover", pos, side, amount])
 	if multiplayer.has_multiplayer_peer() and multiplayer.is_server():
 		for peer_id in SteamLobby.ready_peers:
 			_rpc_damage_cover_edge.rpc_id(peer_id, pos, side, amount)

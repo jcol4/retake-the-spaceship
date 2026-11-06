@@ -101,8 +101,9 @@ var _mode_label: Label
 ## a live helmet-cam of their face over an ECG trace of their vitals.
 ## Unit -> SquadFeedCard. Your own select on click (exploration only); a co-op
 ## partner's are read-only; whoever is drawn or selected is outlined. The unit
-## panel is pushed down beneath it.
-var _portrait_bar: VBoxContainer
+## panel is pushed down beneath it. A co-op squad bigger than four (up to eight,
+## MULTIPLAYER_PLAN.md) goes to two columns, so the feed stays four cards tall.
+var _portrait_bar: GridContainer
 var _portraits: Dictionary = {}
 const SQUAD_FEED_MARGIN := 12.0
 ## The tile the unit panel was last drawn for. Out of combat a walk spends no AP, so
@@ -433,10 +434,12 @@ func _build_mode_label() -> void:
 
 
 func _build_portrait_bar() -> void:
-	_portrait_bar = VBoxContainer.new()
+	_portrait_bar = GridContainer.new()
 	_portrait_bar.name = "SquadFeed"
+	_portrait_bar.columns = 1
 	_portrait_bar.position = Vector2(SQUAD_FEED_MARGIN, SQUAD_FEED_MARGIN)
-	_portrait_bar.add_theme_constant_override("separation", 4)
+	_portrait_bar.add_theme_constant_override("v_separation", 4)
+	_portrait_bar.add_theme_constant_override("h_separation", 8)
 	# Only the cards may take a click from the deck.
 	_portrait_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_portrait_bar)
@@ -492,6 +495,7 @@ func _refresh_portraits() -> void:
 		if not is_instance_valid(unit) or not squad.has(unit):
 			_portraits[unit].queue_free()
 			_portraits.erase(unit)
+	_portrait_bar.columns = 2 if squad.size() > CampaignEconomy.MAX_SQUAD else 1
 	# No renderer, no faces: a headless run keeps the cards (and their vitals)
 	# but skips the cameras.
 	var live_feed := DisplayServer.get_name() != "headless"

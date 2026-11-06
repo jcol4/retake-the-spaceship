@@ -11,6 +11,9 @@ extends SceneTree
 ##   LAB_POSE=idle     the pose each one is killed in
 ##   LAB_MODEL=merc    which model (assets/models/<name>.glb): merc, zombie (Fodder), securus
 ##   LAB_ROUNDS=3      follow-up rounds after the one that drops a shot case
+##   LAB_GIBS=1        Fodder dismemberment (FodderGibs): every case comes apart —
+##                     the struck part, both arms for melee, everything for the
+##                     blast, nothing for "none". Use with LAB_MODEL=zombie.
 
 ## Which way each model faces at rest, so every case is turned to face +X.
 const FACING_YAW := {"merc": 0.0, "zombie": -90.0, "civilian": -90.0, "securus": -90.0}
@@ -79,8 +82,19 @@ func _run() -> void:
 		var base := Vector3(i * SPACING, 0, 0)
 		var r := Ragdoll.new()
 		world.add_child(r)
-		r.start(skels[i], {"kind": c[1], "part": c[2], "from": base + Vector3(c[3]), "seed": i * 7919},
-			0.0, mounts[i], skels[i].get_parent().get_parent())
+		var hit := {"kind": c[1], "part": c[2], "from": base + Vector3(c[3]), "seed": i * 7919}
+		var severed := PackedInt32Array()
+		var gibs: FodderGibs = null
+		if OS.has_environment("LAB_GIBS"):
+			gibs = FodderGibs.new()
+			world.add_child(gibs)
+			var t_cut := Time.get_ticks_usec()
+			severed = gibs.sever(skels[i], _lab_plan(c, base), 0.0, i * 31)
+			print("%s: cut %d part(s) in %.1f ms" % [c[0], severed.size(),
+				(Time.get_ticks_usec() - t_cut) / 1000.0])
+		r.start(skels[i], hit, 0.0, mounts[i], skels[i].get_parent().get_parent(), severed)
+		if gibs != null:
+			gibs.keep_apart(r.bodies())
 		_ragdolls.append(r)
 		# A burst: the round that dropped it, then LAB_ROUNDS more at the game's
 		# cadence (Unit.BURST_CADENCE / UnitVisual.take_round).
@@ -121,6 +135,29 @@ func _run() -> void:
 	_iso()
 	await _snap("iso_final")
 	quit()
+
+
+## A forced gib plan per case (GibPlanner's own rolls would skip some).
+func _lab_plan(c: Array, base: Vector3) -> Dictionary:
+	var parts: Array = []
+	match int(c[1]):
+		0:
+			parts = []
+		2:
+			parts = [&"arm_l", &"arm_r"]
+		3:
+			parts = GibPlanner.PARTS.duplicate()
+		_:
+			parts = [GibPlanner.FROM_BODY_PART.get(int(c[2]), &"head")]
+	var from := base + Vector3(c[3])
+	var dir := base - from
+	dir.y = 0.0
+	var plan := {"mode": GibPlanner.Mode.LIMBS if parts.size() < 5 else GibPlanner.Mode.HEAVY,
+		"parts": [], "dir": dir.normalized() if dir.length() > 0.01 else Vector3.RIGHT,
+		"from": from, "radial": int(c[1]) == 3}
+	for p: StringName in parts:
+		plan.parts.append({"part": p, "speed": 3.5, "spin": 8.0})
+	return plan
 
 
 func _report(at: float, skels: Array[Skeleton3D]) -> void:

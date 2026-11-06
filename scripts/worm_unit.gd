@@ -564,7 +564,8 @@ func dissolve() -> void:
 	# Only the host runs the pile logic that calls this, so a client's copy
 	# would otherwise stay on the board — visible, and holding its tile.
 	if multiplayer.has_multiplayer_peer() and multiplayer.is_server():
-		_rpc_dissolve.rpc()
+		for peer_id in SteamLobby.ready_peers:  # in the mission (MULTIPLAYER_PLAN.md)
+			_rpc_dissolve.rpc_id(peer_id)
 	# DEAD rather than DOWNED: there is no body here to revive or carry — the
 	# node is freed below, and nothing should ever offer a revive on it.
 	life_state = LifeState.DEAD
@@ -625,8 +626,10 @@ func _free_neighbour() -> Vector3i:
 func _spawn_worm_at(pos: Vector3i, hp: int) -> void:
 	_shed_count += 1
 	var node_name := "%s_shed_%d" % [name, _shed_count]
+	MissionSnapshot.note(["worm", String(name), node_name, pos, hp])
 	if multiplayer.has_multiplayer_peer() and multiplayer.is_server():
-		_rpc_spawn_worm.rpc(node_name, pos, hp)
+		for peer_id in SteamLobby.ready_peers:  # in the mission (MULTIPLAYER_PLAN.md)
+			_rpc_spawn_worm.rpc_id(peer_id, node_name, pos, hp)
 	_add_worm(node_name, pos, hp)
 
 
@@ -652,3 +655,8 @@ func _add_worm(node_name: String, pos: Vector3i, hp: int) -> void:
 		worm.action_logged.connect(connection["callable"])
 	worm.current_hp = hp
 	worm._apply_count()
+
+
+## Not Fodder: keeps the whole-body death (FodderGibs is the basic zombie only).
+func is_fodder() -> bool:
+	return false

@@ -168,6 +168,7 @@ func spawn(kind: String, tile: Vector3i) -> String:
 func _send(kind: StringName, tile: Vector3i, extra: Dictionary) -> void:
 	_counter += 1
 	var unit_name := "Dev_%s_%d" % [kind, _counter]
+	MissionSnapshot.note(["dev", String(kind), tile, unit_name, extra])
 	for peer_id in (SteamLobby.ready_peers if SteamLobby.is_networked() else []):
 		_rpc_spawn.rpc_id(peer_id, kind, tile, unit_name, extra)
 	_build(kind, tile, unit_name, extra)

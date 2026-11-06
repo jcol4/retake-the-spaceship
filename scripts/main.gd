@@ -61,7 +61,12 @@ var _player_units: Array[PlayerUnit] = []
 
 
 func _ready() -> void:
+	# A fresh mission starts a fresh journal (MissionSnapshot); a resumed one is
+	# handed its old journal back by MissionSnapshot.apply.
+	MissionSnapshot.reset()
 	TurnManager.log_message.connect(_print_line)
+	TurnManager.turn_started.connect(_on_turn_started_checkpoint)
+	add_child(MissionMenu.new())
 	ExtractionManager.notice.connect(_on_notice)
 	TurnManager.mission_ended.connect(_on_mission_ended)
 	hud.continue_pressed.connect(_on_continue)
@@ -283,7 +288,8 @@ func _spawn_and_start() -> void:
 	# Solo play never networks, so every unit stays owner 0 and
 	# `is_owned_by_local_player()` is unconditionally true (see Unit).
 	var owning_peers: Array[int] = [0]
-	if SteamLobby.is_networked():
+	var coop := Campaign.is_coop()
+	if SteamLobby.is_networked() and not coop:
 		owning_peers = [multiplayer.get_unique_id()]
 		owning_peers.append_array(Array(multiplayer.get_peers()))
 		owning_peers.sort()
@@ -306,6 +312,11 @@ func _spawn_and_start() -> void:
 		var offer := Campaign.deployed_offer()
 		if offer != null:
 			contract = offer.build_contract(map.data)
+			# MULTIPLAYER_PLAN.md: a party bigger than a solo squad is paid more
+			# (and meets bigger hordes, `_spawn_hordes`) — the same factor on every
+			# peer, from the deployment.
+			if contract != null and _scale() > 1.0:
+				contract.payout = CampaignEconomy.scaled_payout(contract.payout, _scale())
 		else:
 			contract = Contract.choose(map.data)
 			if contract != null:
@@ -318,12 +329,13 @@ func _spawn_and_start() -> void:
 
 	var player_units: Array[PlayerUnit] = []
 	var spawn_index := 0
+	var spawn_tiles := _player_spawn_tiles(records.size())
 	for i in records.size():
-		if spawn_index >= map.player_spawns.size():
+		if spawn_index >= spawn_tiles.size():
 			# More soldiers than the deck has spawn tiles (a hand-authored deck):
 			# the rest stay aboard. The debrief books them as benched, untouched.
 			print("Deck has %d spawn tiles; %d soldier(s) stay aboard" % [
-				map.player_spawns.size(), records.size() - spawn_index])
+				spawn_tiles.size(), records.size() - spawn_index])
 			break
 		var record := SoldierRecord.from_dict(records[i])
 		var unit: PlayerUnit = PLAYER_SCENE.instantiate()
@@ -337,11 +349,17 @@ func _spawn_and_start() -> void:
 		# Untreated injuries ride in (GDD §4.2.1) — on every peer, from the same
 		# record, so a client's movement preview prices the same bad leg.
 		unit.apply_injuries(record.injuries)
-		var peer_slot := mini(spawn_index / mercs_per_peer, owning_peers.size() - 1)
-		unit.owner_peer_id = owning_peers[peer_slot]
+		if coop:
+			# Per-player co-op: the soldier is whoever's save it came from, on
+			# whatever peer they are connected on now (the host's, if they are not).
+			unit.owner_key = String(records[i].get("owner", ""))
+			unit.owner_peer_id = _peer_for_key(unit.owner_key)
+		else:
+			var peer_slot := mini(spawn_index / mercs_per_peer, owning_peers.size() - 1)
+			unit.owner_peer_id = owning_peers[peer_slot]
 		print("[NET] spawning %s -> owner_peer_id=%d" % [record.display_name, unit.owner_peer_id])
 		unit.name = "Player_%d" % spawn_index
-		unit.position = GridManager.grid_to_world(map.player_spawns[spawn_index])
+		unit.position = GridManager.grid_to_world(spawn_tiles[spawn_index])
 		add_child(unit)  # Unit._ready snaps to grid + registers occupancy
 		unit.action_logged.connect(_on_unit_log)
 		player_units.append(unit)
@@ -517,6 +535,17 @@ func _spawn_and_start() -> void:
 		TurnManager.start_mission.call_deferred()
 		return
 
+	_squad = player_units
+	if Campaign.resuming:
+		_resume_from_checkpoint()
+		return
+	if Campaign.rejoining:
+		# MULTIPLAYER_PLAN.md §2.6: back into a mission already under way. The base
+		# board is built; the host's live snapshot brings it up to date.
+		hud.append_log("Rejoining the mission...")
+		_rpc_request_snapshot.rpc_id(1)
+		return
+
 	var loadout: LoadoutMenu = LoadoutMenu.new()
 	# Fed from the campaign stash (extraction plan 4.2). In co-op each peer gets
 	# the copies NOT fitted to the other player's soldiers, so the two loadout
@@ -527,7 +556,6 @@ func _spawn_and_start() -> void:
 	loadout.unlocked_ammo = Campaign.loadout_ammo()
 	add_child(loadout)
 	loadout.setup(player_units)
-	_squad = player_units
 	loadout.deployed.connect(_on_local_deployed)
 
 
@@ -556,6 +584,11 @@ func _on_local_deployed() -> void:
 		_try_start_mission()
 	else:
 		hud.append_log("Waiting for the host to deploy...")
+		# This player's own save records what their soldiers took once the host
+		# has applied the picks (they come back with the first round).
+		if Campaign.is_coop():
+			TurnManager.turn_started.connect(func(_n: int) -> void: Campaign.note_loadouts(_player_units),
+				CONNECT_ONE_SHOT)
 		_rpc_client_ready.rpc_id(1)
 
 
@@ -565,20 +598,28 @@ func _rpc_client_ready() -> void:
 		return
 	var peer_id := multiplayer.get_remote_sender_id()
 	print("[NET] peer %d reports ready" % peer_id)
-	if peer_id in SteamLobby.ready_peers:
-		return
-	SteamLobby.ready_peers.append(peer_id)
-	for node in get_tree().get_nodes_in_group("units"):
-		var unit := node as Unit
+	if peer_id not in SteamLobby.ready_peers:
+		SteamLobby.ready_peers.append(peer_id)
+	# Every unit child, not just the "units" group: a body aboard a ship has left
+	# the group but still streams.
+	for child in get_children():
+		var unit := child as Unit
 		if unit:
 			unit.show_to_peer(peer_id)
+	if _mission_started:
+		_hand_back(peer_id)
 	_try_start_mission()
 
 
 func _try_start_mission() -> void:
 	if _mission_started or not _host_deployed:
 		return
+	var players := CoopRules.players_of(Campaign.deployment)
 	for peer_id in multiplayer.get_peers():
+		# Only the players on this mission: a lobby member who joined after the
+		# launch waits in their own hub and never reports ready here.
+		if Campaign.is_coop() and not players.has(CoopPlayers.key_of(peer_id)):
+			continue
 		if peer_id not in SteamLobby.ready_peers:
 			hud.append_log("Waiting for your squadmate to deploy...")
 			return
@@ -601,8 +642,10 @@ func _on_host_left() -> void:
 	TurnManager.abandon()
 	var dialog := AcceptDialog.new()
 	dialog.title = "Disconnected"
-	dialog.dialog_text = "The host left the game, so this mission is over."
-	dialog.ok_button_text = "Back to menu"
+	dialog.dialog_text = "The host left the game, so this mission is over for now."
+	if Campaign.is_coop():
+		dialog.dialog_text += "\n\nYour soldiers stay deployed with them: you'll be brought back in when the host resumes the mission, or you can write them off from your roster."
+	dialog.ok_button_text = "Back to the hub" if Campaign.is_coop() else "Back to menu"
 	add_child(dialog)
 	dialog.confirmed.connect(_return_to_menu)
 	dialog.canceled.connect(_return_to_menu)
@@ -613,7 +656,12 @@ func _on_host_left() -> void:
 ## the host's debrief, if it ever happens, is the host's.
 func _return_to_menu() -> void:
 	SteamLobby.leave()
-	Campaign.close()
+	# Per-player co-op: this player still has their own campaign — back to its hub.
+	if Campaign.is_coop() and Campaign.state != null:
+		Campaign.leave_mission()
+	else:
+		Campaign.close()
+	get_tree().paused = false
 	get_tree().change_scene_to_file(Campaign.FRONT_END_SCENE)
 
 
@@ -631,12 +679,14 @@ func _on_squadmate_left(peer_id: int) -> void:
 			unit.cancel_walk()
 			GridManager.release_reservation(unit)
 			unit.owner_peer_id = multiplayer.get_unique_id()
+			for ready_peer in SteamLobby.ready_peers:  # in the mission (MULTIPLAYER_PLAN.md)
+				_rpc_owner.rpc_id(ready_peer, String(unit.name), unit.owner_peer_id)
 			# Mid-activation for one of theirs: re-announce it, so the HUD
 			# (which decided on activation that it wasn't ours to drive) picks
 			# it up instead of the turn stalling on nobody.
 			if unit == TurnManager.active_unit:
 				TurnManager.unit_activated.emit(unit)
-	hud.append_log("Your squadmate disconnected — their mercs are yours now.")
+	hud.append_log("A squadmate disconnected — you're driving their soldiers until they rejoin.")
 	_try_start_mission()
 
 
@@ -670,7 +720,10 @@ func _spawn_hordes(map: Node3D, nest_spawns: Array[Vector3i], contract: Contract
 			anchors.append(spawn)
 	var index := 1
 	for h in anchors.size():
-		var tiles := _horde_tiles(map, anchors[h], randi_range(AlienPresets.HORDE_MIN, AlienPresets.HORDE_MAX), reserved)
+		# MULTIPLAYER_PLAN.md: a bigger party meets a bigger horde (1x up to four
+		# soldiers). The roll is made either way, so the RNG stays in step.
+		var size := roundi(randi_range(AlienPresets.HORDE_MIN, AlienPresets.HORDE_MAX) * _scale())
+		var tiles := _horde_tiles(map, anchors[h], size, reserved)
 		for i in tiles.size():
 			var swarm: SwarmUnit = SWARM_SCENE.instantiate()
 			# The first body, on the anchor, is the horde's brute.
@@ -1481,10 +1534,180 @@ func _on_unit_log(text: String) -> void:
 	# out (see turn_manager.gd's `_log`). Only the host's copy of a unit ever
 	# actually runs these actions, so only the host needs to relay.
 	if SteamLobby.is_networked() and SteamLobby.is_host():
-		_rpc_relay_log.rpc(text)
+		for peer_id in SteamLobby.ready_peers:  # in the mission (MULTIPLAYER_PLAN.md)
+			_rpc_relay_log.rpc_id(peer_id, text)
 
 
 @rpc("authority", "call_remote", "reliable")
 func _rpc_relay_log(text: String) -> void:
 	print(text)
 	hud.append_log(text)
+
+
+# --- Per-player co-op (MULTIPLAYER_PLAN.md) -----------------------------------------------
+
+
+## The deployment's squad scale (CampaignEconomy.squad_scale): 1 solo and for any
+## party of up to four soldiers.
+func _scale() -> float:
+	return maxf(1.0, float(Campaign.deployment.get("scale", 1.0)))
+
+
+## The peer the player `key` is connected on, or the host's if they are not here
+## (the host drives a missing player's soldiers until they rejoin).
+func _peer_for_key(key: String) -> int:
+	if not SteamLobby.is_networked():
+		return 0
+	var peer := CoopPlayers.peer_of(key)
+	return peer if peer > 0 else 1
+
+
+## Where `count` soldiers stand at the start: the deck's own player spawns, and —
+## for a party bigger than the deck was drawn for (MULTIPLAYER_PLAN.md: up to
+## eight) — more around the first of them, breadth-first in its compartment, the
+## same way a horde is laid out (so every peer picks the same tiles). Clear of
+## every other marker, so nothing spawned after the squad lands on a soldier.
+func _player_spawn_tiles(count: int) -> Array[Vector3i]:
+	var tiles: Array[Vector3i] = []
+	tiles.assign(map.player_spawns)
+	if count <= tiles.size() or tiles.is_empty():
+		return tiles
+	var reserved := {}
+	for tile: Vector3i in tiles:
+		reserved[tile] = true
+	for markers: Array[Vector3i] in [map.enemy_spawns, map.swarm_spawns, map.brawler_spawns,
+			map.hunter_spawns, map.worm_spawns, map.merc_spawns, map.nest_spawns]:
+		for tile in markers:
+			reserved[tile] = true
+	for kind: int in map.cerberus_spawns:
+		for tile: Vector3i in map.cerberus_spawns[kind]:
+			reserved[tile] = true
+	for tile in _horde_tiles(map, tiles[0], count, reserved):
+		if tiles.size() >= count:
+			break
+		tiles.append(tile)
+	return tiles
+
+
+## A co-op host back from its checkpoint (MULTIPLAYER_PLAN.md §2.8): the board is
+## built from the deployment; the snapshot brings it to the round it was saved at,
+## every soldier is the host's to drive until their player rejoins, and the turn
+## loop picks that round up again. No loadout screen: the guns are in the snapshot.
+func _resume_from_checkpoint() -> void:
+	var snap: Dictionary = Campaign.resume_snapshot
+	MissionSnapshot.apply(self, snap, true)
+	var host_id := multiplayer.get_unique_id() if SteamLobby.is_networked() else 0
+	for unit in _player_units:
+		if is_instance_valid(unit):
+			unit.owner_peer_id = host_id
+	SteamLobby.ready_peers.clear()
+	_host_deployed = true
+	_mission_started = true
+	Campaign.resuming = false
+	Campaign.resume_snapshot = {}
+	Campaign.deployment_fresh = false
+	for unit in _player_units:
+		if is_instance_valid(unit) and not unit.aboard and unit.life_state == Unit.LifeState.ACTIVE:
+			camera_rig.focus_on(unit.global_position)
+			break
+	hud.append_log("Resumed. You're driving every soldier until their players rejoin.")
+	TurnManager.resume_mission.call_deferred(snap.get("turn", {}))
+
+
+## Host: the co-op checkpoint, at every round start (MULTIPLAYER_PLAN.md §2.8).
+## Inside `turn_started`, after the autoloads' own handlers (connected first): the
+## bleed, the ship timers and the terminal's count for this round are in it.
+func _on_turn_started_checkpoint(_turn: int) -> void:
+	if _auto or not Campaign.is_coop() or TurnManager.mission_over:
+		return
+	if SteamLobby.is_networked() and not SteamLobby.is_host():
+		return
+	Campaign.write_checkpoint(MissionSnapshot.capture(self))
+
+
+## Rejoining client -> host: my board is built, send me where the mission is.
+## The peer joins `ready_peers` NOW, before the snapshot goes: every gated RPC from
+## here on is ordered after it, so nothing between the capture and this client's
+## apply is lost. Its units become visible to it once it has applied (`_rpc_client_ready`).
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_request_snapshot() -> void:
+	if not multiplayer.is_server():
+		return
+	var peer := multiplayer.get_remote_sender_id()
+	if not CoopLobby.is_mission_owner(CoopPlayers.key_of(peer)):
+		return
+	var snap := MissionSnapshot.capture(self)
+	if peer not in SteamLobby.ready_peers:
+		SteamLobby.ready_peers.append(peer)
+	_rpc_snapshot.rpc_id(peer, snap)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_snapshot(snap: Dictionary) -> void:
+	MissionSnapshot.apply(self, snap, false)
+	Campaign.rejoining = false
+	Campaign.deployment_fresh = false
+	for unit in _player_units:
+		if is_instance_valid(unit) and unit.owner_key == CoopPlayers.local_key() and not unit.aboard:
+			camera_rig.focus_on(unit.global_position)
+			break
+	hud.append_log("Back in the mission.")
+	# The host may have the party paused right now.
+	get_tree().paused = CoopLobby.paused
+	_rpc_client_ready.rpc_id(1)
+
+
+## Host: the player on `peer` is back (a rejoin): their soldiers are theirs again,
+## on every peer, and they are told where the round is.
+func _hand_back(peer: int) -> void:
+	var key := CoopPlayers.key_of(peer)
+	if key == "":
+		return
+	var any := false
+	for child in get_children():
+		var p := child as PlayerUnit
+		if p == null or p.owner_key != key or p.owner_peer_id == peer:
+			continue
+		p.cancel_walk()
+		GridManager.release_reservation(p)
+		p.owner_peer_id = peer
+		for peer_id in SteamLobby.ready_peers:  # in the mission (MULTIPLAYER_PLAN.md)
+			_rpc_owner.rpc_id(peer_id, String(p.name), peer)
+		any = true
+		# The host was holding this activation: let its HUD go of it.
+		if p == TurnManager.active_unit and TurnManager.mode == TurnManager.Mode.TURN:
+			TurnManager.unit_activated.emit(p)
+	if TurnManager.in_exploration():
+		TurnManager.reselect_local()
+	TurnManager._rpc_mode_changed.rpc_id(peer, TurnManager.mode, TurnManager.steps, TurnManager.turn_number)
+	if TurnManager.mode == TurnManager.Mode.TURN and is_instance_valid(TurnManager.active_unit):
+		TurnManager._rpc_sync_active_unit.rpc_id(peer, TurnManager.active_unit.get_path())
+	if any:
+		hud.append_log("%s is back — their soldiers are theirs again." % CoopPlayers.name_of(peer))
+
+
+## Every peer: unit `unit_name` is now driven from `peer` (a drop, or a rejoin).
+@rpc("authority", "call_remote", "reliable")
+func _rpc_owner(unit_name: String, peer: int) -> void:
+	var unit := get_node_or_null(NodePath(unit_name)) as Unit
+	if unit == null:
+		return
+	unit.owner_peer_id = peer
+	if TurnManager.in_exploration():
+		TurnManager.reselect_local()
+
+
+## The Esc menu's Leave (MissionMenu). A co-op guest drops out — their soldiers
+## stay with the host and they can rejoin. The co-op host stops for everyone; the
+## round-start checkpoint is what the party resumes from. Solo is ironman: the save
+## still holds the mission, and the next Continue books the squad lost.
+func quit_mission() -> void:
+	get_tree().paused = false
+	if SteamLobby.is_networked() and not SteamLobby.is_host():
+		TurnManager.abandon()
+		_return_to_menu()
+		return
+	TurnManager.abandon()
+	SteamLobby.leave()
+	Campaign.close()
+	get_tree().change_scene_to_file(Campaign.FRONT_END_SCENE)

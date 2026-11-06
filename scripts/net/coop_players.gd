@@ -11,6 +11,11 @@ extends Node
 
 signal colors_changed
 signal cursor_received(peer_id: int, at: Vector3, on_deck: bool)
+## The peer -> player table changed (someone said hello, or left).
+signal players_changed
+## Host-side: `peer_id` has said who it is. CoopLobby hangs the lobby and rejoin
+## logic off this rather than off `peer_connected`, which knows only a peer id.
+signal player_identified(peer_id: int, key: String)
 
 ## The swatches on offer. The first four are the default colours for the host,
 ## player 2, 3 and 4: a player with no saved choice gets the first one free.
@@ -27,6 +32,10 @@ const PALETTE: Array[Color] = [
 
 ## Peer id -> index into PALETTE, on every peer. Empty out of a lobby.
 var _colors: Dictionary = {}
+## Peer id -> {"key": player key, "name": display name}, on every peer, host-built
+## (MULTIPLAYER_PLAN.md §2.1). Peer ids change every connection; the KEY — the
+## Steam ID — is who the player is: what owns soldiers and is owed reports.
+var _players: Dictionary = {}
 
 
 func _ready() -> void:
@@ -59,10 +68,89 @@ func request_color(index: int) -> void:
 		_rpc_request_color.rpc_id(1, index)
 
 
-## Forgets the lobby's colours (SteamLobby.leave).
+## Forgets the lobby's colours and players (SteamLobby.leave).
 func clear() -> void:
 	_colors.clear()
+	_players.clear()
 	colors_changed.emit()
+	players_changed.emit()
+
+
+# --- Who is who (MULTIPLAYER_PLAN.md §2.1) --------------------------------------------
+
+
+## This player's key: their Steam ID, or "local" without Steam. `--player-key=<k>`
+## overrides it, so two instances on one machine (or a test) can be two players.
+static func local_key() -> String:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--player-key="):
+			return arg.trim_prefix("--player-key=")
+	if SteamLobby.steam_available:
+		return str(Steam.getSteamID())
+	return "local"
+
+
+static func local_name() -> String:
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--player-name="):
+			return arg.trim_prefix("--player-name=")
+	if SteamLobby.steam_available:
+		return Steam.getPersonaName()
+	return "Player"
+
+
+## The key of whoever is on `peer_id`, or "" if they have not said hello.
+func key_of(peer_id: int) -> String:
+	if peer_id == multiplayer.get_unique_id() and not _players.has(peer_id):
+		return local_key()
+	return String((_players.get(peer_id, {}) as Dictionary).get("key", ""))
+
+
+func name_of(peer_id: int) -> String:
+	return String((_players.get(peer_id, {}) as Dictionary).get("name", "Player"))
+
+
+## The peer the player `key` is connected on right now, or -1 if they are not.
+func peer_of(key: String) -> int:
+	if key == "":
+		return -1
+	for peer_id in _players:
+		if String((_players[peer_id] as Dictionary).get("key", "")) == key:
+			return int(peer_id)
+	if key == local_key() and SteamLobby.is_networked():
+		return multiplayer.get_unique_id()
+	return -1
+
+
+## The colour of the player `key`, wherever they are connected; the default
+## swatch if they are not (a dropped player's soldiers keep a colour).
+func color_of_key(key: String) -> Color:
+	var peer := peer_of(key)
+	return color_of(peer) if peer >= 0 else PALETTE[0]
+
+
+## Host: records who `peer_id` is, and tells everyone.
+func _identify(peer_id: int, key: String, display_name: String) -> void:
+	# A player reconnecting on a new peer: drop the stale entry for their key.
+	for p in _players.keys():
+		if int(p) != peer_id and String((_players[p] as Dictionary).get("key", "")) == key:
+			_players.erase(p)
+	_players[peer_id] = {"key": key, "name": display_name}
+	_rpc_players.rpc(_players)
+	players_changed.emit()
+	player_identified.emit(peer_id, key)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _rpc_hello(key: String, display_name: String) -> void:
+	if multiplayer.is_server():
+		_identify(multiplayer.get_remote_sender_id(), key, display_name)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _rpc_players(players: Dictionary) -> void:
+	_players = players
+	players_changed.emit()
 
 
 ## What `peer_id` ends up with when it asks for `wanted`: that, if it is a real
@@ -88,16 +176,23 @@ static func _taken_by_others(colors: Dictionary, peer_id: int) -> Array:
 func _on_lobby_ready(_lobby_id: int) -> void:
 	if SteamLobby.is_host():
 		_grant(multiplayer.get_unique_id(), GameSettings.preferred_color)
+		_identify(multiplayer.get_unique_id(), local_key(), local_name())
 
 
 func _on_connected_to_server() -> void:
+	_rpc_hello.rpc_id(1, local_key(), local_name())
 	_rpc_request_color.rpc_id(1, GameSettings.preferred_color)
 
 
 func _on_peer_disconnected(peer_id: int) -> void:
-	if multiplayer.is_server() and _colors.erase(peer_id):
+	if not multiplayer.is_server():
+		return
+	if _colors.erase(peer_id):
 		_rpc_colors.rpc(_colors)
 		colors_changed.emit()
+	if _players.erase(peer_id):
+		_rpc_players.rpc(_players)
+		players_changed.emit()
 
 
 ## Host-side. Always answers, even when nothing changed: a client that lost a race

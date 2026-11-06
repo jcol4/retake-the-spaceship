@@ -231,7 +231,8 @@ func _play_reaction(unit: Unit, e: Dictionary, arrival: float, join: Join) -> vo
 				await unit.get_tree().create_timer(arrival).timeout
 		if is_instance_valid(target):
 			await unit.replay_attack(target, e["hit"], e["crit"], e["rounds"], e["strays"], false,
-				e.get("lean", Vector3i.ZERO), e.get("doomed", false), e.get("part", -1), true)
+				e.get("lean", Vector3i.ZERO), e.get("doomed", false), e.get("part", -1), true,
+				e.get("overkill", 0))
 	join.done()
 
 
@@ -508,7 +509,8 @@ func _play_shot(unit: Unit, e: Dictionary) -> void:
 	if absf(delta.x) > 0.001 or absf(delta.z) > 0.001:
 		await _play_turn(unit, atan2(-delta.x, -delta.z))  # continuous, as Unit._yaw_toward
 	await unit.replay_attack(target, e["hit"], e["crit"], e["rounds"], e["strays"], e["melee"],
-		e.get("lean", Vector3i.ZERO), e.get("doomed", false), e.get("part", -1))
+		e.get("lean", Vector3i.ZERO), e.get("doomed", false), e.get("part", -1),
+		false, e.get("overkill", 0))
 
 
 ## Hands every model back to its unit: re-zeroed on the root, drawn by the

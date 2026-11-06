@@ -6,8 +6,11 @@ extends CanvasLayer
 ## money before and after. Code-built like the other overlays.
 ##
 ## Display only. The accounting happened when the mission ended (ironman — see
-## Campaign.book_result); this screen cannot change it. On a co-op client it shows
-## the summary the host sent, since the client owns no campaign (A7).
+## Campaign.book_result); this screen cannot change it.
+##
+## CO-OP (MULTIPLAYER_PLAN.md): every player sees the debrief of THEIR OWN save —
+## their soldiers, what they carried out, their share of the payout — plus a
+## compact Party section with the partners' soldiers' fates.
 
 signal closed
 
@@ -25,9 +28,7 @@ const _FATE_COLOR := {
 }
 
 
-## `client`: the co-op client's copy — the button says so, and the hub is not
-## next (the client waits for the host's next deployment instead).
-func setup(summary: Dictionary, client: bool = false) -> void:
+func setup(summary: Dictionary) -> void:
 	var root := Control.new()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(root)
@@ -70,9 +71,7 @@ func setup(summary: Dictionary, client: bool = false) -> void:
 		_fill(vbox, summary)
 
 	var button := Button.new()
-	if client:
-		button.text = "OK"
-	elif summary.get("game_over", false):
+	if summary.get("game_over", false):
 		button.text = "Continue"
 	else:
 		button.text = "Continue to hub"
@@ -87,8 +86,12 @@ func _fill(vbox: VBoxContainer, summary: Dictionary) -> void:
 	var contract := String(summary.get("contract", ""))
 	if contract != "":
 		var paid := int(summary.get("payout", 0))
+		var split := int(summary.get("payout_divisor", 1))
+		var paid_text := "complete, paid %d cr" % paid
+		if split > 1:
+			paid_text = "complete, %d cr split %d ways — your share %d cr" % [int(summary.get("payout_total", 0)), split, paid]
 		vbox.add_child(_line("%s — %s" % [contract,
-			"complete, paid %d cr" % paid if paid > 0
+			paid_text if paid > 0
 			else ("complete, but nobody extracted to collect" if summary.get("objective_complete", false)
 			else "not complete — no payout")]))
 	else:
@@ -99,6 +102,16 @@ func _fill(vbox: VBoxContainer, summary: Dictionary) -> void:
 		var l := _line("%s (%s): %s" % [s.get("name", "?"), s.get("class", "?"), s.get("detail", "")])
 		l.modulate = _FATE_COLOR.get(String(s.get("fate", "")), Color.WHITE)
 		vbox.add_child(l)
+
+	var party: Array = summary.get("party", [])
+	if not party.is_empty():
+		vbox.add_child(_heading("Party"))
+		for p: Dictionary in party:
+			var l := _line("%s's %s (%s): %s" % [p.get("player", "?"), p.get("name", "?"), p.get("class", "?"),
+				{CampaignState.FATE_SURVIVED: "extracted", CampaignState.FATE_RECOVERED: "killed, body recovered",
+					CampaignState.FATE_LOST: "lost"}.get(String(p.get("fate", "")), "?")])
+			l.modulate = _FATE_COLOR.get(String(p.get("fate", "")), Color.WHITE).lerp(Color(0.8, 0.8, 0.8), 0.4)
+			vbox.add_child(l)
 
 	var sold: Array = summary.get("sold", [])
 	vbox.add_child(_heading("Sold — %d cr" % int(summary.get("sale_total", 0))))

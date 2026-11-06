@@ -19,3 +19,8 @@ extends SwarmUnit
 ## `walks_only` on the scene means this thing has one gait and it is the walk,
 ## at 0.9 m/s against the soldier's 4.5. It is outrunnable by a wide margin, in
 ## the open. The map is what takes that away.
+
+
+## Not Fodder: keeps the whole-body death (FodderGibs is the basic zombie only).
+func is_fodder() -> bool:
+	return false

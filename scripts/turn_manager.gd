@@ -252,6 +252,48 @@ func start_mission() -> void:
 	_start_turn()
 
 
+## A co-op host's mission, back from its checkpoint (MULTIPLAYER_PLAN.md §2.8):
+## the round the checkpoint was taken at plays again from its start, on a board
+## MissionSnapshot has already restored. The checkpoint is taken inside that
+## round's `turn_started` (main.gd), so everything a round start does — the bleed,
+## the ship timers, the terminal's count — is already in it, and is NOT done again
+## here: no `_begin_round`. Turn mode redraws the pool from whoever is standing;
+## exploration opens on the step clock as it stood. `turn` is the snapshot's
+## "turn" section; an empty one (a checkpoint from before round 1) is a fresh start.
+func resume_mission(turn: Dictionary) -> void:
+	if not _is_authority():
+		return
+	if turn.is_empty() or int(turn.get("number", 0)) <= 0:
+		start_mission()
+		return
+	mission_over = false
+	hold_switch = 0
+	_ticks_queued = 0
+	_ticking = false
+	resolving_tick = false
+	_combat_pending = false
+	_kill_pending = false
+	_timeline.clear()
+	Doctrines.reset()
+	SecurityNetwork.clear_aggression()
+	turn_number = int(turn.get("number", 1))
+	steps = int(turn.get("steps", 0))
+	_last_squad_combat_round = int(turn.get("last_combat", 0))
+	if int(turn.get("mode", Mode.TURN)) == Mode.EXPLORATION and exploration_enabled:
+		mode = Mode.TURN  # so the switch below reads as a change
+		_enter_mode(Mode.EXPLORATION)
+		_log("--- Round %d: exploring (resumed) ---" % turn_number)
+		_check_end_conditions()
+		return
+	_set_mode(Mode.TURN)
+	if SteamLobby.is_networked() and SteamLobby.is_host():
+		_rpc_mode_changed.rpc(Mode.TURN, steps, turn_number)
+	pool = _all_units()
+	_broadcast_clock()
+	_log("--- Turn %d: %d units in the pool (resumed) ---" % [turn_number, pool.size()])
+	_draw_next()
+
+
 ## Drops everything that points into the current scene, which is about to be
 ## reloaded out from under this autoload (main.gd, when the host leaves). A
 ## client's TurnManager still holds the last `active_unit` the host synced, and

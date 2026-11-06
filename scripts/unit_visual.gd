@@ -1946,7 +1946,8 @@ func collapse(hit: Dictionary) -> void:
 ## the burst; every round after that jolts the falling body. A round into a
 ## unit that stays up changes nothing here — it flinches after the burst, as
 ## before. `part` is Combat.BodyPart for the round that was rolled, or -1.
-func take_round(from: Vector3, doomed: bool, part: int, carry := Vector3.ZERO) -> void:
+func take_round(from: Vector3, doomed: bool, part: int, carry := Vector3.ZERO,
+		overkill := 0) -> void:
 	if _ragdoll != null:
 		if is_instance_valid(_ragdoll) and _ragdoll.is_simulating():
 			_ragdoll.add_round(from, part)
@@ -1957,7 +1958,7 @@ func take_round(from: Vector3, doomed: bool, part: int, carry := Vector3.ZERO) -
 	# fire), so it goes down forward rather than stopping dead and toppling.
 	if _start_ragdoll({"kind": Ragdoll.HitKind.BULLET, "from": from,
 			"part": part if part >= 0 else Combat.BodyPart.TORSO, "seed": _round_rng.randi(),
-			"carry": carry}):
+			"carry": carry, "overkill": overkill}):
 		# The light goes out with the soldier the moment it falls, not when the
 		# burst's damage lands half a second later (Unit._present_life_state).
 		_set_flashlight_enabled(false)
@@ -1971,6 +1972,7 @@ static var _round_rng := RandomNumberGenerator.new()
 ## Undoes a fall's physics pose (a revive, a playback rewind). The caller sets
 ## the stance that follows.
 func clear_ragdoll() -> void:
+	_clear_gibs()
 	if _ragdoll == null:
 		return
 	if is_instance_valid(_ragdoll):
@@ -2013,16 +2015,69 @@ func _start_ragdoll(hit: Dictionary) -> bool:
 	# drops it). `_play` is gated by now, so this only records it.
 	_settle_dead()
 	var floor_y := _unit.global_position.y if _unit else global_position.y
-	_ragdoll.start(skel, hit, floor_y, _mount, _model)
+	# Fodder may come apart (FodderGibs). Cut from the pose it died in, BEFORE
+	# the ragdoll starts: start folds the severed bones away and builds no
+	# bodies under them.
+	var severed := _start_gibs(skel, hit, floor_y)
+	_ragdoll.start(skel, hit, floor_y, _mount, _model, severed)
+	if _gibs != null:
+		_gibs.keep_apart(_ragdoll.bodies())
 	return true
 
 
 ## Frees a ragdoll outright, gun and all, with no restore — the model it posed
 ## is about to be freed too (`set_variant`).
 func _drop_ragdoll() -> void:
+	_clear_gibs()
 	if _ragdoll != null and is_instance_valid(_ragdoll):
 		_ragdoll.free()
 	_ragdoll = null
+
+
+# --- Fodder gibs ---------------------------------------------------------------
+#
+# Only on the ragdoll path: a death that takes the authored collapse instead
+# (off-screen, instant, over the ragdoll budget) stays whole. Visual only — see
+# FodderGibs and GibPlanner.
+
+## Off switch: false keeps every Fodder death whole.
+const GIBS_ENABLED := true
+
+var _gibs: FodderGibs = null
+
+
+## Plans and cuts this body's gibs, if any. Returns the severed root bones for
+## Ragdoll.start (empty: it falls whole).
+func _start_gibs(skel: Skeleton3D, hit: Dictionary, floor_y: float) -> PackedInt32Array:
+	if not GIBS_ENABLED or _unit == null or not _unit.has_method("is_fodder") \
+			or not _unit.call("is_fodder"):
+		return PackedInt32Array()
+	var plan := GibPlanner.plan({"fodder": true, "kind": int(hit.get("kind", 0)),
+		"part": int(hit.get("part", -1)), "from": hit.get("from", Vector3.ZERO),
+		"at": global_position, "overkill": int(hit.get("overkill", 0))},
+		GibPlanner.seed_for(int(hit.get("seed", 0)), String(_unit.name)))
+	if plan.mode == GibPlanner.Mode.NONE:
+		return PackedInt32Array()
+	_gibs = FodderGibs.new()
+	_gibs.name = "Gibs"
+	add_child(_gibs)
+	var severed := _gibs.sever(skel, plan, floor_y,
+		GibPlanner.seed_for(int(hit.get("seed", 0)) + 1, String(_unit.name)))
+	if severed.is_empty():
+		_gibs.free()
+		_gibs = null
+	return severed
+
+
+func _clear_gibs() -> void:
+	if _gibs != null and is_instance_valid(_gibs):
+		_gibs.clear()
+	_gibs = null
+
+
+## This body's gibs, or null (tests).
+func gibs() -> FodderGibs:
+	return _gibs if _gibs != null and is_instance_valid(_gibs) else null
 
 
 ## How long the authored collapse runs, which is what playback paces a fall on.

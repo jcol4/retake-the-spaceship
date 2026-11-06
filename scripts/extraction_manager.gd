@@ -1159,3 +1159,77 @@ func play_insertion(units: Array) -> void:
 	await ship.take_off()
 	if is_instance_valid(ship):
 		ship.queue_free()
+
+
+# --- Mission snapshot (MULTIPLAYER_PLAN.md §2.5) -----------------------------------------
+
+
+## Everything this manager holds that a rebuilt board does not already have:
+## each hangar's rules snapshot plus the host-only parts (`known_by`, who is
+## aboard by node name), the crews whose run is over, the door-gun naming
+## serials, and the rival departures. Node names, not references: it crosses the
+## wire and lands in a file.
+func capture() -> Dictionary:
+	var states: Array = []
+	var known: Array = []
+	var aboard: Array = []
+	for i in rules.hangar_count():
+		states.append(rules.snapshot(i))
+		known.append(rules.states[i].known_by.duplicate())
+		var names: Array = []
+		for u in rules.states[i].aboard:
+			if is_instance_valid(u):
+				names.append(String((u as Node).name))
+		aboard.append(names)
+	var aboard_all: Array = []
+	for node in get_tree().get_nodes_in_group(ABOARD_GROUP):
+		aboard_all.append(String(node.name))
+	return {
+		"states": states, "known_by": known, "aboard": aboard, "aboard_units": aboard_all,
+		"retired": rules.retired_crews.duplicate(), "serial": _door_gun_serial.duplicate(),
+		"rivals": _rival_departures.duplicate(true),
+	}
+
+
+## Puts a captured hangar state onto a freshly built board, on the host (resume)
+## or a client (rejoin). Each hangar goes through the same path a client's
+## `_rpc_hangar_state` takes — so a landed ship lands, its gunner mounts, the pad
+## blocks — with the door-gun serial wound back first, so the gunner it mounts
+## gets the name it has on the host. Units already aboard leave the board.
+## `parent` is where the units live (the mission scene).
+func restore(snap: Dictionary, parent: Node) -> void:
+	if snap.is_empty() or not _active:
+		return
+	var serial: Dictionary = snap.get("serial", {})
+	var states: Array = snap.get("states", [])
+	for i in mini(states.size(), rules.hangar_count()):
+		var s: Array = states[i]
+		if int(s[0]) == ExtractionRules.State.LANDED:
+			_door_gun_serial[i] = maxi(0, int(serial.get(i, 1)) - 1)
+		var old := rules.state_of(i)
+		var was_known := rules.is_discovered(i)
+		var old_dust := rules.states[i].dust_off_requested
+		rules.apply_snapshot(i, s)
+		_present(i, old, old_dust, rules.is_discovered(i) and not was_known)
+	for key in serial:
+		_door_gun_serial[int(key)] = int(serial[key])
+	var known: Array = snap.get("known_by", [])
+	for i in mini(known.size(), rules.hangar_count()):
+		rules.states[i].known_by = (known[i] as Dictionary).duplicate()
+	var aboard: Array = snap.get("aboard", [])
+	for i in mini(aboard.size(), rules.hangar_count()):
+		var units: Array = []
+		for n in aboard[i]:
+			var u := parent.get_node_or_null(NodePath(String(n)))
+			if u != null:
+				units.append(u)
+		rules.states[i].aboard = units
+	rules.retired_crews = (snap.get("retired", {}) as Dictionary).duplicate()
+	_rival_departures = (snap.get("rivals", []) as Array).duplicate(true)
+	var paths := PackedStringArray()
+	for n in snap.get("aboard_units", []):
+		var u := parent.get_node_or_null(NodePath(String(n)))
+		if u != null:
+			paths.append(String(u.get_path()))
+	_take_aboard(paths)
+	hangars_reset.emit()
