@@ -142,24 +142,68 @@ func invite_friends() -> void:
 		Steam.activateGameOverlayInviteDialog(current_lobby_id)
 
 
-## Lobbies of this game that Steam friends are in right now: [{name, lobby_id}],
-## sorted by name. What the hub's Friends' lobbies list shows.
+## Steam friends playing this game right now: [{name, steam_id, lobby_id}], sorted
+## by name; `lobby_id` 0 for one who has no open lobby. What the hub's Friends'
+## lobbies list shows (a lobby to Join, or "playing, no open lobby").
+##
+## The lobby comes from two places, because Steam does not reliably fill in the
+## first: the lobby in the friend's "game played" info, else the "connect" rich
+## presence every host here sets (`_set_presence`, "+connect_lobby <id>" — the
+## same string Steam's own friends-list "Join game" uses). `request_friends_presence`
+## asks Steam to refresh that; it arrives as `friend_rich_presence_update`, which
+## the Co-op tab listens to.
 func friends_lobbies() -> Array:
 	var out: Array = []
-	if not steam_available:
+	if not steam_available or enet:
 		return out
 	var app := Steam.getAppID()
 	for i in Steam.getFriendCount(FRIEND_FLAG_IMMEDIATE):
 		var friend: int = Steam.getFriendByIndex(i, FRIEND_FLAG_IMMEDIATE)
 		var game: Dictionary = Steam.getFriendGamePlayed(friend)
-		if game.is_empty() or int(game.get("id", 0)) != app:
+		var connect_lobby := _lobby_from_connect(Steam.getFriendRichPresence(friend, "connect"))
+		var in_game := not game.is_empty() and int(game.get("id", 0)) == app
+		if not in_game and connect_lobby == 0:
 			continue
-		var lobby := int(game.get("lobby", 0))
-		if lobby == 0 or lobby == current_lobby_id:
+		var lobby := _as_lobby_id(game.get("lobby", 0))
+		if lobby == 0:
+			lobby = connect_lobby
+		if lobby == current_lobby_id:
 			continue
-		out.append({"name": Steam.getFriendPersonaName(friend), "lobby_id": lobby})
+		out.append({"name": Steam.getFriendPersonaName(friend), "steam_id": friend, "lobby_id": lobby})
 	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return String(a["name"]) < String(b["name"]))
 	return out
+
+
+## Asks Steam for fresh rich presence from every friend playing this game. Not
+## from inside `friends_lobbies`: the answer triggers a list refresh, which must
+## not ask again.
+func request_friends_presence() -> void:
+	if not steam_available or enet:
+		return
+	var app := Steam.getAppID()
+	for i in Steam.getFriendCount(FRIEND_FLAG_IMMEDIATE):
+		var friend: int = Steam.getFriendByIndex(i, FRIEND_FLAG_IMMEDIATE)
+		var game: Dictionary = Steam.getFriendGamePlayed(friend)
+		if not game.is_empty() and int(game.get("id", 0)) == app:
+			Steam.requestFriendRichPresence(friend)
+
+
+## A lobby id out of a "+connect_lobby <id>" connect string, or 0.
+static func _lobby_from_connect(connect_string: String) -> int:
+	var parts := connect_string.strip_edges().split(" ", false)
+	if parts.size() >= 2 and parts[0] == "+connect_lobby" and parts[1].is_valid_int():
+		return parts[1].to_int()
+	return 0
+
+
+## GodotSteam reports a friend's lobby as a number, or as a string when there is
+## none ("No valid lobby" in some versions): 0 for anything that is not an id.
+static func _as_lobby_id(v: Variant) -> int:
+	if v is int:
+		return v
+	if v is String and (v as String).is_valid_int():
+		return (v as String).to_int()
+	return 0
 
 
 ## Host: drops `peer_id` from the session (CoopLobby.kick has already told them).

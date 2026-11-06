@@ -200,7 +200,10 @@ Resume:
   soldiers.
 - **Hub → Co-op tab**:
   - Not in a lobby: **Host co-op**, a **Friends' lobbies** list (Join) with Refresh, and a
-    `--dev` lobby-ID field.
+    `--dev` lobby-ID field. The list shows every Steam friend playing the game: "<name>'s
+    lobby" with Join, or "playing, no open lobby". The lobby comes from Steam's "game played"
+    info, else from the host's `connect` rich presence, which is the more reliable of the two.
+    It refreshes on Steam's presence pushes and every 4 s while the tab is on screen.
   - In a lobby:
     - Members, each with color, ready mark, picked soldiers and a **View roster** toggle
       (read-only roster).
