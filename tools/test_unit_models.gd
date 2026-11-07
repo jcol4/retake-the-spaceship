@@ -15,7 +15,7 @@ const REQUIRED := {
 	&"brawler": [&"idle", &"walk", &"melee"],
 	&"worm": [&"idle", &"walk", &"melee"],
 	&"nest": [&"idle"],
-	&"civilian": [&"idle", &"run", &"melee", &"downed"],
+	&"zombie_2": [&"idle", &"run", &"walk", &"melee", &"hit_react", &"downed"],
 	&"zombie": [&"idle", &"run", &"melee", &"downed", &"alert_scream"],
 	# walks_only, so `walk` and no `run`; `downed` is what lets it ragdoll.
 	&"securus": [&"idle", &"walk", &"melee", &"hit_react", &"downed"],

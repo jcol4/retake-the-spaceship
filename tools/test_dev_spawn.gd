@@ -61,6 +61,9 @@ func _run() -> void:
 		if String(node.name).begins_with("Dev_securus"):
 			_check(node.visual._authored, "the spawned Securus draws its model")
 			_check(node.visual._eye_material != null, "and has its eye")
+		if String(node.name).begins_with("Dev_zombie_2"):
+			_check(node.visual._authored, "the spawned Zombie 2 draws its model")
+			_check(node.has_method("is_fodder") and node.is_fodder(), "Zombie 2 is Fodder")
 	if OS.has_environment("DEV_SHOT"):
 		dev._set_open(true)
 		dev._arm("securus")

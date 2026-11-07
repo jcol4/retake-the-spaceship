@@ -1,0 +1,12 @@
+{
+  "variant": "zombie_2",
+  "poses": [
+    "downed",
+    "hit_react",
+    "idle",
+    "melee",
+    "run",
+    "walk"
+  ],
+  "pose_yaw_degrees": {}
+}

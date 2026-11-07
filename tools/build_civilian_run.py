@@ -16,14 +16,17 @@ Also sets the armature to the merc's object scale (merc_anim.blend's Armature
 is 0.683), so the civilian stands at merc height in game.
 
 Writes the .blend in place (Blender keeps the previous save as .blend1).
-Re-runnable: an existing `run` is replaced.
+Re-runnable: an existing `run_merc` is replaced.
+
+SUPERSEDED: zombie_2's `run` is now a hand-animated clip (tools/clean_zombie_2.py).
+This one is kept as `run_merc`, which no pose claims, so it is not exported.
 """
 
 import bpy
 from mathutils import Matrix, Quaternion, Vector
 
 MERC_BLEND = "art_src/merc_anim.blend"
-ACTION = "run"
+ACTION = "run_merc"
 MERC_SCALE = 0.683
 
 ## Channels the merc's run spends on holding the rifle. Everything else (legs,

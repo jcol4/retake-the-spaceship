@@ -287,7 +287,9 @@ VARIANT_BUCKET_ZERO = {
     # The merc gets this same quarter turn only on `run` (POSE_BUCKET_ZERO);
     # every civilian pose faces like that run, so it goes on the whole rig.
     # Judged on a running unit in game: at 90 it ran toward the camera.
-    "civilian": 180.0,
+    # zombie_2 is that same .blend with its own clips (tools/clean_zombie_2.py);
+    # its run's planted foot slides +Y, so it faces -Y like the old one.
+    "zombie_2": 180.0,
     # zombie_mixamo.blend: a stock Mixamo import, facing -Y like the civilian.
     # Not yet judged on a moving unit.
     "zombie": 180.0,
@@ -370,10 +372,6 @@ POSE_BUCKET_ZERO = {
 ## added. Eight renders buys a `melee/<dir>` that is right in every facing.
 POSE_ACTION = {
     "brawler": {"melee": "idle"},
-    # The civilian (Fodder) has no attack art either: its claw plays the idle,
-    # the way the brawler's swing does. Its collapse is the Mixamo download's
-    # `headshot dying`; with no `dead`, the corpse holds that clip's last frame.
-    "civilian": {"melee": "idle", "downed": "headshot dying"},
     # `overwatch_hold` is the pose name the game plays; `overwatch` is the
     # Blender action it is now drawn from -- a 32-frame scanning-stance cycle
     # replacing the old placeholder-length hold. See LOOP_TIME below for why

@@ -162,9 +162,13 @@ const VARIANT_LOOP_TIME := {
 	&"brawler": {WALK: 1.6},
 	# 0.75 m/s crosses its one tile a turn in two seconds — one cycle.
 	&"worm": {WALK: 2.0},
-	# The civilian runs the merc's stride (tools/build_civilian_run.py) at a
-	# third of his 4.5 m/s, so a third of the cadence keeps the feet planted.
-	&"civilian": {RUN: 3 * 2 * FOOTSTEP_GAP},
+	# The second Fodder body (assets/civilian_cleaned.blend via
+	# tools/clean_zombie_2.py). Every clip is 14 frames keyed on the merc rig
+	# and plays at that rig's 12 fps. It is walks_only: the walk's planted foot
+	# slides ~1.04 m a cycle, so 14 / 12 s a cycle is its move_speed of 0.9 m/s
+	# (zombie_2_unit.tscn). Change the two together.
+	&"zombie_2": {WALK: 14 / 12.0, IDLE: 14 / 12.0, MELEE: 14 / 12.0,
+		HIT_REACT: 14 / 12.0, DOWNED: 14 / 12.0},
 	# The Mixamo zombie (tools/build_zombie_mixamo.py). Its run covers ~1.8 m a
 	# cycle, played 1.5x fast: 0.8 s a cycle, so its move_speed (swarm_unit.tscn)
 	# is 2.25 m/s to keep the feet planted — change the two together. The rest
@@ -186,7 +190,7 @@ const VARIANT_LOOP_TIME := {
 ## When a variant's MELEE connects, as a fraction of the action's length:
 ## `strike` fires there and the damage lands with it. Absent means 1.0 — the
 ## end of the swing, which is right for every attack whose clip is all lunge
-## and no recovery (and for the brawler and civilian, which swing their idle).
+## and no recovery (and for the brawler, which swings its idle).
 ##
 ## MEASURED, not tuned: the frame the striking hand stops dead at full
 ## extension. Re-measure when the clip changes.
@@ -195,6 +199,9 @@ const STRIKE_AT := {
 	# 6-10, swings on 11-12, stops dead at full extension on 12 of the 27 keys
 	# (26 intervals) -> 11 / 26. PUNCH_STRIKE_FRAME there.
 	&"securus": 11.0 / 26.0,
+	# Two-handed overhead smash: wound up by frame 5, both hands furthest
+	# forward and lowest on frame 7 of 15 (14 intervals) -> 6 / 14.
+	&"zombie_2": 6.0 / 14.0,
 }
 
 ## Crossfade between poses, in seconds. Short: the game's actions are brisk and
@@ -1350,6 +1357,11 @@ func _play_action(action: StringName) -> void:
 			_settle_dead()
 		if action == MELEE:
 			strike.emit()
+		return
+	# A model with no scream has nothing to show for one, and holding the stance
+	# off for its length stood a woken body in idle while it walked off at the
+	# prey. Nothing awaits a scream, so skipping it costs no pacing.
+	if action == ALERT_SCREAM and _authored and not _has_any(action):
 		return
 	_action = action
 	_play(action, true)
