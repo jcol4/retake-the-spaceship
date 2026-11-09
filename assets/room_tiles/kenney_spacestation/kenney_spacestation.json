@@ -1,0 +1,21 @@
+{
+	"kit": "kenney_spacestation",
+	"source": "Kenney Space Station Kit, CC0 (License.txt). https://kenney.nl/assets/space-station-kit . .glb as shipped (Models/GLB format) with their shared Textures/colormap.png. Brighter and more cartoony than the game's art: fallbacks only.",
+	"notes": [
+		"Furniture convention (sockets furniture_*, hazard_*, dressing_*, decal_*, terminal_wall, power_switch, elevator_door): the wrapper origin is the centre of the piece's footprint on the floor, its long side runs along X and its front (the side a unit uses) faces +Z.",
+		"footprint is [x, z] in tiles. tier is light or heavy (the cover tiers of ROOM_THEMES_PLAN.md D.3), dressing (no cover of its own), clutter (under 0.35 m), wall (origin on the wall face at floor level, +Z into the room) or door (centred on the wall line like door_frame).",
+		"These sockets are not drawn yet: they wait for ROOM_THEMES_PLAN.md D.1 (obstacles get a kind) and D.6 (MapBuilder picks a piece per kind). tools/test_kit_coverage.gd holds every piece to its footprint and tier; tools/room_kit_gallery.gd renders them.",
+		"rooms lists the room types a dressing piece suits. tall marks a light piece that stands above light-cover height on purpose. Scale and offset were fitted to the footprint from each model's measured bounds."
+	],
+	"pieces": [
+		{"id": "kst_computer", "file": "glb/computer.glb", "socket": "furniture_console", "tier": "light", "footprint": [1, 1], "scale": [1.5132, 1.5132, 1.5132], "offset": [0, 0, -0.067], "weight": 1},
+		{"id": "kst_computer_screen", "file": "glb/computer-screen.glb", "socket": "furniture_console", "tier": "light", "footprint": [1, 1], "scale": [1.5132, 1.5132, 1.5132], "offset": [0, 0, 0.019], "weight": 1},
+		{"id": "kst_computer_wide", "file": "glb/computer-wide.glb", "socket": "furniture_console", "tier": "light", "footprint": [1, 1], "scale": [1.75, 1.75, 1.75], "offset": [0, 0, -0.052], "weight": 1},
+		{"id": "kst_computer_system", "file": "glb/computer-system.glb", "socket": "furniture_console", "tier": "light", "footprint": [1, 1], "scale": [1.5556, 1.5556, 1.5556], "offset": [0, 0, 0.039], "weight": 1},
+
+		{"id": "kst_display_wall", "file": "glb/display-wall.glb", "socket": "furniture_monitor", "tier": "wall", "footprint": [1, 1], "scale": [1.9528, 1.9528, 1.9528], "offset": [0, 1, 0.28], "weight": 1},
+		{"id": "kst_display_wall_wide", "file": "glb/display-wall-wide.glb", "socket": "furniture_monitor", "tier": "wall", "footprint": [1, 1], "scale": [1.9528, 1.9528, 1.9528], "offset": [0, 1, 0.28], "weight": 1},
+
+		{"id": "kst_wall_switch", "file": "glb/wall-switch.glb", "socket": "power_switch", "tier": "wall", "footprint": [1, 1], "scale": [3, 3, 3], "offset": [0, 1, 0.038], "weight": 1}
+	]
+}
