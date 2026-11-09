@@ -1,0 +1,23 @@
+{
+	"kit": "polypizza_ccby",
+	"source": "CC BY 3.0 single models from Poly Pizza (https://poly.pizza). ATTRIBUTION REQUIRED: each is credited in CREDITS.md and scripts/credits.gd. Each .glb is the page's download renamed after its title, contents unchanged; its <name>.LICENSE.txt names author, page and licence.",
+	"notes": [
+		"Furniture convention (sockets furniture_*, hazard_*, dressing_*, decal_*, terminal_wall, power_switch, elevator_door): the wrapper origin is the centre of the piece's footprint on the floor, its long side runs along X and its front (the side a unit uses) faces +Z.",
+		"footprint is [x, z] in tiles. tier is light or heavy (the cover tiers of ROOM_THEMES_PLAN.md D.3), dressing (no cover of its own), clutter (under 0.35 m), wall (origin on the wall face at floor level, +Z into the room) or door (centred on the wall line like door_frame).",
+		"These sockets are not drawn yet: they wait for ROOM_THEMES_PLAN.md D.1 (obstacles get a kind) and D.6 (MapBuilder picks a piece per kind). tools/test_kit_coverage.gd holds every piece to its footprint and tier; tools/room_kit_gallery.gd renders them.",
+		"rooms lists the room types a dressing piece suits. tall marks a light piece that stands above light-cover height on purpose. Scale and offset were fitted to the footprint from each model's measured bounds."
+	],
+	"pieces": [
+		{"id": "pb_server_rack", "file": "server_rack.glb", "socket": "furniture_server_rack", "tier": "heavy", "footprint": [1, 1], "scale": [0.4144, 0.4144, 0.4144], "offset": [-0.286, -0.001, 0.008], "weight": 2},
+
+		{"id": "pb_lab_table", "file": "Lab_Table.glb", "socket": "furniture_lab_bench", "tier": "light", "footprint": [3, 1], "scale": [0.7095, 0.7095, 0.7095], "yaw": 90, "offset": [0.347, -1.318, 0.905], "weight": 2},
+
+		{"id": "pb_gas_canister", "file": "Scifi_Canister.glb", "socket": "hazard_gas", "tier": "light", "footprint": [1, 1], "scale": [2.8048, 2.8048, 2.8048], "offset": [0.016, 0.491, 0.014], "weight": 2},
+
+		{"id": "pb_punching_bag", "file": "Punching_Bag.glb", "socket": "furniture_gym", "tier": "light", "footprint": [1, 1], "scale": [0.9907, 0.9907, 0.9907], "offset": [0, 0.563, 0], "weight": 1, "tall": "a hanging bag is tall and thin; it hides nothing"},
+		{"id": "pb_barbell", "file": "Barbell.glb", "socket": "furniture_gym", "tier": "light", "footprint": [2, 1], "scale": [0.6, 0.6, 0.6], "offset": [0, 0.198, 0], "weight": 1},
+
+		{"id": "pb_gym_mat", "file": "Gymmat.glb", "socket": "dressing_clutter", "tier": "clutter", "footprint": [2, 1], "scale": [1.2, 1.2, 1.2], "yaw": 90, "offset": [0, 0.017, 0], "rooms": ["gym"]},
+		{"id": "pb_dumbbells", "file": "Dumbell.glb", "socket": "dressing_clutter", "tier": "clutter", "footprint": [1, 1], "scale": [0.5, 0.5, 0.5], "offset": [0, 0.063, -0.12], "parts": [{"file": "Dumbell.glb", "scale": [0.5, 0.5, 0.5], "offset": [0, 0.063, 0.25]}], "rooms": ["gym"]}
+	]
+}

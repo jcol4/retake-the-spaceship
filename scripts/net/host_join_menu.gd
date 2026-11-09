@@ -100,7 +100,8 @@ func _build_credits_panel(root: Control) -> void:
 
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 8)
-	vbox.custom_minimum_size = Vector2(420, 0)
+	# Wide enough for an attribution line to wrap once, not three times.
+	vbox.custom_minimum_size = Vector2(640, 0)
 	panel.add_child(vbox)
 
 	var title := Label.new()
@@ -112,6 +113,9 @@ func _build_credits_panel(root: Control) -> void:
 	for line in Credits.lines():
 		var label := Label.new()
 		label.text = line
+		# Attribution lines (title, author, source, licence) run long; wrap
+		# rather than stretch the panel off-screen.
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		vbox.add_child(label)
 
 	var close := Button.new()

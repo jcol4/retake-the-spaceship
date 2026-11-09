@@ -39,6 +39,41 @@ to `scripts/credits.gd`; the licence text ships beside the kit as
 Files: `assets/room_tiles/quaternius_scifi/glTF/` (original names) and the
 `Textures/` it uses, mapped to sockets by `quaternius_scifi.json`.
 
+### Placeholder furniture (ROOM_ASSETS_SOURCING.md)
+
+**CC BY: attribution required.** Each is credited in `scripts/credits.gd`
+("Art"), with title, author, source and licence. All are used unmodified (the
+manifests scale them at load time; nothing recolours them).
+
+| Model | Author | Licence | Source | File |
+| --- | --- | --- | --- | --- |
+| server rack | Jeremy Eyring | CC BY 3.0 | https://poly.pizza/m/6ijQclm8jxw | `assets/room_tiles/polypizza_ccby/server_rack.glb` (+ the three `server_rack_*.png` Godot extracts from it) |
+| Lab Table | Ali12 | CC BY 3.0 | https://poly.pizza/m/NyeiCAto3N | `assets/room_tiles/polypizza_ccby/Lab_Table.glb` |
+| Scifi Canister | Nick Slough | CC BY 3.0 | https://poly.pizza/m/OzcIJxCDpO | `assets/room_tiles/polypizza_ccby/Scifi_Canister.glb` |
+| Punching Bag | Zsky | CC BY (see note) | https://poly.pizza/m/4VgbuuhY8j | `assets/room_tiles/polypizza_ccby/Punching_Bag.glb` |
+| Barbell | Zsky | CC BY (see note) | https://poly.pizza/m/AX5jGlJZlk | `assets/room_tiles/polypizza_ccby/Barbell.glb` |
+| Gymmat | Zsky | CC BY (see note) | https://poly.pizza/m/gHLnNRu37P | `assets/room_tiles/polypizza_ccby/Gymmat.glb` |
+| Dumbell | Zsky | CC BY (see note) | https://poly.pizza/m/hOBP8R1z1f | `assets/room_tiles/polypizza_ccby/Dumbell.glb` |
+
+Zsky's models come from the Ultimate Interior Props Pack
+(https://poly.pizza/bundle/Ultimate-Interior-Props-Pack-9KfkK2H0ve), whose page
+text says CC BY 4.0 while each model page links CC BY 3.0. They are credited as
+CC BY 4.0 and the in-game line links both licences, which satisfies either.
+Each `.glb` has a `<name>.LICENSE.txt` beside it recording author, page and
+licence. Licence texts: https://creativecommons.org/licenses/by/3.0/ and
+https://creativecommons.org/licenses/by/4.0/.
+
+**CC0: no attribution required** (credited in `scripts/credits.gd` as a
+courtesy). Licence files ship beside each kit.
+
+| Source | Licence | Where |
+| --- | --- | --- |
+| KayKit Furniture Bits, Restaurant Bits, Space Base Bits (Kay Lousberg) | CC0 | `assets/room_tiles/kaykit_*/LICENSE.txt` |
+| Quaternius Sci-Fi Essentials Kit (Standard) | CC0 | `assets/room_tiles/quaternius_essentials/License_Standard.txt` |
+| Kenney Furniture Kit, Space Station Kit | CC0 | `assets/room_tiles/kenney_*/License.txt` |
+| Quaternius "Scifi Pod", "Toilet", "Scifi Computer"; Dipper98 "Sci Fi Engine", "Sci Fi Wall Power Cell" (Poly Pizza) | CC0 | `assets/room_tiles/polypizza_cc0/*.LICENSE.txt` |
+| ambientCG Tiles107, DiamondPlate003, Carpet012, MetalPlates004 | CC0 | `assets/room_tiles/floors/LICENSE.txt` |
+
 ## Outstanding
 
 - [ ] `assets/title_page.png` is still unreferenced by any scene or script. The

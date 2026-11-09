@@ -20,6 +20,17 @@ const SECTIONS: Array[Dictionary] = [
 		],
 	},
 	{
+		"heading": "Art",
+		"entries": [
+			"\"server rack\" by Jeremy Eyring — poly.pizza/m/6ijQclm8jxw — CC BY 3.0",
+			"\"Lab Table\" by Ali12 — poly.pizza/m/NyeiCAto3N — CC BY 3.0",
+			"\"Scifi Canister\" by Nick Slough — poly.pizza/m/OzcIJxCDpO — CC BY 3.0",
+			"\"Punching Bag\", \"Barbell\", \"Gymmat\" and \"Dumbell\" by Zsky (Ultimate Interior Props Pack) — poly.pizza/bundle/Ultimate-Interior-Props-Pack-9KfkK2H0ve — CC BY 4.0",
+			"Used unmodified. Licences: creativecommons.org/licenses/by/3.0/ and creativecommons.org/licenses/by/4.0/",
+			"Room kits by Quaternius, Kay Lousberg (KayKit), Kenney and Dipper98; floor textures from ambientCG (all CC0)",
+		],
+	},
+	{
 		"heading": "Engine",
 		"entries": [
 			"Made with Godot Engine — https://godotengine.org",
