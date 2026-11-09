@@ -1,0 +1,13 @@
+{
+	"kit": "opengameart_ccby",
+	"source": "CC BY single models from OpenGameArt (https://opengameart.org). ATTRIBUTION REQUIRED: credited in CREDITS.md and scripts/credits.gd. Converted to .glb in Blender from the shipped .blend (geometry and texture unchanged); <name>.LICENSE.txt is the pack's own licence file.",
+	"notes": [
+		"Furniture convention (sockets furniture_*, hazard_*, dressing_*, decal_*, terminal_wall, power_switch, elevator_door): the wrapper origin is the centre of the piece's footprint on the floor, its long side runs along X and its front (the side a unit uses) faces +Z.",
+		"footprint is [x, z] in tiles. tier is light or heavy (the cover tiers of ROOM_THEMES_PLAN.md D.3), dressing (no cover of its own), clutter (under 0.35 m), wall (origin on the wall face at floor level, +Z into the room) or door (centred on the wall line like door_frame).",
+		"These sockets are not drawn yet: they wait for ROOM_THEMES_PLAN.md D.1 (obstacles get a kind) and D.6 (MapBuilder picks a piece per kind). tools/test_kit_coverage.gd holds every piece to its footprint and tier; tools/room_kit_gallery.gd renders them.",
+		"rooms lists the room types a dressing piece suits. tall marks a light piece that stands above light-cover height on purpose. Scale and offset were fitted to the footprint from each model's measured bounds."
+	],
+	"pieces": [
+		{"id": "og_hospital_bed", "file": "hospital_bed_small.glb", "socket": "furniture_med_bed", "tier": "light", "footprint": [2, 1], "scale": [0.909, 0.909, 0.909], "yaw": 90, "offset": [0.05, -0.007, -0.025], "weight": 4}
+	]
+}

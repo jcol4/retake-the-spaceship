@@ -26,8 +26,9 @@ const SECTIONS: Array[Dictionary] = [
 			"\"Lab Table\" by Ali12 — poly.pizza/m/NyeiCAto3N — CC BY 3.0",
 			"\"Scifi Canister\" by Nick Slough — poly.pizza/m/OzcIJxCDpO — CC BY 3.0",
 			"\"Punching Bag\", \"Barbell\", \"Gymmat\" and \"Dumbell\" by Zsky (Ultimate Interior Props Pack) — poly.pizza/bundle/Ultimate-Interior-Props-Pack-9KfkK2H0ve — CC BY 4.0",
-			"Used unmodified. Licences: creativecommons.org/licenses/by/3.0/ and creativecommons.org/licenses/by/4.0/",
-			"Room kits by Quaternius, Kay Lousberg (KayKit), Kenney and Dipper98; floor textures from ambientCG (all CC0)",
+			"\"Small Hospital Bed\" by TiZiana, edits by qubodup — opengameart.org/content/small-hospital-bed — CC BY 3.0 (converted from .blend to glTF)",
+			"Otherwise used unmodified. Licences: creativecommons.org/licenses/by/3.0/ and creativecommons.org/licenses/by/4.0/",
+			"Room kits by Quaternius, Kay Lousberg (KayKit), Kenney and Dipper98; props from Poly Haven; floor textures from ambientCG (all CC0)",
 		],
 	},
 	{

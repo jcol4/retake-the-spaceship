@@ -54,6 +54,16 @@ manifests scale them at load time; nothing recolours them).
 | Barbell | Zsky | CC BY (see note) | https://poly.pizza/m/AX5jGlJZlk | `assets/room_tiles/polypizza_ccby/Barbell.glb` |
 | Gymmat | Zsky | CC BY (see note) | https://poly.pizza/m/gHLnNRu37P | `assets/room_tiles/polypizza_ccby/Gymmat.glb` |
 | Dumbell | Zsky | CC BY (see note) | https://poly.pizza/m/hOBP8R1z1f | `assets/room_tiles/polypizza_ccby/Dumbell.glb` |
+| Small Hospital Bed | TiZiana (original, CC BY 2.0), edits by qubodup | CC BY 3.0 | https://opengameart.org/content/small-hospital-bed | `assets/room_tiles/opengameart_ccby/hospital_bed_small.glb` |
+
+The hospital bed is the one file not used as shipped: OpenGameArt offers it
+only as a `.blend`, so it was exported to `.glb` in Blender (geometry and
+texture unchanged), which the in-game credit says. Its pack licence,
+`hospital_bed_small.LICENSE.txt`, also carries the author's moral-rights note:
+she objects to her models being used for racism, war promotion, cruelty to
+animals, propaganda, pornography or encouraging unethical behaviour. A
+sci-fi tactics game is not among those as written, but if the game's framing
+ever moves toward them, swap this bed out.
 
 Zsky's models come from the Ultimate Interior Props Pack
 (https://poly.pizza/bundle/Ultimate-Interior-Props-Pack-9KfkK2H0ve), whose page
@@ -73,6 +83,7 @@ courtesy). Licence files ship beside each kit.
 | Kenney Furniture Kit, Space Station Kit | CC0 | `assets/room_tiles/kenney_*/License.txt` |
 | Quaternius "Scifi Pod", "Toilet", "Scifi Computer"; Dipper98 "Sci Fi Engine", "Sci Fi Wall Power Cell" (Poly Pizza) | CC0 | `assets/room_tiles/polypizza_cc0/*.LICENSE.txt` |
 | ambientCG Tiles107, DiamondPlate003, Carpet012, MetalPlates004 | CC0 | `assets/room_tiles/floors/LICENSE.txt` |
+| Poly Haven: 40 photoscanned props (authors per model in the licence file) | CC0 | `assets/room_tiles/polyhaven/LICENSE.txt` |
 
 ## Outstanding
 

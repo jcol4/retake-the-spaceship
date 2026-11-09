@@ -1,0 +1,26 @@
+Small Hospital Bed
+Modelled in Blender, textured in Gimp.
+By Tiziana aka TiZeta <http://www.unbruco.it/offcircle/index.html>, <unbrucom1@unbruco.it>, <tialo@tiscali.it>
+The original model was released under Creative Commons Licence, Attribution 2.0
+http://creativecommons.org/licenses/by/2.0/
+Modified by qubodup (Iwan Gabovitch) <http://qubodup.net> <qubodup@gmail.com> by removing some faces and moving some verticies, to make the model feel more compact.
+New work licensed under CC-BY 3.0 <http://creativecommons.org/licenses/by/3.0/> or later.
+
+== Note by Tiziana ==
+
+*****************But beware!*********************
+
+In most countries, the author of visual art is legally granted to keep Integrity of his
+work, so you are not allowed to do exactely what you want with my models.
+The author (that is me) has the right to prevent distortion, mutilation, or other modification of his work which would be prejudicial to his or her honor or reputation.
+
+Me, i consider to be prejudicial to my honor, the modification and/or the use of my models in projects that are related to:
+ 
+	Racism and hatred instigation.
+	War promotion.
+	Cruelty toward animals.
+	Political an religious propaganda.
+	Pornography.
+	Outlaw and unethical behaviours encouragement.
+
+This right is granted to me, and to every other artist, no matter if Attribution Licence is applied too. Creative Commons Licence leaves moral rights unaffected.
