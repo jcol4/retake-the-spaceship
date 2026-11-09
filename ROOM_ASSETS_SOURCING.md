@@ -10,8 +10,10 @@ them so `MapBuilder` can place them. These are placeholders / a demo set, not fi
 direction is gritty (see the character art notes), and several of these packs are cleaner and
 more colourful than that.
 
-Nothing below has been downloaded yet. Licences marked "checked" were read on the source page on
-2026-11-08; file lists marked "checked" were read from the pack's GitHub repo.
+**Implemented 2026-11-09: see [Status](#status) at the end** for what was imported, what was
+left out and why, and what is still open. Licences marked "checked" were read on the source page
+on 2026-11-08 (and re-read on download); file lists marked "checked" were read from the pack's
+GitHub repo.
 
 ---
 
@@ -193,29 +195,111 @@ licence file, so a bad pack can be reverted alone.
 
 ## Status
 
-Update this section as you go.
+Done 2026-11-09 on `3d-models`. Every kind in the mapping table has at least one piece; 119
+placeholder pieces in 37 sockets. D.1 is **not** built, so `MapBuilder` still draws only the cover
+sockets: the four Sci-Fi Essentials crates added to `cover_light`/`cover_heavy` are the only change
+visible in a deck today. Everything else waits for D.1/D.6.
 
 | Pack | Downloaded | Imported | Manifest | Credits needed | Notes |
 |---|---|---|---|---|---|
-| KayKit Furniture Bits | | | | No | |
-| KayKit Restaurant Bits | | | | No | |
-| KayKit Space Base Bits | | | | No | |
-| MegaKit unused props | n/a | n/a | | No | |
-| Quaternius Sci-Fi Essentials | | | | No | |
-| Quaternius House Interior | | | | No | |
-| Quaternius Ultimate Furniture | | | | No | |
-| Quaternius Ultimate Modular Sci-Fi | | | | No | |
-| Quaternius Scifi Pod | | | | No | |
-| Quaternius Survival | | | | No | |
-| Kenney Furniture Kit | | | | No (courtesy) | |
-| Kenney Space Station Kit | | | | No (courtesy) | |
-| Zsky Interior Props | | | | **Yes** | |
-| Jeremy Eyring server rack | | | | **Yes** | |
-| Ali12 Lab Table | | | | **Yes** | |
-| Floor textures | | | | No | |
+| KayKit Furniture Bits | Yes (GitHub zip) | 15 models + atlas | `kaykit_furniture.json`, 20 pieces | No | Natural scale 0.75 (2 KayKit units = 1 tile). |
+| KayKit Restaurant Bits | Yes (GitHub zip) | 17 models + atlas | `kaykit_restaurant.json`, 17 pieces | No | Counters stretched to 1 tile at 0.95 m; the long table stretched to the 1x3 rows of D.2. |
+| KayKit Space Base Bits | Yes (GitHub zip) | 9 models + atlas | `kaykit_spacebase.json`, 7 pieces | No | `containers_A`–`D` are flat (0.2 units), so they are stacked three high as cargo. |
+| MegaKit unused props | n/a | n/a | 22 `mk_*` pieces in `quaternius_scifi.json` | No | Left out after the gallery: `Prop_Fan_Small` (skinned; renders far smaller than its mesh bounds), `Column_MetalSupport` (a flat plate), `Platform_Rails_*` (ramp railings; cell bars are three stacked `Prop_Rail_4` instead), `Decals/*` (the manifest's decal materials are opaque; decals need alpha-scissor support in `ModuleCatalog._build_material` first). `Door_Frame_Square_Blocked` reads as a solid wall, so it is `mk_cell_sealed`, not the bars. |
+| Quaternius Sci-Fi Essentials | Yes (itch.io, Standard) | 18 models; prop/gun textures only | `quaternius_essentials.json`, 26 pieces | No | Trim textures are byte-identical to the MegaKit's, so its manifest points at `quaternius_scifi/Textures/` instead of shipping a second copy. The Standard glTF set has no separate screens: desks stand in for consoles. Its blue tarp crates are tinted down in the cover sockets. |
+| Quaternius House Interior | **No** | | | | Google Drive answers "Quota exceeded" for every file (even License.txt). Not needed: Kenney Furniture Kit covered toilet, sink, shower, washer and bunk. |
+| Quaternius Ultimate Furniture | **No** | | | | Drive quota, as above. Not needed: KayKit covers beds, chairs and tables. |
+| Quaternius Ultimate Modular Sci-Fi | **No** | | | | Drive quota, as above. Its Drive listing shows `Props_Pod`, `Props_Capsule`, `Props_Computer`, `Props_ComputerSmall`, `Props_Shelf_Tall`, `Props_Vessel*`, `Props_Laser`, `Pipes`: worth a manual download (below) for better specimen tanks and consoles. FBX/OBJ/Blend only. |
+| Quaternius Scifi Pod | Yes (Poly Pizza GLB) | Yes | `polypizza_cc0.json` | No | Reads as a white pod-pillar; fine as a specimen tank. |
+| Quaternius Survival | **No** | | | | Drive quota. Not needed: Sci-Fi Essentials `Prop_HealthPack` is the medbay first-aid prop. |
+| Kenney Furniture Kit | Yes (kenney.nl) | 8 `.glb` | `kenney_furniture.json`, 8 pieces | No (courtesy) | `bedBunk` (CC0) replaces the CC-BY Zsky bunk; `shower`/`showerRound` and `washerDryerStacked` fill two of the "Blender" gaps. |
+| Kenney Space Station Kit | Yes (kenney.nl) | 7 `.glb` + colormap | `kenney_spacestation.json`, 7 pieces | No (courtesy) | Cartoony; consoles, wall displays and a wall switch, as fallbacks. It has no lockers or machinery worth taking. |
+| Extra CC0 singles (Poly Pizza) | Yes | Quaternius "Toilet", "Scifi Computer"; Dipper98 "Sci Fi Engine", "Sci Fi Wall Power Cell" | `polypizza_cc0.json` | No | From the unchecked leads, licences checked on each page: CC0. The engine is a 3x2 machinery piece; the power cell is the electrical-panel hazard; the computer is a CC0 server rack. |
+| Zsky Interior Props | Yes (4 models) | Punching Bag, Barbell, Gymmat, Dumbell | `polypizza_ccby.json` | **Yes: done** | Bunk Bed and wardrobes not taken: CC0 bunk (Kenney) and locker (Sci-Fi Essentials) found. Model pages say CC BY 3.0, bundle page 4.0: credited as 4.0 with both licences linked. |
+| Jeremy Eyring server rack | Yes | Yes (+3 PNGs Godot extracts) | `polypizza_ccby.json` | **Yes: done** | |
+| Ali12 Lab Table | Yes | Yes | `polypizza_ccby.json` | **Yes: done** | |
+| Nick Slough Scifi Canister | Yes | Yes | `polypizza_ccby.json` | **Yes: done** | CC BY 3.0 (checked); the gas-canister hazard. |
+| Floor textures | Yes (ambientCG, 1K JPG) | Tiles107, DiamondPlate003, Carpet012, MetalPlates004 | `floors/floor_{medical,engineering,quarters,command}.tres` | No | Not kit pieces, so no manifest. World triplanar, one repeat per tile. Nothing uses them until D.5. |
 
-**Still needs Blender (no free model found):** shower stall, washing machine, medical bed,
-operating table, morgue drawer wall.
+Credits: the CC BY entries are in `CREDITS.md` and `scripts/credits.gd` (in-game "Art" section);
+each CC BY `.glb` also has a `<name>.LICENSE.txt` beside it.
 
-**Manual downloads for the user:** (list here any link you couldn't fetch, with the folder to put
-it in)
+### What was built besides assets
+
+- **`ModuleCatalog` manifest features**, documented in its header: `parts` (several models drawn
+  as one piece; the morgue, workbench, elevator door and weapon racks are kitbashed this way),
+  `tint`/`paint` (recolour; the brief's "tinted red", "retinted white"), texture paths given as
+  full `res://` paths, and `emission` maps.
+- **Furniture convention**, in every new manifest's notes: origin at the footprint centre on the
+  floor, long side along X, front +Z; each piece has `footprint` (tiles) and `tier` (light, heavy,
+  dressing, clutter, wall, door). D.6 can pick by kind and filter by footprint and tier.
+- **`tools/test_kit_coverage.gd`** now checks every furniture piece against its footprint and
+  tier, and that every kind in the mapping table has a piece. 1,125 checks pass.
+- **`tools/room_kit_gallery.gd`** renders every furniture socket from the tactical camera's angle
+  with footprints outlined: the check this brief asks for, repeatable after any art swap.
+- Sockets not in the mapping table: `furniture_galley_hood` (wall-mounted above a stove),
+  `terminal_wall` (the existing `terminal` socket is a floor prop capped at 1.1 m, so the wall
+  access point got its own), and dressing sockets `dressing_floor`, `dressing_wall`,
+  `dressing_clutter`, `dressing_weapon` with `rooms` tags.
+
+### Pieces per socket
+
+| Socket | Pieces (tier) |
+|---|---|
+| `cover_light` / `cover_heavy` (new only) | `qe_crate_light`, `qe_tarp_light` / `qe_crate_heavy`, `qe_tarp_heavy` |
+| `furniture_bunk` | `kf_bunk` |
+| `furniture_bed` | `kk_bed_single_a`, `kk_bed_single_b`, `kk_bed_double_a` |
+| `furniture_locker` | `qe_locker`, `qe_locker_pair`, `kk_cabinet_stack`, `kk_cabinet_small_stack` |
+| `furniture_toilet` | `kf_toilet`, `kf_toilet_square`, `pp_toilet` |
+| `furniture_sink` | `kf_sink`, `kf_sink_square` |
+| `furniture_shower` | `kf_shower`, `kf_shower_round` |
+| `furniture_washer` | `kf_washer_dryer` |
+| `furniture_mess_table` | `kr_mess_table_a`, `kr_mess_table_b_long` (1x3), `kr_mess_table_round`, `kk_table_long`, `kk_table_square` |
+| `furniture_chair` | `kk_chair`, `kr_chair_a`, `kr_chair_b`, `kr_stool`, `qe_chair` |
+| `furniture_galley` | `kr_counter`, `kr_counter_sink`, `kr_counter_corner`, `kr_stove` (light); `kr_oven`, `kr_fridge_a`, `kr_fridge_b` (heavy) |
+| `furniture_galley_hood` | `kr_extractor_hood` (wall) |
+| `furniture_couch` | `kk_couch`, `kk_armchair`, `kk_coffee_table` |
+| `furniture_gym` | `pb_punching_bag`, `pb_barbell`, `kk_gym_bench` |
+| `furniture_med_bed` | `kk_med_bed_white` (stand-in) |
+| `furniture_surgery` | `kk_surgery_table` (stand-in) |
+| `furniture_monitor` | `mk_monitor`, `kst_display_wall`, `kst_display_wall_wide` |
+| `furniture_lab_bench` | `pb_lab_table` (1x3), `kk_lab_bench` |
+| `furniture_specimen_tank` | `pp_scifi_pod`, `mk_specimen_column` |
+| `furniture_morgue` | `mk_morgue_drawers` (stand-in) |
+| `furniture_machinery` | `pp_engine` (3x2), `mk_pipe_column`, `mk_crate_machine`, `kb_structure_tall` (heavy); `mk_pipe_rack`, `kb_structure_low` (light) |
+| `furniture_console` | `mk_console`, `qe_desk_medium`, `qe_desk_small`, `qe_desk_l`, `kst_computer`, `kst_computer_screen`, `kst_computer_wide`, `kst_computer_system` |
+| `furniture_server_rack` | `pb_server_rack`, `pp_scifi_computer` |
+| `furniture_weapon_rack` | `qe_rack_thin`, `qe_rack_wide` (shelves with guns as parts) |
+| `furniture_workbench` | `qe_workbench`, `kk_workbench` |
+| `furniture_cell_bars` | `mk_cell_bars` (stacked railings), `mk_cell_sealed` |
+| `furniture_crate` | `mk_crate_store_light`, `mk_crate_store_heavy`, `mk_chest_store`, `qe_crate_store_light`, `qe_crate_store_heavy`, `qe_tarp_store_light`, `kr_crate`, `kr_crate_potatoes`, `kb_cargo_packed` |
+| `furniture_cargo` | `kb_cargo_a_stacked`, `kb_cargo_b_stacked`, `kb_containers_abc`, `kb_containers_dba`, `qe_cargo_long`, `qe_cargo_tarp_long`, `mk_cargo_crate` |
+| `hazard_fuel_tank` | `mk_fuel_barrels` (four, tinted red), `qe_fuel_barrel` |
+| `hazard_gas` | `pb_gas_canister`, `mk_gas_barrels` (three, tinted yellow), `qe_gas_barrel` |
+| `hazard_panel` | `pp_power_cell` |
+| `terminal_wall` | `mk_terminal_wall` |
+| `power_switch` | `mk_power_switch`, `kst_wall_switch` |
+| `elevator_door` | `mk_elevator_door` (frame + two dark-metal leaves) |
+| `dressing_floor` / `dressing_wall` / `dressing_clutter` / `dressing_weapon` | lamp, dish rack, ammo boxes / shelves, wall medkit / rug, gym mat, dumbbells, vents, cables / rifle, pistol, weapon holder (MegaKit holder + rifle) |
+
+### Open questions for the designer
+
+- **Tall light furniture.** `kf_bunk` (1.6 m), `kr_counter_sink` (tap to 1.7 m) and
+  `pb_punching_bag` (1.8 m) are light tier but stand well above light-cover height; each carries a
+  `tall` reason and the test lets them through. D.3 says light pieces are low: either accept these,
+  or make bunks heavy.
+- **Style.** KayKit and Kenney pieces are bright and toy-like beside the MegaKit (see the brief's
+  intro). The Sci-Fi Essentials pieces match; the rest are stand-ins until Phase G.
+
+**Still needs Blender (no free model found):** medical bed, operating table, morgue drawer wall.
+Each has a stand-in (painted KayKit bed; painted table with the MegaKit floor light; two MegaKit
+chests stacked). The shower stall and washing machine came from the Kenney Furniture Kit.
+
+**Manual downloads for the user** (optional; nothing is blocked on them). Quaternius's Google
+Drive refused every scripted download with "Quota exceeded":
+- **Quaternius Ultimate Modular Sci-Fi Pack**: https://quaternius.com/packs/ultimatemodularscifi.html
+  → Download → the `FBX` folder (or the Blends). Put it in a scratch folder outside the repo and
+  ask an agent to convert `Props_Pod`, `Props_Capsule`, `Props_Computer`, `Props_ComputerSmall`
+  and `Props_Shelf_Tall` to glTF into `assets/room_tiles/quaternius_modular_scifi/glTF/`, then add
+  them to `furniture_specimen_tank`, `furniture_console` and `furniture_server_rack`.
+- Quaternius House Interior, Ultimate Furniture and Survival are no longer needed.
