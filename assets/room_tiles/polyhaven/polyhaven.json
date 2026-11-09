@@ -1,0 +1,74 @@
+{
+	"kit": "polyhaven",
+	"source": "Poly Haven (https://polyhaven.com/models), CC0 (LICENSE.txt). Each model is its 1k glTF download as shipped, in a folder of its own name with its .bin and textures/.",
+	"notes": [
+		"Photoscanned, real-world scale (metres): pieces keep scale 1 where they fit, so a stool is a stool. Weighted above the stylised kits' pieces in shared sockets, since this is the closest match to the gritty art direction.",
+		"Polycounts run 1.5k-50k per model (old_bed_frame is the heaviest at 50k); textures are the 1k glTF set.",
+		"Furniture convention (sockets furniture_*, hazard_*, dressing_*, decal_*, terminal_wall, power_switch, elevator_door): the wrapper origin is the centre of the piece's footprint on the floor, its long side runs along X and its front (the side a unit uses) faces +Z.",
+		"footprint is [x, z] in tiles. tier is light or heavy (the cover tiers of ROOM_THEMES_PLAN.md D.3), dressing (no cover of its own), clutter (under 0.35 m), wall (origin on the wall face at floor level, +Z into the room) or door (centred on the wall line like door_frame).",
+		"These sockets are not drawn yet: they wait for ROOM_THEMES_PLAN.md D.1 (obstacles get a kind) and D.6 (MapBuilder picks a piece per kind). tools/test_kit_coverage.gd holds every piece to its footprint and tier; tools/room_kit_gallery.gd renders them.",
+		"rooms lists the room types a dressing piece suits. tall marks a light piece that stands above light-cover height on purpose. Scale and offset were fitted to the footprint from each model's measured bounds."
+	],
+	"pieces": [
+		{"id": "ph_iron_bed_med", "file": "old_bed_frame/old_bed_frame_1k.gltf", "socket": "furniture_med_bed", "tier": "light", "footprint": [2, 1], "scale": [1, 1, 1], "yaw": 90, "offset": [-0.002, 0, 0.005], "weight": 3, "note": "A rusted iron bed frame: a ransacked ward."},
+
+		{"id": "ph_iron_bed", "file": "old_bed_frame/old_bed_frame_1k.gltf", "socket": "furniture_bed", "tier": "light", "footprint": [2, 1], "scale": [1, 1, 1], "yaw": 90, "offset": [-0.002, 0, 0.005], "weight": 4},
+
+		{"id": "ph_treatment_chair", "file": "BarberShopChair_01/BarberShopChair_01_1k.gltf", "socket": "furniture_surgery", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0.015, 0, -0.222], "weight": 3, "tall": "a reclining treatment chair whose back stands 1.5 m"},
+
+		{"id": "ph_lab_bench_microscope", "file": "metal_office_desk/metal_office_desk_1k.gltf", "socket": "furniture_lab_bench", "tier": "light", "footprint": [2, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.004], "parts": [{"file": "industrial_microscope/industrial_microscope_1k.gltf", "scale": [1, 1, 1], "offset": [-0.514, 0.789, -0.068]}], "weight": 4},
+		{"id": "ph_lab_bench_chemistry", "file": "metal_office_desk/metal_office_desk_1k.gltf", "socket": "furniture_lab_bench", "tier": "light", "footprint": [2, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.004], "parts": [{"file": "chemistry_set/chemistry_set_1k.gltf", "scale": [1, 1, 1], "offset": [0.136, 0.797, -0.098]}], "weight": 4},
+
+		{"id": "ph_desk", "file": "metal_office_desk/metal_office_desk_1k.gltf", "socket": "furniture_console", "tier": "light", "footprint": [2, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.004], "weight": 3},
+		{"id": "ph_comms_desk", "file": "metal_office_desk/metal_office_desk_1k.gltf", "socket": "furniture_console", "tier": "light", "footprint": [2, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.004], "parts": [{"file": "vintage_radio_transceiver/vintage_radio_transceiver_1k.gltf", "scale": [1, 1, 1], "offset": [0.342, 0.789, -0.268]}], "weight": 3, "rooms": ["comms", "bridge", "security_station"]},
+
+		{"id": "ph_vice_bench", "file": "metal_office_desk/metal_office_desk_1k.gltf", "socket": "furniture_workbench", "tier": "light", "footprint": [2, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.004], "parts": [{"file": "bench_vice_01/bench_vice_01_1k.gltf", "scale": [1, 1, 1], "offset": [-0.7, 0.873, 0.183]}], "weight": 4},
+		{"id": "ph_tool_cart", "file": "tool_cart/tool_cart_1k.gltf", "socket": "furniture_workbench", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0.021, 0.004, 0.008], "weight": 4},
+		{"id": "ph_storage_cart", "file": "industrial_storage_cart/industrial_storage_cart_1k.gltf", "socket": "furniture_workbench", "tier": "heavy", "footprint": [2, 1], "scale": [1, 1, 1], "offset": [0, -0.002, 0], "weight": 2},
+
+		{"id": "ph_generator", "file": "portable_generator/portable_generator_1k.gltf", "socket": "furniture_machinery", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0.005, 0, 0], "weight": 3},
+		{"id": "ph_aircon", "file": "exterior_aircon_unit/exterior_aircon_unit_1k.gltf", "socket": "furniture_machinery", "tier": "light", "footprint": [2, 1], "scale": [1, 1, 1], "offset": [-0.007, 0.32, 0.029], "weight": 3, "rooms": ["life_support", "engine_room"]},
+		{"id": "ph_welding_cart", "file": "portable_welding_cart/portable_welding_cart_1k.gltf", "socket": "furniture_machinery", "tier": "heavy", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0.004, 0.002, 0.06], "weight": 3, "rooms": ["fabrication", "engine_room", "hangar"]},
+		{"id": "ph_drill_press", "file": "old_drill_press/old_drill_press_1k.gltf", "socket": "furniture_machinery", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0.095, 0, 0.123], "weight": 2, "rooms": ["fabrication"]},
+
+		{"id": "ph_fuel_drum", "file": "Barrel_01/Barrel_01_1k.gltf", "socket": "hazard_fuel_tank", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0.007, 0], "weight": 4},
+		{"id": "ph_fuel_drums", "file": "Barrel_01/Barrel_01_1k.gltf", "socket": "hazard_fuel_tank", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [-0.33, 0.007, -0.22], "parts": [{"file": "barrel_03/barrel_03_1k.gltf", "scale": [1, 1, 1], "offset": [0.32, 0, -0.2]}, {"file": "metal_jerrycan/metal_jerrycan_1k.gltf", "scale": [1, 1, 1], "offset": [0.046, 0, 0.485], "yaw": 20}], "weight": 4},
+		{"id": "ph_jerrycans", "file": "metal_jerrycan/metal_jerrycan_1k.gltf", "socket": "hazard_fuel_tank", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [-0.405, 0, 0.003], "parts": [{"file": "metal_jerrycan_green/metal_jerrycan_green_1k.gltf", "scale": [1, 1, 1], "offset": [0.008, 0, 0.05]}, {"file": "metal_jerrycan/metal_jerrycan_1k.gltf", "scale": [1, 1, 1], "offset": [0.394, 0, 0.101], "yaw": -15}], "weight": 2},
+
+		{"id": "ph_gas_cylinders", "file": "propane_tank/propane_tank_1k.gltf", "socket": "hazard_gas", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [-0.25, 0, -0.2], "parts": [{"file": "small_lpg_tank/small_lpg_tank_1k.gltf", "scale": [1, 1, 1], "offset": [0.25, 0, -0.15]}, {"file": "propane_tank/propane_tank_1k.gltf", "scale": [1, 1, 1], "offset": [0, 0, 0.3], "yaw": 70}], "weight": 4},
+		{"id": "ph_lpg_pair", "file": "small_lpg_tank/small_lpg_tank_1k.gltf", "socket": "hazard_gas", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [-0.22, 0, -0.1], "parts": [{"file": "small_lpg_tank/small_lpg_tank_1k.gltf", "scale": [1, 1, 1], "offset": [0.25, 0, 0.1], "yaw": 140}], "weight": 3},
+
+		{"id": "ph_utility_box", "file": "utility_box_01/utility_box_01_1k.gltf", "socket": "hazard_panel", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.006], "weight": 4},
+		{"id": "ph_utility_box_wide", "file": "utility_box_02/utility_box_02_1k.gltf", "socket": "hazard_panel", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.006], "weight": 3},
+
+		{"id": "ph_fuse_box", "file": "power_box_01/power_box_01_1k.gltf", "socket": "power_switch", "tier": "wall", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0.056, 1.252, 0.047], "weight": 4},
+
+		{"id": "ph_rack_ammo", "file": "worn_metal_rack/worn_metal_rack_1k.gltf", "socket": "furniture_weapon_rack", "tier": "heavy", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0.002, 0, 0], "parts": [{"file": "ammo_box/ammo_box_1k.gltf", "scale": [1, 1, 1], "offset": [-0.25, 0.1, 0], "yaw": 90}, {"file": "ammo_box/ammo_box_1k.gltf", "scale": [1, 1, 1], "offset": [0.05, 0.1, 0], "yaw": 90}], "weight": 3},
+		{"id": "ph_steel_shelves", "file": "steel_frame_shelves_03/steel_frame_shelves_03_1k.gltf", "socket": "furniture_weapon_rack", "tier": "heavy", "footprint": [2, 1], "scale": [1, 1, 1], "offset": [-0.131, 0, -0.002], "weight": 2},
+
+		{"id": "ph_steel_shelves_narrow", "file": "steel_frame_shelves_01/steel_frame_shelves_01_1k.gltf", "socket": "furniture_crate", "tier": "heavy", "footprint": [1, 1], "scale": [0.0934, 0.0934, 0.0934], "offset": [0, 0.001, 0], "weight": 2, "rooms": ["storage", "cargo"], "note": "Authored at 10x scale; fitted to 2 m."},
+		{"id": "ph_metal_rack_store", "file": "worn_metal_rack/worn_metal_rack_1k.gltf", "socket": "furniture_crate", "tier": "heavy", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0.002, 0, 0], "weight": 2, "rooms": ["storage", "cargo", "galley"]},
+		{"id": "ph_military_crates", "file": "old_military_crate/old_military_crate_1k.gltf", "socket": "furniture_crate", "tier": "light", "footprint": [2, 1], "scale": [1, 1, 1], "offset": [0.005, 0, 0.179], "parts": [{"file": "old_military_crate/old_military_crate_1k.gltf", "scale": [1, 1, 1], "offset": [-0.005, 0.301, -0.179], "yaw": 180}], "weight": 4},
+		{"id": "ph_wooden_crates", "file": "wooden_military_crate/wooden_military_crate_1k.gltf", "socket": "furniture_crate", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, 0], "parts": [{"file": "wooden_military_crate/wooden_military_crate_1k.gltf", "scale": [1, 1, 1], "offset": [0, 0.465, 0], "yaw": 180}], "weight": 4},
+		{"id": "ph_plastic_totes", "file": "industrial_pastic_container/industrial_pastic_container_1k.gltf", "socket": "furniture_crate", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [-0.003, 0, 0.001], "parts": [{"file": "industrial_pastic_container/industrial_pastic_container_1k.gltf", "scale": [1, 1, 1], "offset": [0.001, 0.419, 0.003], "yaw": 90}], "weight": 2},
+
+		{"id": "ph_wooden_crate_stack", "file": "wooden_military_crate/wooden_military_crate_1k.gltf", "socket": "furniture_cargo", "tier": "heavy", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, 0], "parts": [{"file": "wooden_military_crate/wooden_military_crate_1k.gltf", "scale": [1, 1, 1], "offset": [0, 0.465, 0], "yaw": 180}, {"file": "wooden_military_crate/wooden_military_crate_1k.gltf", "scale": [1, 1, 1], "offset": [0, 0.93, 0]}], "weight": 4},
+
+		{"id": "ph_metal_stool", "file": "metal_stool_01/metal_stool_01_1k.gltf", "socket": "furniture_chair", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, 0], "weight": 4},
+		{"id": "ph_metal_stool_low", "file": "metal_stool_02/metal_stool_02_1k.gltf", "socket": "furniture_chair", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.001], "weight": 4},
+		{"id": "ph_school_chair", "file": "SchoolChair_01/SchoolChair_01_1k.gltf", "socket": "furniture_chair", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0.002, 0], "weight": 3},
+
+		{"id": "ph_armchair", "file": "modern_arm_chair_01/modern_arm_chair_01_1k.gltf", "socket": "furniture_couch", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [-0.003, 0, 0.082], "weight": 4},
+
+		{"id": "ph_medical_box", "file": "medical_box/medical_box_1k.gltf", "socket": "dressing_clutter", "tier": "clutter", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.003], "rooms": ["medbay", "icu", "surgery", "security_station"]},
+		{"id": "ph_cardboard_box", "file": "cardboard_box_01/cardboard_box_01_1k.gltf", "socket": "dressing_clutter", "tier": "clutter", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [-0.001, 0.007, -0.033], "rooms": ["storage", "cargo", "cabin", "bunk_room"]},
+		{"id": "ph_ammo_cans", "file": "ammo_box/ammo_box_1k.gltf", "socket": "dressing_clutter", "tier": "clutter", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [-0.1, 0, -0.05], "parts": [{"file": "ammo_box/ammo_box_1k.gltf", "scale": [1, 1, 1], "offset": [0.15, 0, 0.05]}, {"file": "ammo_box/ammo_box_1k.gltf", "scale": [1, 1, 1], "offset": [0.05, 0, 0.3], "yaw": 80}], "rooms": ["armory", "security_station", "brig"]},
+
+		{"id": "ph_tool_chest", "file": "metal_tool_chest/metal_tool_chest_1k.gltf", "socket": "dressing_floor", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0.027, -0.001, -0.006], "rooms": ["fabrication", "engine_room", "engineering_control", "hangar"]},
+		{"id": "ph_extinguisher", "file": "korean_fire_extinguisher_01/korean_fire_extinguisher_01_1k.gltf", "socket": "dressing_floor", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.06], "rooms": ["corridor", "engine_room", "galley", "hangar", "fuel_storage"]},
+		{"id": "ph_trash_cans", "file": "metal_trash_can/metal_trash_can_1k.gltf", "socket": "dressing_floor", "tier": "dressing", "footprint": [2, 1], "scale": [1, 1, 1], "offset": [0.064, 0, 0], "rooms": ["galley", "mess", "corridor", "hangar"]},
+		{"id": "ph_hand_truck", "file": "hand_truck/hand_truck_1k.gltf", "socket": "dressing_floor", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.251], "rooms": ["cargo", "hangar", "storage"]},
+
+		{"id": "ph_security_camera", "file": "security_camera_01/security_camera_01_1k.gltf", "socket": "dressing_wall", "tier": "wall", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 2.325, 0.303], "rooms": ["security_station", "armory", "bridge", "brig", "corridor"]}
+	]
+}

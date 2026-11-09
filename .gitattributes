@@ -16,6 +16,11 @@ assets/room_tiles/quaternius_essentials/**/*.png  filter=lfs diff=lfs merge=lfs 
 assets/room_tiles/kenney_*/**/*.png               filter=lfs diff=lfs merge=lfs -text
 assets/room_tiles/polypizza_*/**/*.png            filter=lfs diff=lfs merge=lfs -text
 assets/room_tiles/floors/**/*.jpg                 filter=lfs diff=lfs merge=lfs -text
+assets/room_tiles/polyhaven/**/*.gltf             filter=lfs diff=lfs merge=lfs -text
+assets/room_tiles/polyhaven/**/*.bin              filter=lfs diff=lfs merge=lfs -text
+assets/room_tiles/polyhaven/**/*.jpg              filter=lfs diff=lfs merge=lfs -text
+assets/room_tiles/polyhaven/**/*.png              filter=lfs diff=lfs merge=lfs -text
+assets/room_tiles/opengameart_ccby/**/*.png       filter=lfs diff=lfs merge=lfs -text
 
 # Godot writes LF and rewrites these on every reimport. Pinned to LF so a
 # reimport that changes nothing is no diff (core.autocrlf=true otherwise flags

@@ -1,0 +1,46 @@
+Models from Poly Haven (https://polyhaven.com), licensed CC0 1.0 Universal
+(https://creativecommons.org/publicdomain/zero/1.0/; https://polyhaven.com/license).
+No attribution required. Downloaded 2026-11-09 as the 1k glTF set through the
+Poly Haven API; files are as shipped, one folder per model.
+
+folder                         name                               tris      authors / page
+BarberShopChair_01             Barber Shop Chair 01               4280      Fernando Quinn -- https://polyhaven.com/a/BarberShopChair_01
+Barrel_01                      Barrel_01                          2682      Jorge Camacho -- https://polyhaven.com/a/Barrel_01
+SchoolChair_01                 School Chair 01                    5072      Ethan Place -- https://polyhaven.com/a/SchoolChair_01
+ammo_box                       Ammo Box                           4382      DanKit -- https://polyhaven.com/a/ammo_box
+barrel_03                      Barrel 03                          1473      Serhii Khromov -- https://polyhaven.com/a/barrel_03
+bench_vice_01                  Bench Vice 01                      2864      Yann Kervran, Antanas Kep -- https://polyhaven.com/a/bench_vice_01
+cardboard_box_01               Cardboard Box 01                   16952     Rahul Chaudhary -- https://polyhaven.com/a/cardboard_box_01
+chemistry_set                  Chemistry Set                      41958     Jiří Ptáček -- https://polyhaven.com/a/chemistry_set
+exterior_aircon_unit           Exterior Aircon Unit               18986     Monsta3D -- https://polyhaven.com/a/exterior_aircon_unit
+hand_truck                     Hand Truck                         13220     Mutanzom3D -- https://polyhaven.com/a/hand_truck
+industrial_microscope          Industrial Microscope              16598     Lukas Walzer -- https://polyhaven.com/a/industrial_microscope
+industrial_pastic_container    Industrial Plastic Container       7118      Galo Benivegna -- https://polyhaven.com/a/industrial_pastic_container
+industrial_storage_cart        Industrial Storage Cart            18902     Jule Bielitz -- https://polyhaven.com/a/industrial_storage_cart
+korean_fire_extinguisher_01    Korean Fire Extinguisher 01        9913      UM JOORIN -- https://polyhaven.com/a/korean_fire_extinguisher_01
+medical_box                    Medical Box                        3718      Ulan Cabanilla -- https://polyhaven.com/a/medical_box
+metal_jerrycan                 Metal Jerrycan                     20022     Sean Buckley -- https://polyhaven.com/a/metal_jerrycan
+metal_jerrycan_green           Metal Jerrycan Green               9636      Ulan Cabanilla -- https://polyhaven.com/a/metal_jerrycan_green
+metal_office_desk              Metal Office Desk                  6898      Ulan Cabanilla -- https://polyhaven.com/a/metal_office_desk
+metal_stool_01                 Metal Stool 01                     8334      Ulan Cabanilla -- https://polyhaven.com/a/metal_stool_01
+metal_stool_02                 Metal Stool 02                     6532      Ulan Cabanilla -- https://polyhaven.com/a/metal_stool_02
+metal_tool_chest               Metal Tool Chest                   14576     Yann Kervran, John Hutcheson -- https://polyhaven.com/a/metal_tool_chest
+metal_trash_can                Metal Trash Can                    13960     GurJas Studios -- https://polyhaven.com/a/metal_trash_can
+modern_arm_chair_01            Modern Arm Chair 01                8916      Vibrant Nordic -- https://polyhaven.com/a/modern_arm_chair_01
+old_bed_frame                  Old Bed Frame                      49990     Luca B -- https://polyhaven.com/a/old_bed_frame
+old_drill_press                Old Drill Press                    21842     Harsh Vardhan Singh -- https://polyhaven.com/a/old_drill_press
+old_military_crate             Old Military Crate                 10476     Jack Mava -- https://polyhaven.com/a/old_military_crate
+portable_generator             Portable Generator                 26419     James Ray Cock -- https://polyhaven.com/a/portable_generator
+portable_welding_cart          Portable Welding Cart              29418     Georgii Gorbunov -- https://polyhaven.com/a/portable_welding_cart
+power_box_01                   Power Box 01                       21272     Rico Cilliers, Yann Kervran -- https://polyhaven.com/a/power_box_01
+propane_tank                   Propane Tank                       5238      Slinc -- https://polyhaven.com/a/propane_tank
+security_camera_01             Security Camera 01                 13571     Alexander Otterbeck, Yann Kervran -- https://polyhaven.com/a/security_camera_01
+small_lpg_tank                 Small Lpg Tank                     15042     Ulan Cabanilla -- https://polyhaven.com/a/small_lpg_tank
+steel_frame_shelves_01         Steel Frame Shelves 01             4348      James Ray Cock -- https://polyhaven.com/a/steel_frame_shelves_01
+steel_frame_shelves_03         Steel Frame Shelves 03             8396      Ulan Cabanilla -- https://polyhaven.com/a/steel_frame_shelves_03
+tool_cart                      Tool Cart                          29394     Savva Zakharov -- https://polyhaven.com/a/tool_cart
+utility_box_01                 Utility Box 01                     4404      James Ray Cock -- https://polyhaven.com/a/utility_box_01
+utility_box_02                 Utility Box 02                     6268      James Ray Cock -- https://polyhaven.com/a/utility_box_02
+vintage_radio_transceiver      Vintage Radio Transceiver          42350     Mateusz Sadek -- https://polyhaven.com/a/vintage_radio_transceiver
+wooden_military_crate          Wooden Military Crate              22986     Prabhjinder Singh -- https://polyhaven.com/a/wooden_military_crate
+worn_metal_rack                Worn Metal Rack                    6372      Luca B -- https://polyhaven.com/a/worn_metal_rack
