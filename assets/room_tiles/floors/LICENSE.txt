@@ -1,0 +1,14 @@
+Floor textures for per-room floors (ROOM_THEMES_PLAN.md D.5), from ambientCG
+(https://ambientcg.com), licensed CC0 1.0 Universal
+(https://creativecommons.org/publicdomain/zero/1.0/). Downloaded 2026-11-09 as
+the 1K-JPG sets; only the Color, NormalGL, Roughness, Metalness and
+AmbientOcclusion maps are kept, with their original file names.
+
+  Tiles107        https://ambientcg.com/view?id=Tiles107        -> floor_medical.tres
+  DiamondPlate003 https://ambientcg.com/view?id=DiamondPlate003 -> floor_engineering.tres
+  Carpet012       https://ambientcg.com/view?id=Carpet012       -> floor_quarters.tres
+  MetalPlates004  https://ambientcg.com/view?id=MetalPlates004  -> floor_command.tres
+
+The .tres materials map one texture repeat to one 1.5 m tile with world-space
+triplanar UVs, so they work on any floor mesh without its own UVs. Nothing uses
+them yet: D.5 picks a floor per room type.

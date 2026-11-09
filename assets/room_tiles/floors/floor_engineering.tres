@@ -1,0 +1,19 @@
+[gd_resource type="StandardMaterial3D" format=3]
+
+[ext_resource type="Texture2D" path="res://assets/room_tiles/floors/DiamondPlate003/DiamondPlate003_1K-JPG_Color.jpg" id="1"]
+[ext_resource type="Texture2D" path="res://assets/room_tiles/floors/DiamondPlate003/DiamondPlate003_1K-JPG_NormalGL.jpg" id="2"]
+[ext_resource type="Texture2D" path="res://assets/room_tiles/floors/DiamondPlate003/DiamondPlate003_1K-JPG_Roughness.jpg" id="3"]
+[ext_resource type="Texture2D" path="res://assets/room_tiles/floors/DiamondPlate003/DiamondPlate003_1K-JPG_Metalness.jpg" id="4"]
+
+[resource]
+resource_name = "floor_engineering"
+albedo_texture = ExtResource("1")
+normal_texture = ExtResource("2")
+roughness_texture = ExtResource("3")
+metallic_texture = ExtResource("4")
+normal_enabled = true
+metallic = 1.0
+roughness = 1.0
+uv1_scale = Vector3(0.6667, 0.6667, 0.6667)
+uv1_triplanar = true
+uv1_world_triplanar = true
