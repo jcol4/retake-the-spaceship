@@ -20,10 +20,45 @@ extends EnemyUnit
 
 
 ## The claw's price, flat rather than read off Reflexes so it does not drift
-## when K_REFLEXES or the melee base moves. Against the swarm's 6 AP pool this is
-## up to 3 tiles then a claw, or two claws when already in contact.
+## when K_REFLEXES or the melee base moves. Against the swarm's 8 AP pool this is
+## up to 5 tiles then a claw, or two claws when already in contact.
 ## WormUnit overrides action_cost with its own rule and is unaffected.
 const CLAW_AP_COST := 3
+
+## SYNAPSE. Enough of the swarm in one place and it stops acting like separate
+## bodies: every one within SYNAPSE_RADIUS of SYNAPSE_MASS awake kin (itself
+## included, any horde) is LINKED, and a linked body is agitated — it walks
+## LINKED_FREE_TILES extra a turn and everything it does plays faster. Gunfire
+## or a blast within SURGE_RADIUS of a linked body PRIMES a surge: its next
+## activation gets SURGE_FREE_TILES instead, and it goes faster still.
+##
+## Mobility and look ONLY. The free tiles are move-only (`move_cost_for`), never
+## AP, so a linked body in contact claws exactly as often as a lone one — and
+## nothing here touches HP or damage. A horde spawns 5-8 (AlienPresets.HORDE_*),
+## so a full pack starts linked and thinning it is how the player breaks it.
+## Lone shamblers stay outpaceable, which is the tier's whole premise.
+const SYNAPSE_MASS := 6
+const SYNAPSE_RADIUS := 3
+const SURGE_RADIUS := 4
+const LINKED_FREE_TILES := 1
+const SURGE_FREE_TILES := 2
+
+## Animation and walk-speed multiplier per agitation level: calm, linked,
+## surging. UnitVisual.tempo and `move_speed` scale together so feet stay planted.
+const AGITATION_TEMPO: Array[float] = [1.0, 1.3, 1.55]
+
+## CROWD GAIT, for a body whose model owns a walk AND a run (zombie_2): it
+## shambles on its own and runs once `run_crowd` awake kin are within
+## SYNAPSE_RADIUS (itself included), and at CROWD_SPRINT the run plays at the
+## linked tempo. That replaces the synapse's linked tempo for such a body; the
+## surge's still goes over the top. 0 means one gait — `walks_only` as authored.
+@export var run_crowd := 0
+
+## The run's `move_speed` at tempo 1, owed the same care as the walk's: it is
+## the clip's stride over its cycle in UnitVisual, or the feet skate.
+@export var run_speed := 0.0
+
+const CROWD_SPRINT := 8
 
 
 ## The horde this body was spawned in (main.gd `_spawn_hordes`, NestUnit's
@@ -48,10 +83,35 @@ var in_horde_turn := false
 ## once the others have moved.
 var waiting := false
 
+## Whether this body was in the synapse when last checked (`_refresh_synapse`).
+var linked := false
+
+## Awake kin within SYNAPSE_RADIUS, itself included, when last checked. 0 for a
+## body that is asleep or outside the synapse.
+var crowd := 0
+
+## 0 calm, 1 linked, 2 surging — indexes AGITATION_TEMPO.
+var agitation := 0
+
+## Tiles this activation may still walk without paying AP. Spent before AP
+## (`move_cost_for`, `move_along`); set afresh by every `begin_activation`.
+var free_tiles := 0
+
+## Set by gunfire heard close while linked; spent by the next activation.
+var _surge_primed := false
+
+## `move_speed` as authored, which agitation scales.
+var _calm_move_speed := 0.0
+
+## Last round each pack's surge was logged, by horde_id (or name for a lone
+## body): one line a pack, not one per body.
+static var _surge_logged := {}
+
 
 func _ready() -> void:
 	super()
 	_vary_body()
+	_calm_move_speed = move_speed
 
 
 ## The basic Fodder zombie comes apart when it dies (FodderGibs); the brute,
@@ -83,6 +143,114 @@ func action_cost(action: UnitStats.Action) -> int:
 	if action == UnitStats.Action.MELEE:
 		return CLAW_AP_COST
 	return super(action)
+
+
+# --- Synapse -------------------------------------------------------------------
+
+
+## Whether this type takes part in the synapse at all. The worm has its own
+## gather-and-grow answer to numbers (WormUnit) and opts out.
+func joins_synapse() -> bool:
+	return true
+
+
+func begin_activation() -> void:
+	super()
+	_refresh_synapse()
+	free_tiles = 0
+	if linked:
+		free_tiles = SURGE_FREE_TILES if _surge_primed else LINKED_FREE_TILES
+		_set_agitation(2 if _surge_primed else 1)
+	else:
+		_set_agitation(0)
+	# Spent by this activation. The tiles are NOT zeroed when take_turn returns:
+	# a body held up by its pack comes back through `_combat_turn` afterwards
+	# (TurnManager._horde_turn) and is owed them; the next activation resets.
+	_surge_primed = false
+
+
+## Sound still rouses as it does for every alien (super). On top of that, a
+## linked body close to the noise is primed to surge at it — even one already
+## in COMBAT, which the base hearing ignores.
+func hear_noise(at: Vector3i) -> void:
+	super(at)
+	if is_downed or not joins_synapse() \
+			or GridManager.chebyshev_dist(grid_pos, at) > SURGE_RADIUS:
+		return
+	_refresh_synapse()
+	if not linked:
+		return
+	_surge_primed = true
+	_set_agitation(2)  # shown now: the pack bristles as the shot goes off
+	var pack := horde_id if horde_id != "" else String(name)
+	if _surge_logged.get(pack, -1) != TurnManager.turn_number:
+		_surge_logged[pack] = TurnManager.turn_number
+		action_logged.emit("The swarm around %s surges toward the noise" % stats.display_name)
+
+
+func _refresh_synapse() -> void:
+	var awake := joins_synapse() and not is_downed and alert_state != AlertState.UNAWARE
+	crowd = _kin_in_reach() if awake else 0
+	linked = crowd >= SYNAPSE_MASS
+
+
+## Awake swarm bodies within SYNAPSE_RADIUS, this one included.
+func _kin_in_reach() -> int:
+	var count := 0
+	for node in get_tree().get_nodes_in_group("enemy_units"):
+		var kin := node as SwarmUnit
+		if kin == null or kin.is_downed or kin.faction != faction or not kin.joins_synapse() \
+				or kin.alert_state == AlertState.UNAWARE:
+			continue
+		if GridManager.chebyshev_dist(grid_pos, kin.grid_pos) <= SYNAPSE_RADIUS:
+			count += 1
+	return count
+
+
+func _set_agitation(level: int) -> void:
+	agitation = level
+	_refresh_pace()
+
+
+## Gait, tempo and `move_speed` from `agitation` and `crowd`, kept in step so
+## the feet stay planted whichever clip is playing.
+func _refresh_pace() -> void:
+	var tempo := AGITATION_TEMPO[agitation]
+	var speed := _calm_move_speed
+	if run_crowd > 0:
+		var running := crowd >= run_crowd
+		walks_only = not running
+		if running:
+			speed = run_speed
+		if agitation < 2:
+			tempo = AGITATION_TEMPO[1] if crowd >= CROWD_SPRINT else 1.0
+	move_speed = speed * tempo
+	if not is_equal_approx(tempo, visual.tempo):
+		visual.set_tempo(tempo)
+
+
+## The free tiles on top of what the AP buys. Where the AP alone would leave
+## nothing after the reserve, the free tiles are walked and the reserve kept —
+## so a surge closes the gap and still arrives with the claw in hand.
+func _move_budget(reserve_ap: int = 0) -> int:
+	if free_tiles > 0 and ap >= reserve_ap and ap - reserve_ap < move_ap_per_tile():
+		return free_tiles
+	return super(reserve_ap) + free_tiles
+
+
+## Free tiles come off the front of any walk. Spent in `move_along`, which every
+## paid walk follows its `spend_ap(move_cost_for(...))` with.
+func move_cost_for(tiles: int) -> int:
+	return super(maxi(0, tiles - free_tiles))
+
+
+## Also re-reads the crowd first, so the gait is the pack as it stands when
+## this body sets off, not as it stood when the activation began.
+func move_along(path: Array[Vector3i]) -> void:
+	free_tiles = maxi(0, free_tiles - path.size())
+	_refresh_synapse()
+	_refresh_pace()
+	await super(path)
 
 
 ## A horde wakes together. Room-scoped propagation (EnemyUnit._propagate_alert)

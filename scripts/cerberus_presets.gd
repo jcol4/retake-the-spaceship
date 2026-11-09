@@ -14,8 +14,9 @@ extends RefCounted
 ##   Sagittarii tanky and slow, with plate thick enough that ordinary rifle fire
 ##              is a losing trade. This is the unit EMP exists for.
 ##   Proctor    fragile, fast, unarmed. One solid hit should end it.
-##   Securus    the wall. Only two things get through it quickly: an EMP window,
-##              or breaking the head with Aimed Shots.
+##   Securus    the hunter-killer. Fast, armed at range, lethal in contact. Only
+##              two things get through it quickly: an EMP window, or breaking
+##              the head with Aimed Shots.
 ##
 ## Robots have no Fitness in any meaningful sense — the stat is reused rather
 ## than forked, but what it BUYS changed with the granular AP rework: Fitness is
@@ -24,8 +25,8 @@ extends RefCounted
 ## hand-set per model exactly as Sec 4.5/5.5 prescribes for non-player units.
 ##
 ## The three are set INDEPENDENTLY, which is what the rework bought this table:
-## Securus is the thickest thing on the board and slow, Proctor is the thinnest
-## and fast, and neither is a compromise between the two any more. Every
+## Securus is the thickest thing on the board AND the fastest, Proctor is the
+## thinnest and fast, and neither is a compromise between the two any more. Every
 ## `initiative` pair lands on the draw weight that model has always had.
 ##
 ## HP AND DAMAGE ARE BOTH RESCALED, HP harder — the whole game moved to a ~20 HP
@@ -89,7 +90,7 @@ const DATA := {
 		"name": "XVT-7 Proctor",
 		# High Perception and the best Reflexes on the board: it is built to see
 		# and to leave, and its Initiative reflects that it usually reports first.
-		# The biggest pool on the roster at 10 AP — leaving is the whole job.
+		# 10 AP, second only to Securus — leaving is the whole job.
 		"perception": 70, "reflexes": 65, "fitness": 60, "luck": 25,
 		"base_hp": 2,  # -> 6 HP: one solid hit ends it, which is now literally true
 		"initiative": [45, 6],  # -> 64, still drawing with the squad
@@ -110,12 +111,16 @@ const DATA := {
 	},
 	MapData.Spawn.SECURUS: {
 		"name": "JXM-2 Securus",
-		# 7 AP against a 6 AP swing: one tile and a strike, or seven tiles. Slow,
-		# but it closes — the threat is arrival.
-		"perception": 50, "reflexes": 25, "fitness": 20, "luck": 10,
-		"base_hp": 25,  # -> 26 HP, the thickest on either roster
+		# 12 AP, the biggest pool on either roster, against a flat 3 AP swing
+		# (SecurusUnit.SWING_AP_COST): nine tiles and a strike, or four strikes in
+		# contact. The threat is still arrival — it just arrives from much further.
+		"perception": 50, "reflexes": 25, "fitness": 80, "luck": 10,
+		"base_hp": 20,  # -> 26 HP with the Fitness term, the thickest on either roster
 		"initiative": [21, 4],  # -> 30
-		"weapon": null,  # melee/breach only — the reason to fear it is the distance closing
+		# Wrist-mounted machine gun: what it does to a target it cannot reach this
+		# activation. A 6 AP snap shot, so it advances and fires, or fires twice.
+		# No model yet — it fires from the body like any armed robot without one.
+		"weapon": {"display_name": "JXM Wrist Gun", "base_accuracy": 30, "damage": 6, "mag_size": 12},
 		"melee": [60, 12],  # two connected swings kill a soldier outright
 	},
 }
