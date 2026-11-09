@@ -1,0 +1,24 @@
+{
+	"kit": "kenney_furniture",
+	"source": "Kenney Furniture Kit 2.0, CC0 (License.txt). https://kenney.nl/assets/furniture-kit . .glb as shipped (Models/GLTF format), materials are flat colours.",
+	"notes": [
+		"Furniture convention (sockets furniture_*, hazard_*, dressing_*, decal_*, terminal_wall, power_switch, elevator_door): the wrapper origin is the centre of the piece's footprint on the floor, its long side runs along X and its front (the side a unit uses) faces +Z.",
+		"footprint is [x, z] in tiles. tier is light or heavy (the cover tiers of ROOM_THEMES_PLAN.md D.3), dressing (no cover of its own), clutter (under 0.35 m), wall (origin on the wall face at floor level, +Z into the room) or door (centred on the wall line like door_frame).",
+		"These sockets are not drawn yet: they wait for ROOM_THEMES_PLAN.md D.1 (obstacles get a kind) and D.6 (MapBuilder picks a piece per kind). tools/test_kit_coverage.gd holds every piece to its footprint and tier; tools/room_kit_gallery.gd renders them.",
+		"rooms lists the room types a dressing piece suits. tall marks a light piece that stands above light-cover height on purpose. Scale and offset were fitted to the footprint from each model's measured bounds."
+	],
+	"pieces": [
+		{"id": "kf_bunk", "file": "glb/bedBunk.glb", "socket": "furniture_bunk", "tier": "light", "footprint": [2, 1], "scale": [1.8824, 1.8824, 1.8824], "yaw": 90, "offset": [1.031, 0, 0.537], "weight": 1, "tall": "a bunk is two beds high; ROOM_THEMES_PLAN.md D.2 calls bunks light cover"},
+
+		{"id": "kf_toilet", "file": "glb/toilet.glb", "socket": "furniture_toilet", "tier": "light", "footprint": [1, 1], "scale": [1.774, 1.774, 1.774], "offset": [-0.277, 0, -0.423], "weight": 1},
+		{"id": "kf_toilet_square", "file": "glb/toiletSquare.glb", "socket": "furniture_toilet", "tier": "light", "footprint": [1, 1], "scale": [1.774, 1.774, 1.774], "offset": [-0.269, 0, 0.343], "weight": 1},
+
+		{"id": "kf_sink", "file": "glb/bathroomSink.glb", "socket": "furniture_sink", "tier": "light", "footprint": [1, 1], "scale": [1.6964, 1.6964, 1.6964], "offset": [-0.288, 0.679, 0.246], "weight": 1},
+		{"id": "kf_sink_square", "file": "glb/bathroomSinkSquare.glb", "socket": "furniture_sink", "tier": "light", "footprint": [1, 1], "scale": [1.6379, 1.6379, 1.6379], "offset": [-0.352, -0.093, 0.491], "weight": 1},
+
+		{"id": "kf_shower", "file": "glb/shower.glb", "socket": "furniture_shower", "tier": "heavy", "footprint": [1, 1], "scale": [1.9195, 1.9195, 1.9195], "offset": [0.539, 0, 0.52], "weight": 1},
+		{"id": "kf_shower_round", "file": "glb/showerRound.glb", "socket": "furniture_shower", "tier": "heavy", "footprint": [1, 1], "scale": [1.9195, 1.9195, 1.9195], "offset": [-0.539, 0, 0.539], "weight": 1},
+
+		{"id": "kf_washer_dryer", "file": "glb/washerDryerStacked.glb", "socket": "furniture_washer", "tier": "heavy", "footprint": [1, 1], "scale": [1.9149, 1.9149, 1.9149], "offset": [-0.373, 0, 0.297], "weight": 1}
+	]
+}
