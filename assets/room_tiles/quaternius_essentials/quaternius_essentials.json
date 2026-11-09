@@ -1,0 +1,62 @@
+{
+	"kit": "quaternius_essentials",
+	"source": "Quaternius Sci-Fi Essentials Kit, Standard tier, CC0 (License_Standard.txt). https://quaternius.com/packs/scifiessentialskit.html , downloaded from https://quaternius.itch.io/sci-fi-essentials-kit . glTF as shipped; same art style as the MegaKit.",
+	"notes": [
+		"Furniture convention (sockets furniture_*, hazard_*, dressing_*, decal_*, terminal_wall, power_switch, elevator_door): the wrapper origin is the centre of the piece's footprint on the floor, its long side runs along X and its front (the side a unit uses) faces +Z.",
+		"footprint is [x, z] in tiles. tier is light or heavy (the cover tiers of ROOM_THEMES_PLAN.md D.3), dressing (no cover of its own), clutter (under 0.35 m), wall (origin on the wall face at floor level, +Z into the room) or door (centred on the wall line like door_frame).",
+		"These sockets are not drawn yet: they wait for ROOM_THEMES_PLAN.md D.1 (obstacles get a kind) and D.6 (MapBuilder picks a piece per kind). tools/test_kit_coverage.gd holds every piece to its footprint and tier; tools/room_kit_gallery.gd renders them.",
+		"rooms lists the room types a dressing piece suits. tall marks a light piece that stands above light-cover height on purpose. Scale and offset were fitted to the footprint from each model's measured bounds."
+	],
+	"textures": "Textures",
+	"materials": {
+		"MI_Trim_01": {"albedo": "res://assets/room_tiles/quaternius_scifi/Textures/T_Trim_01_BaseColor_Red.png", "orm": "res://assets/room_tiles/quaternius_scifi/Textures/T_Trim_01_ORM.png", "normal": "res://assets/room_tiles/quaternius_scifi/Textures/T_Trim_01_Normal.png"},
+		"MI_Trim_02": {"albedo": "res://assets/room_tiles/quaternius_scifi/Textures/T_Trim_02_BaseColor.png", "orm": "res://assets/room_tiles/quaternius_scifi/Textures/T_Trim_02_ORM.png", "normal": "res://assets/room_tiles/quaternius_scifi/Textures/T_Trim_02_Normal.png"},
+		"MI_Trim_03": {"albedo": "res://assets/room_tiles/quaternius_scifi/Textures/T_Trim_03_BaseColor.png", "orm": "res://assets/room_tiles/quaternius_scifi/Textures/T_Trim_03_ORM.png", "normal": "res://assets/room_tiles/quaternius_scifi/Textures/T_Trim_03_Normal.png"},
+		"MI_Trim_03_Dark": {"albedo": "res://assets/room_tiles/quaternius_scifi/Textures/T_Trim_03_Cables.png", "orm": "res://assets/room_tiles/quaternius_scifi/Textures/T_Trim_03_ORM.png", "normal": "res://assets/room_tiles/quaternius_scifi/Textures/T_Trim_03_Normal.png"},
+		"MI_Props_Batch1": {"albedo": "T_Props_Batch1_BaseColor.png", "orm": "T_Props_Batch1_ORM.png", "normal": "T_Props_Batch1_Normal.png"},
+		"MI_Props_Batch2": {"albedo": "T_Props_Batch2_BaseColor.png", "orm": "T_Props_Batch2_ORM.png", "normal": "T_Props_Batch2_Normal.png", "emission": "T_Props_Batch2_Emissive.png"},
+		"MI_Props_Crates": {"albedo": "T_Props_Crates_BaseColor.png", "orm": "T_Props_Crates_ORM.png", "normal": "T_Props_Crates_Normal.png"},
+		"MI_Guns_Batch1": {"albedo": "T_Guns_Batch1_BaseColor.png", "orm": "T_Guns_Batch1_ORM.png", "normal": "T_Guns_Batch1_Normal.png", "emission": "T_Guns_Batch1_Emissive.png"}
+	},
+	"pieces": [
+		{"id": "qe_crate_light", "file": "glTF/Prop_Crate.gltf", "socket": "cover_light", "tier": "light", "footprint": [1, 1], "scale": [0.6667, 0.6667, 0.6667], "offset": [0, -0.001, 0], "weight": 2},
+		{"id": "qe_tarp_light", "file": "glTF/Prop_Crate_Tarp.gltf", "socket": "cover_light", "tier": "light", "footprint": [1, 1], "scale": [0.6379, 0.6379, 0.6379], "offset": [0, 0.003, 0], "tint": [0.45, 0.5, 0.55], "weight": 1, "note": "Tarp muted so live decks keep their dark palette."},
+
+		{"id": "qe_crate_heavy", "file": "glTF/Prop_Crate.gltf", "socket": "cover_heavy", "tier": "heavy", "footprint": [1, 1], "scale": [0.9333, 0.9333, 0.9333], "offset": [0, -0.001, 0], "weight": 1},
+		{"id": "qe_tarp_heavy", "file": "glTF/Prop_Crate_Tarp.gltf", "socket": "cover_heavy", "tier": "heavy", "footprint": [1, 1], "scale": [0.8737, 0.8737, 0.8737], "offset": [0, 0.005, 0], "tint": [0.45, 0.5, 0.55], "weight": 1, "note": "Tarp muted so live decks keep their dark palette."},
+
+		{"id": "qe_locker", "file": "glTF/Prop_Locker.gltf", "socket": "furniture_locker", "tier": "heavy", "footprint": [1, 1], "scale": [0.7495, 0.7495, 0.7495], "offset": [0, 0, -0.014], "weight": 4},
+		{"id": "qe_locker_pair", "file": "glTF/Prop_Locker.gltf", "socket": "furniture_locker", "tier": "heavy", "footprint": [1, 1], "scale": [0.68, 0.75, 0.75], "offset": [-0.35, 0, -0.014], "parts": [{"file": "glTF/Prop_Locker.gltf", "scale": [0.68, 0.75, 0.75], "offset": [0.35, 0, -0.014]}], "weight": 2, "note": "Two narrower lockers side by side."},
+
+		{"id": "qe_desk_medium", "file": "glTF/Prop_Desk_Medium.gltf", "socket": "furniture_console", "tier": "light", "footprint": [2, 1], "scale": [1.0004, 1.0004, 1.0004], "offset": [0, 0, 0.014], "weight": 2},
+		{"id": "qe_desk_small", "file": "glTF/Prop_Desk_Small.gltf", "socket": "furniture_console", "tier": "light", "footprint": [2, 1], "scale": [1.0004, 1.0004, 1.0004], "offset": [0, 0, 0.014], "weight": 2},
+		{"id": "qe_desk_l", "file": "glTF/Prop_Desk_L.gltf", "socket": "furniture_console", "tier": "light", "footprint": [2, 2], "scale": [1.0004, 1.0004, 1.0004], "offset": [-0.311, 0, 0.311], "weight": 1},
+
+		{"id": "qe_workbench", "file": "glTF/Prop_Desk_Medium.gltf", "socket": "furniture_workbench", "tier": "light", "footprint": [2, 1], "scale": [1.0004, 1.0004, 1.0004], "offset": [0, 0, 0.014], "weight": 2},
+
+		{"id": "qe_chair", "file": "glTF/Prop_Chair.gltf", "socket": "furniture_chair", "tier": "dressing", "footprint": [1, 1], "scale": [0.7309, 0.7309, 0.7309], "offset": [0, 0.01, -0.053], "weight": 2, "rooms": ["bridge", "comms", "navigation", "security_station"]},
+
+		{"id": "qe_rack_thin", "file": "glTF/Prop_Shelves_ThinTall.gltf", "socket": "furniture_weapon_rack", "tier": "heavy", "footprint": [1, 1], "scale": [0.7491, 0.7491, 0.7491], "offset": [0, -0.001, 0], "parts": [{"file": "glTF/Gun_Rifle.gltf", "scale": [0.9, 0.9, 0.9], "offset": [0.2, 0.989, -0.085], "pitch": 90}, {"file": "glTF/Gun_Pistol.gltf", "scale": [1, 1, 1], "offset": [0, 1.484, -0.043], "pitch": 90}], "weight": 2},
+		{"id": "qe_rack_wide", "file": "glTF/Prop_Shelves_WideTall.gltf", "socket": "furniture_weapon_rack", "tier": "heavy", "footprint": [1, 1], "scale": [0.7083, 0.7083, 0.7083], "offset": [0, -0.001, 0], "parts": [{"file": "glTF/Prop_Ammo_Closed.gltf", "scale": [0.7, 0.7, 0.7], "offset": [-0.35, -0.006, 0]}, {"file": "glTF/Gun_Rifle.gltf", "scale": [0.9, 0.9, 0.9], "offset": [0.3, 0.989, -0.085], "pitch": 90}], "weight": 1},
+
+		{"id": "qe_crate_store_light", "file": "glTF/Prop_Crate.gltf", "socket": "furniture_crate", "tier": "light", "footprint": [1, 1], "scale": [0.6667, 0.6667, 0.6667], "offset": [0, -0.001, 0], "weight": 2},
+		{"id": "qe_crate_store_heavy", "file": "glTF/Prop_Crate.gltf", "socket": "furniture_crate", "tier": "heavy", "footprint": [1, 1], "scale": [0.9333, 0.9333, 0.9333], "offset": [0, -0.001, 0], "weight": 1},
+		{"id": "qe_tarp_store_light", "file": "glTF/Prop_Crate_Tarp.gltf", "socket": "furniture_crate", "tier": "light", "footprint": [1, 1], "scale": [0.6379, 0.6379, 0.6379], "offset": [0, 0.003, 0], "weight": 1},
+
+		{"id": "qe_cargo_long", "file": "glTF/Prop_Crate_Large.gltf", "socket": "furniture_cargo", "tier": "heavy", "footprint": [2, 1], "scale": [0.8367, 0.9667, 0.9333], "offset": [0, -0.001, 0], "weight": 2},
+		{"id": "qe_cargo_tarp_long", "file": "glTF/Prop_Crate_Tarp_Large.gltf", "socket": "furniture_cargo", "tier": "heavy", "footprint": [2, 1], "scale": [0.9007, 0.925, 0.8155], "offset": [0, 0.004, 0], "weight": 2},
+
+		{"id": "qe_fuel_barrel", "file": "glTF/Prop_Barrel1.gltf", "socket": "hazard_fuel_tank", "tier": "light", "footprint": [1, 1], "scale": [0.9, 0.9, 0.9], "offset": [0, 0, 0], "weight": 1},
+
+		{"id": "qe_gas_barrel", "file": "glTF/Prop_Barrel2_Closed.gltf", "socket": "hazard_gas", "tier": "light", "footprint": [1, 1], "scale": [1.0442, 1.0442, 1.0442], "offset": [-0.25, 0, -0.15], "parts": [{"file": "glTF/Prop_Barrel2_Closed.gltf", "scale": [0.8, 0.8, 0.8], "offset": [0.4, 0, 0.3]}], "weight": 1},
+
+		{"id": "qe_medkit_wall", "file": "glTF/Prop_HealthPack.gltf", "socket": "dressing_wall", "tier": "wall", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 1.357, 0.087], "rooms": ["medbay", "icu", "surgery", "security_station"]},
+
+		{"id": "qe_ammo_open", "file": "glTF/Prop_Ammo.gltf", "socket": "dressing_floor", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, -0.008, 0], "rooms": ["armory", "security_station", "brig"]},
+		{"id": "qe_ammo_closed", "file": "glTF/Prop_Ammo_Closed.gltf", "socket": "dressing_floor", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, -0.008, 0], "rooms": ["armory", "security_station", "cargo"]},
+
+		{"id": "qe_rifle", "file": "glTF/Gun_Rifle.gltf", "socket": "dressing_weapon", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "pitch": 90, "offset": [0.222, 0.043, -0.094], "rooms": ["armory"], "note": "Lies flat; for tables and racks."},
+		{"id": "qe_pistol", "file": "glTF/Gun_Pistol.gltf", "socket": "dressing_weapon", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "pitch": 90, "offset": [0.15, 0.034, -0.043], "rooms": ["armory", "security_station"], "note": "Lies flat; for tables and racks."},
+		{"id": "qe_weapon_holder", "file": "res://assets/room_tiles/quaternius_scifi/glTF/Props/Prop_ItemHolder.gltf", "socket": "dressing_weapon", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0.004, 0.054], "parts": [{"file": "glTF/Gun_Rifle.gltf", "scale": [1, 1, 1], "offset": [0.222, 0.479, -0.094], "pitch": 90}], "weight": 1, "rooms": ["armory", "security_station"], "note": "The MegaKit item holder with a rifle on it."}
+	]
+}
