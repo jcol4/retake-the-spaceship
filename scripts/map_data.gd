@@ -105,6 +105,16 @@ var corridors: Array[int] = []  # indices into `rooms` that are through-routes
 var room_of: Dictionary = {}  # Vector3i cell pos -> index into `rooms`
 var _touching: Dictionary = {}  # region -> {region: true}; see touching_regions
 
+## What each room is for (ROOM_THEMES_PLAN.md A.3), parallel to `rooms`: a
+## RoomTypes key. Corridors are RoomTypes.CORRIDOR (or SPINE), hangar bays
+## RoomTypes.HANGAR, and a room nothing has typed — every hand-authored room
+## without a `[rooms]` line, every room of an untyped generator — is GENERIC.
+## Kept the same length as `rooms` by `ensure_room_types`.
+var room_types: Array[StringName] = []
+## The state each room is found in (plan D.4), parallel to `rooms`: a
+## RoomTypes.Condition. INTACT unless something rolled or authored otherwise.
+var room_conditions: Array[int] = []
+
 ## Multi-tile furniture, e.g. a 3x1 table: `[Rect2i footprint, int cover_tier]`
 ## entries. The footprint's cells are Terrain.OBSTACLE (not walkable — see
 ## `is_walkable`); MapBuilder reads the whole rect here, not just per-cell
@@ -262,6 +272,8 @@ func add_hangar(pad_center: Vector3i, ramp_side: int, is_insertion: bool) -> Han
 	h.room_index = room_index_at(pad_center)
 	h.square = hangar_square_cells(pad_center, ramp_side)
 	if h.room_index >= 0:
+		ensure_room_types()
+		room_types[h.room_index] = RoomTypes.HANGAR
 		for pos: Vector3i in room_of:
 			if room_of[pos] == h.room_index and is_walkable(pos):
 				h.bay_cells.append(walkable_pos(pos))
@@ -501,11 +513,14 @@ func cover_edge_list() -> Array:
 ## way rather than special-casing doorways.
 func compute_rooms() -> void:
 	if not rooms.is_empty():
+		ensure_room_types()
 		return
 	rooms.clear()
 	room_links.clear()
 	corridors.clear()
 	room_of.clear()
+	room_types.clear()
+	room_conditions.clear()
 	var passage := _bulkhead_cells()
 	# Rooms first so their indices are the low ones, then corridors — matching
 	# MapGenerator's convention of putting structure before through-routes.
@@ -515,6 +530,54 @@ func compute_rooms() -> void:
 	for i in range(first_corridor, rooms.size()):
 		corridors.append(i)
 	_link_regions()
+	ensure_room_types()
+
+
+## Pads `room_types` and `room_conditions` out to `rooms.size()`: CORRIDOR for a
+## listed corridor, GENERIC otherwise, INTACT. Called by everything that builds
+## the room list, so a reader can index both arrays by any room index.
+func ensure_room_types() -> void:
+	for i in range(room_types.size(), rooms.size()):
+		room_types.append(RoomTypes.CORRIDOR if i in corridors else RoomTypes.GENERIC)
+	for i in range(room_conditions.size(), rooms.size()):
+		room_conditions.append(RoomTypes.Condition.INTACT)
+
+
+## Room `index`'s type, GENERIC for anything out of range.
+func room_type(index: int) -> StringName:
+	return room_types[index] if index >= 0 and index < room_types.size() else RoomTypes.GENERIC
+
+
+func room_condition(index: int) -> int:
+	return room_conditions[index] if index >= 0 and index < room_conditions.size() \
+		else RoomTypes.Condition.INTACT
+
+
+## The type of the room at grid position `grid_pos`, or "" outside every room.
+func room_type_at(grid_pos: Vector3i) -> StringName:
+	var index := room_index_at(grid_pos)
+	return room_type(index) if index >= 0 else &""
+
+
+func set_room_type(index: int, type: StringName, condition: int = RoomTypes.Condition.INTACT) -> void:
+	ensure_room_types()
+	room_types[index] = type
+	room_conditions[index] = condition
+
+
+## Every room index of `type`, in index order.
+func rooms_of_type(type: StringName) -> Array[int]:
+	var out: Array[int] = []
+	for i in room_types.size():
+		if room_types[i] == type:
+			out.append(i)
+	return out
+
+
+## The zone (RoomTypes.Zone) room `index` belongs to — NONE for corridors,
+## spines, hangars and generic rooms.
+func room_zone(index: int) -> int:
+	return RoomTypes.zone_of(room_type(index))
 
 
 ## Fraction of a row's or column's built cells that must be WALL for the line to

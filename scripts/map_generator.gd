@@ -170,6 +170,7 @@ func _run(map_seed: int) -> MapData:
 	for i in _rooms.size():
 		if _room_is_corridor[i]:
 			data.corridors.append(i)
+	data.ensure_room_types()
 	# After `room_of` is complete, because MapData derives each bay from it.
 	for i in _hangar_rooms.size():
 		data.add_hangar(_hangar_pads[i][0], _hangar_pads[i][1], i == _insertion)

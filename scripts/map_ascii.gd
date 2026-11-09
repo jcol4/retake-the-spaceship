@@ -83,6 +83,16 @@ extends RefCounted
 ## zero or more ItemPresets codes, space-separated (`10,1 scrap_electronics
 ## fusion_cell`). No glyph, because the contents are the point and a glyph cannot
 ## carry a list; the grid shows the crate's tile as the floor it stands on.
+##
+## `[rooms]` (ROOM_THEMES_PLAN.md A.4) says what a compartment is for: `x,z type
+## [condition]`, a RoomTypes key and optionally a RoomTypes.Condition name
+## (`intact` when left out). The line names ANY cell of the room rather than a
+## room index, because indices are re-derived by MapData.compute_rooms on every
+## load and a cell is the one thing that survives that. On the way out each room
+## is named by its top-left cell (lowest z, then lowest x), lines sorted the same
+## way, so a file that names rooms that way round-trips byte-identical. Rooms
+## left GENERIC and INTACT, corridors and hangar bays are not written: they are
+## what a deck without the section already means.
 
 const GLYPHS := {
 	" ": [MapData.Terrain.VOID, MapData.Fixture.NONE, MapData.Spawn.NONE, false],
@@ -125,6 +135,7 @@ const WORMS_SECTION := "[worms]"
 const HANGARS_SECTION := "[hangars]"
 const WRECKS_SECTION := "[wrecks]"
 const LOOT_SECTION := "[loot]"
+const ROOMS_SECTION := "[rooms]"
 ## The word that marks the insertion hangar on a `[hangars]` line.
 const INSERTION_WORD := "insertion"
 ## Ramp directions for `[hangars]`. All four sides, unlike SIDE_NAMES — see the
@@ -169,6 +180,8 @@ static func parse(rows: PackedStringArray, deck: int = 0) -> MapData:
 	data.compute_rooms()
 	# After the room graph, not before: a hangar's bay IS a compartment of it.
 	_parse_hangars(data, rows, deck)
+	# After the hangars, so a `[rooms]` line naming a bay is caught as one.
+	_parse_rooms(data, rows, deck)
 	_parse_loot(data, rows, deck)
 	_check_hangars(data)
 	return data
@@ -370,6 +383,76 @@ static func _parse_loot(data: MapData, rows: PackedStringArray, deck: int) -> vo
 		data.add_container(pos, items)
 
 
+## `[rooms]`: `x,z type [condition]` per line. A cell outside every room, an
+## unknown type, a hangar bay or a bad condition is an authoring mistake and says
+## so; the room keeps whatever it had.
+static func _parse_rooms(data: MapData, rows: PackedStringArray, deck: int) -> void:
+	var inside := false
+	for raw in rows:
+		var line: String = (raw as String).strip_edges()
+		if line.begins_with("["):
+			inside = line == ROOMS_SECTION
+			continue
+		if not inside or line.is_empty():
+			continue
+		var parts := line.split(" ", false)
+		var coords := parts[0].split(",") if parts.size() in [2, 3] else PackedStringArray()
+		if coords.size() != 2 or not coords[0].is_valid_int() or not coords[1].is_valid_int():
+			push_error("MapAscii: bad [rooms] line '%s' (want 'x,z type [condition]')" % line)
+			continue
+		var pos := Vector3i(int(coords[0]), deck, int(coords[1]))
+		var index := data.room_index_at(pos)
+		var type := StringName(parts[1])
+		var condition := RoomTypes.Condition.INTACT
+		if parts.size() == 3:
+			condition = RoomTypes.condition_from_name(parts[2])
+		if index < 0:
+			push_error("MapAscii: [rooms] line '%s' names a cell in no room" % line)
+		elif not RoomTypes.is_known(type) or type == RoomTypes.HANGAR:
+			push_error("MapAscii: [rooms] line '%s' names an unknown room type" % line)
+		elif data.room_type(index) == RoomTypes.HANGAR:
+			push_error("MapAscii: [rooms] line '%s' names a hangar bay ([hangars] owns it)" % line)
+		elif condition < 0:
+			push_error("MapAscii: [rooms] line '%s' names an unknown condition" % line)
+		else:
+			data.set_room_type(index, type, condition)
+
+
+## In top-left-cell order (lowest z, then lowest x), each room named by that
+## cell. Empty when every room is GENERIC/INTACT, a corridor or a bay, so a deck
+## that never had the section does not grow one on the way out.
+static func encode_rooms(data: MapData, deck: int = 0) -> PackedStringArray:
+	var rows := PackedStringArray()
+	var corner: Dictionary = {}  # room index -> its top-left cell
+	for pos: Vector3i in data.room_of:
+		if pos.y != deck:
+			continue
+		var i: int = data.room_of[pos]
+		var best: Variant = corner.get(i)
+		if best == null or pos.z < best.z or (pos.z == best.z and pos.x < best.x):
+			corner[i] = pos
+	var listed: Array = []
+	for i: int in corner:
+		var type := data.room_type(i)
+		var condition := data.room_condition(i)
+		var default_type := type in [RoomTypes.GENERIC, RoomTypes.CORRIDOR, RoomTypes.HANGAR]
+		if type == RoomTypes.HANGAR or (default_type and condition == RoomTypes.Condition.INTACT):
+			continue
+		listed.append(i)
+	listed.sort_custom(func(a: int, b: int) -> bool:
+		var pa: Vector3i = corner[a]
+		var pb: Vector3i = corner[b]
+		return pa.z < pb.z if pa.z != pb.z else pa.x < pb.x)
+	for i: int in listed:
+		if rows.is_empty():
+			rows.append("")
+			rows.append(ROOMS_SECTION)
+		var pos: Vector3i = corner[i]
+		rows.append("%d,%d %s %s" % [pos.x, pos.z, data.room_type(i),
+			RoomTypes.CONDITION_NAME[data.room_condition(i)]])
+	return rows
+
+
 static func encode(data: MapData, deck: int = 0) -> PackedStringArray:
 	# Grid block only. to_text is what round-trips a whole file.
 	var rows := PackedStringArray()
@@ -532,5 +615,6 @@ static func to_text(data: MapData, deck: int = 0) -> String:
 	rows.append_array(encode_wrecks(data, deck))
 	rows.append_array(encode_worms(data, deck))
 	rows.append_array(encode_hangars(data, deck))
+	rows.append_array(encode_rooms(data, deck))
 	rows.append_array(encode_loot(data, deck))
 	return "\n".join(rows)

@@ -78,6 +78,7 @@ func _initialize() -> void:
 	_check_spawn_glyphs()
 	_check(data.hangars.is_empty(), "the legacy test deck has no hangars")
 	_check_hangars()
+	_check_room_types(data)
 
 	print("")
 	if _failures == 0:
@@ -292,6 +293,77 @@ func _check_loot(data: MapData) -> void:
 	_check(bad.container_at(Vector3i(2, 0, 1)) != null \
 		and bad.container_at(Vector3i(2, 0, 1)).items == PackedStringArray(["crew_tags"]),
 		"an unknown item code is dropped, the crate kept")
+
+
+## ROOM_THEMES_PLAN.md A.3–A.5: every room has a type and a condition; `[rooms]`
+## names them by a cell, survives compute_rooms re-deriving the indices, and
+## round-trips byte-identical when written by top-left cell.
+func _check_room_types(test_deck: MapData) -> void:
+	# The shipped deck has no [rooms] section: every room GENERIC, every doorway a
+	# CORRIDOR, all INTACT — and (checked byte-identical above) none written out.
+	_check(test_deck.room_types.size() == test_deck.rooms.size()
+		and test_deck.room_conditions.size() == test_deck.rooms.size(),
+		"room_types and room_conditions are as long as rooms")
+	var typed_ok := true
+	for i in test_deck.rooms.size():
+		var want := RoomTypes.CORRIDOR if i in test_deck.corridors else RoomTypes.GENERIC
+		typed_ok = typed_ok and test_deck.room_type(i) == want \
+			and test_deck.room_condition(i) == RoomTypes.Condition.INTACT
+	_check(typed_ok, "an untyped deck reads GENERIC rooms and CORRIDOR doorways, all intact")
+
+	# Two compartments through one doorway, typed by their top-left cells.
+	var rows := PackedStringArray([
+		"#########",
+		"#...#...#",
+		"#...D...#",
+		"#...#...#",
+		"#########",
+		"",
+		"[rooms]",
+		"1,1 bunk_room ransacked",
+		"5,1 bathroom intact",
+	])
+	var data := MapAscii.parse(rows)
+	var left := data.room_index_at(Vector3i(2, 0, 2))
+	var right := data.room_index_at(Vector3i(6, 0, 2))
+	var door := data.room_index_at(Vector3i(4, 0, 2))
+	_check(data.room_type(left) == &"bunk_room" and data.room_condition(left) == RoomTypes.Condition.RANSACKED,
+		"the left room is a ransacked bunk room")
+	_check(data.room_type(right) == &"bathroom" and data.room_condition(right) == RoomTypes.Condition.INTACT,
+		"the right room is an intact bathroom block")
+	_check(data.room_type(door) == RoomTypes.CORRIDOR, "the doorway between them stays a corridor")
+	_check(data.room_type_at(Vector3i(3, 0, 3)) == &"bunk_room" and data.room_type_at(Vector3i(0, 0, 0)) == &"",
+		"room_type_at answers by grid cell, and nothing for a bulkhead")
+	_check(data.rooms_of_type(&"bathroom") == [right], "rooms_of_type finds the bathroom")
+	_check(data.room_zone(left) == RoomTypes.Zone.HABITATION and data.room_zone(door) == RoomTypes.Zone.NONE,
+		"zones follow the type")
+	_check(MapAscii.to_text(data).split("\n") == rows, "a typed deck round-trips byte-identical")
+
+	# Any cell names its room; on the way out it is named by its top-left cell.
+	var loose := MapAscii.parse(PackedStringArray(rows.slice(0, 6) + PackedStringArray(["[rooms]", "3,3 lab"])))
+	_check(loose.room_type(loose.room_index_at(Vector3i(1, 0, 1))) == &"lab", "a non-corner cell types its room")
+	_check(MapAscii.encode_rooms(loose) == PackedStringArray(["", "[rooms]", "1,1 lab intact"]),
+		"and encodes back by the top-left cell, condition written out")
+
+	# Rejected lines leave the room as it was.
+	var bad := MapAscii.parse(PackedStringArray(rows.slice(0, 6) + PackedStringArray(["[rooms]",
+		"0,0 lab", "1,1 not_a_room", "5,1 lab smouldering", "x,1 lab"])))
+	_check(bad.room_type(bad.room_index_at(Vector3i(1, 0, 1))) == RoomTypes.GENERIC
+		and bad.room_type(bad.room_index_at(Vector3i(5, 0, 1))) == RoomTypes.GENERIC,
+		"a wall cell, an unknown type, an unknown condition and a bad coordinate are all rejected")
+
+	# A generated deck types its bays and corridors and leaves the rest GENERIC.
+	var gen := MapGenerator.generate(7)
+	var gen_ok := gen.room_types.size() == gen.rooms.size()
+	for i in gen.rooms.size():
+		if i in gen.corridors:
+			gen_ok = gen_ok and gen.room_type(i) == RoomTypes.CORRIDOR
+	for h in gen.hangars:
+		gen_ok = gen_ok and gen.room_type(h.room_index) == RoomTypes.HANGAR
+	_check(gen_ok, "a generated deck types every corridor and hangar bay")
+	_check(RoomTypes.neighbour_weight(&"galley", &"mess") > 0.0
+		and RoomTypes.neighbour_weight(&"engine_room", &"bunk_room") < 0.0,
+		"neighbour weights pull galley to mess and push machinery from bunks, both ways round")
 
 
 func _check(ok: bool, label: String) -> void:
