@@ -28,6 +28,7 @@ extends SceneTree
 ## nothing about the roster.
 
 const SWARM := "res://scenes/swarm_unit.tscn"
+const ZOMBIE_2 := "res://scenes/zombie_2_unit.tscn"
 const BRAWLER := "res://scenes/brawler_unit.tscn"
 const WORM := "res://scenes/worm_unit.tscn"
 const PLAYER := "res://scenes/player_unit.tscn"
@@ -61,6 +62,8 @@ func _initialize() -> void:
 	await _check_damage_shrinks_the_mass()
 	await _check_absorption_leaves_no_corpses()
 	await _check_the_cap_spills()
+	await _check_synapse_moves_but_never_claws_more()
+	await _check_zombie_2_runs_with_the_pack()
 
 	print("")
 	if _failures == 0:
@@ -83,20 +86,20 @@ func _check_pool_covers_one_claw() -> void:
 
 
 ## MOVE-THEN-CLAW (2026-11-03): Fodder can cross a few tiles and still swing on
-## the same activation. The claw is SwarmUnit.CLAW_AP_COST (3) against a 6 AP
-## pool, so three tiles then a claw fits and four does not.
+## the same activation. The claw is SwarmUnit.CLAW_AP_COST (3) against an 8 AP
+## pool, so five tiles then a claw fits and six does not: a 5-tile threat range.
 func _check_can_close_and_swing() -> void:
 	var swarm = await _spawn(SWARM, ANCHOR, AlienPresets.swarm("Swarm"))
 	var pool: int = swarm.ap_pool()
 	var claw: int = swarm.action_cost(MELEE)
 	var tile: int = swarm.move_ap_per_tile()
 	_check(claw == 3, "a swarm's claw costs 3 AP (got %d)" % claw)
-	_check(3 * tile + claw <= pool,
-		"closing three tiles (%d AP) then clawing (%d AP) fits the pool (%d AP)"
-		% [3 * tile, claw, pool])
-	_check(4 * tile + claw > pool,
-		"while four tiles then a claw does not (%d + %d vs %d AP)"
-		% [4 * tile, claw, pool])
+	_check(5 * tile + claw <= pool,
+		"closing five tiles (%d AP) then clawing (%d AP) fits the pool (%d AP)"
+		% [5 * tile, claw, pool])
+	_check(6 * tile + claw > pool,
+		"while six tiles then a claw does not (%d + %d vs %d AP)"
+		% [6 * tile, claw, pool])
 	_free([swarm])
 
 
@@ -322,6 +325,75 @@ func _check_worm_feels_footsteps() -> void:
 ## MUST be assigned before `add_child`, since Unit._ready reads max_hp off it and
 ## substitutes a bare default when it finds none — which is what makes a scene
 ## instantiated without one useless to assert against.
+## SYNAPSE (SwarmUnit): a critical mass of awake swarm is agitated — free
+## tiles and a faster tempo — and gunfire close to it primes a bigger surge. The
+## free tiles are MOVE-ONLY: the AP pool, and so the number of claws in contact,
+## must not move. A lone body gets none of it.
+func _check_synapse_moves_but_never_claws_more() -> void:
+	var pack: Array = []
+	for i in 6:
+		var body = await _spawn(SWARM, ANCHOR + Vector3i(i % 3, 0, i / 3), AlienPresets.swarm("Swarm"))
+		body.rouse(ANCHOR + Vector3i(0, 0, 6))
+		pack.append(body)
+	var lead = pack[0]
+	var calm_speed: float = lead.move_speed
+	lead.begin_activation()
+	_check(lead.linked and lead.free_tiles == 1,
+		"six awake bodies together link: 1 free tile (got linked=%s, %d)" % [lead.linked, lead.free_tiles])
+	_check(lead.ap == lead.ap_pool(),
+		"and the link adds no AP (%d of %d)" % [lead.ap, lead.ap_pool()])
+	_check(lead.visual.tempo > 1.0 and lead.move_speed > calm_speed,
+		"a linked body plays fast and walks fast together (tempo %.2f, %.2f -> %.2f m/s)"
+		% [lead.visual.tempo, calm_speed, lead.move_speed])
+	_check(lead.move_cost_for(1) == 0 and lead.move_cost_for(2) == lead.move_ap_per_tile(),
+		"the free tile comes off the front of a walk")
+	lead.hear_noise(ANCHOR + Vector3i(3, 0, 0))
+	lead.begin_activation()
+	_check(lead.free_tiles == 2, "gunfire close by surges it: 2 free tiles (got %d)" % lead.free_tiles)
+	lead.begin_activation()
+	_check(lead.free_tiles == 1, "and the surge is one activation's worth (got %d)" % lead.free_tiles)
+	# Thin the pack below critical mass and the link breaks.
+	_free([pack.pop_back()])
+	await process_frame
+	lead.begin_activation()
+	_check(not lead.linked and lead.free_tiles == 0 and is_equal_approx(lead.move_speed, calm_speed),
+		"five is not a mass: no free tiles, calm again (got %d tiles, %.2f m/s)"
+		% [lead.free_tiles, lead.move_speed])
+	_free(pack)
+
+
+## CROWD GAIT (SwarmUnit.run_crowd): the civilian zombie walks alone, runs in a
+## pack of three, and runs faster at eight. Gait and speed must flip together.
+func _check_zombie_2_runs_with_the_pack() -> void:
+	var pack: Array = []
+	for i in 8:
+		var body = await _spawn(ZOMBIE_2, ANCHOR + Vector3i(i % 3, 0, i / 3), AlienPresets.swarm("Zombie"))
+		body.rouse(ANCHOR + Vector3i(0, 0, 6))
+		pack.append(body)
+	var lead = pack[0]
+	var walk_speed: float = lead._calm_move_speed
+	lead.begin_activation()
+	_check(not lead.walks_only and is_equal_approx(lead.move_speed, lead.run_speed * 1.3)
+		and is_equal_approx(lead.visual.tempo, 1.3),
+		"eight together run fast (walks_only=%s, %.2f m/s, tempo %.2f)"
+		% [lead.walks_only, lead.move_speed, lead.visual.tempo])
+	_free(pack.slice(3))
+	pack = pack.slice(0, 3)
+	await process_frame
+	lead.begin_activation()
+	_check(not lead.walks_only and is_equal_approx(lead.move_speed, lead.run_speed)
+		and is_equal_approx(lead.visual.tempo, 1.0),
+		"three together run at the clip's own pace (walks_only=%s, %.2f m/s, tempo %.2f)"
+		% [lead.walks_only, lead.move_speed, lead.visual.tempo])
+	_free(pack.slice(1))
+	pack = pack.slice(0, 1)
+	await process_frame
+	lead.begin_activation()
+	_check(lead.walks_only and is_equal_approx(lead.move_speed, walk_speed),
+		"one alone walks (walks_only=%s, %.2f m/s)" % [lead.walks_only, lead.move_speed])
+	_free(pack)
+
+
 func _spawn(scene_path: String, at: Vector3i, stats = null):
 	var unit = load(scene_path).instantiate()
 	if stats != null:

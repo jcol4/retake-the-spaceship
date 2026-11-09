@@ -254,6 +254,11 @@ func take_damage(amount: int) -> int:
 # --------------------------------------------------------------------- senses
 
 
+## The pile is the worm's answer to numbers; it does not also join the synapse.
+func joins_synapse() -> bool:
+	return false
+
+
 func take_turn() -> void:
 	if _dissolved:
 		return

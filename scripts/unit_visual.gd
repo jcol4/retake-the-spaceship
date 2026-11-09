@@ -164,9 +164,10 @@ const VARIANT_LOOP_TIME := {
 	&"worm": {WALK: 2.0},
 	# The second Fodder body (assets/civilian_cleaned.blend via
 	# tools/clean_zombie_2.py). Every clip is 14 frames keyed on the merc rig
-	# and plays at that rig's 12 fps. It is walks_only: the walk's planted foot
-	# slides ~1.04 m a cycle, so 14 / 12 s a cycle is its move_speed of 0.9 m/s
-	# (zombie_2_unit.tscn). Change the two together.
+	# and plays at that rig's 12 fps. The walk's planted foot slides ~1.04 m a
+	# cycle, so 14 / 12 s a cycle is its move_speed of 0.9 m/s
+	# (zombie_2_unit.tscn). Change the two together. Its run (in a pack,
+	# SwarmUnit.run_crowd) takes the default RUN cycle; run_speed is paired to it.
 	&"zombie_2": {WALK: 14 / 12.0, IDLE: 14 / 12.0, MELEE: 14 / 12.0,
 		HIT_REACT: 14 / 12.0, DOWNED: 14 / 12.0},
 	# The Mixamo zombie (tools/build_zombie_mixamo.py). Its run covers ~1.8 m a
@@ -260,6 +261,12 @@ const COVER_HIGH := &"high"
 ## the clip. One-shots always play from their first frame. A horde sets it per
 ## body so a room of the same model does not breathe and stride in lockstep.
 var loop_phase: float = 0.0
+
+## Playback rate over every clip's authored timing — 1.0 is as authored. An
+## agitated swarm (SwarmUnit's synapse) plays everything fast. Cosmetic, and
+## only half of it: a walker's `move_speed` has to scale with it or the feet
+## skate. Set through `set_tempo`, which mirrors.
+var tempo: float = 1.0
 
 ## Whether this character carries the rig-mounted light (Sec 5.2). Aliens do not.
 @export var has_light: bool = true
@@ -663,6 +670,7 @@ func _adopt_players(inst: Node, phase: float) -> void:
 			# setting this is idempotent rather than per-unit.
 			player.get_animation(name).loop_mode = Animation.LOOP_LINEAR \
 				if StringName(name) in LOOPING else Animation.LOOP_NONE
+		player.speed_scale = tempo
 		_players.append(player)
 		_phases.append(phase)
 
@@ -1207,8 +1215,16 @@ func _has_any(base: StringName) -> bool:
 
 
 ## Seconds `pose` occupies on screen — a full cycle for a looping stance, the
-## whole clip for a one-shot. The authored clip is time-scaled to this.
+## whole clip for a one-shot — at the current `tempo`. What every timer that
+## waits on a clip reads.
 func _duration(pose: StringName) -> float:
+	return _authored_duration(pose) / tempo
+
+
+## `_duration` at tempo 1. The authored clip is time-scaled to this; `tempo`
+## rides on top as the players' own speed_scale, so a change reaches a clip
+## already playing.
+func _authored_duration(pose: StringName) -> float:
 	var per_variant: Dictionary = VARIANT_LOOP_TIME.get(variant, {})
 	if per_variant.has(pose):
 		return per_variant[pose]
@@ -1301,6 +1317,11 @@ func _rpc_set_status_color(color: Color) -> void:
 	_set_status_color(color)
 
 
+@rpc("authority", "call_remote", "reliable")
+func _rpc_set_tempo(value: float) -> void:
+	_set_tempo(value)
+
+
 # --- Playback ----------------------------------------------------------------
 
 
@@ -1322,6 +1343,17 @@ func _set_cover_pose(family: StringName) -> void:
 func set_stance(stance: StringName) -> void:
 	_mirror(&"_rpc_set_stance", [stance])
 	_set_stance(stance)
+
+
+func set_tempo(value: float) -> void:
+	_mirror(&"_rpc_set_tempo", [value])
+	_set_tempo(value)
+
+
+func _set_tempo(value: float) -> void:
+	tempo = maxf(value, 0.01)
+	for player in _players:
+		player.speed_scale = tempo
 
 
 func _set_stance(stance: StringName) -> void:
@@ -1546,7 +1578,7 @@ func _play(base: StringName, restart: bool = false) -> void:
 		return
 	_pose_yaw_rad = deg_to_rad(_pose_yaw.get(pose, 0.0))
 	_apply_body()
-	var duration := _duration(pose)
+	var duration := _authored_duration(pose)
 	# A round's kick restarts from its first frame with no blend — blending into
 	# itself would smear the recoil into nothing.
 	var blend := 0.0 if pose == FIRE_SHOOT else BLEND_TIME
@@ -2163,7 +2195,7 @@ func _footstep_loop() -> void:
 	await get_tree().create_timer(FOOTSTEP_OFFSET).timeout
 	while _stance == RUN and is_inside_tree():
 		footstep.emit()
-		await get_tree().create_timer(FOOTSTEP_GAP).timeout
+		await get_tree().create_timer(FOOTSTEP_GAP / tempo).timeout
 	_stepping = false
 
 

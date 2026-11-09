@@ -12,12 +12,18 @@ height = 1.8
 ; the model differs.
 [node name="Zombie2Unit" type="Node3D" groups=["enemy_units", "units"]]
 script = ExtResource("1_script")
-; ONE gait, the walk (Unit.walks_only): a shambler, like the brawler.
+; Walks alone (Unit.walks_only), runs in a pack of 3+ (SwarmUnit.run_crowd),
+; which flips walks_only at runtime; the run speeds up at SwarmUnit.CROWD_SPRINT.
 walks_only = true
 ; 0.9 m/s, and NOT a free dial: the walk's planted foot slides ~1.04 m a cycle
 ; and UnitVisual.VARIANT_LOOP_TIME plays that cycle over 14 / 12 s. Change one
 ; and the other is owed the same edit, or the feet skate.
 move_speed = 0.9
+run_crowd = 3
+; The run covers ~1.4 m a cycle (its foot travel against the walk's, measured
+; on the clip) and plays at the default RUN cycle, 2 x FOOTSTEP_GAP = 0.667 s,
+; so its footstep sounds land: 2.1 m/s. Same pairing rule as the walk.
+run_speed = 2.1
 
 ; assets/models/zombie_2.glb, exported from assets/civilian_cleaned.blend.
 ; Lit like swarm_unit.tscn's Fodder for the same reason: a horde in the dark

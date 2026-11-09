@@ -72,9 +72,9 @@ static func ranged(display_name: String) -> UnitStats:
 ## mechanically: can_shoot() is false forever. Lowest initiative on the board, so
 ## a swarm generally acts after the squad has already had its say.
 ##
-## FITNESS 10 IS THE SHAMBLE: a 6 AP pool. The claw is priced flat by
-## SwarmUnit.CLAW_AP_COST (3 AP), so it can walk up to 3 tiles and still swing.
-## test_swarm_pace.gd checks that relationship.
+## FITNESS 30 IS THE SHAMBLE: an 8 AP pool. The claw is priced flat by
+## SwarmUnit.CLAW_AP_COST (3 AP), so its threat range is 5 tiles — it can walk
+## up to 5 and still swing. test_swarm_pace.gd checks that relationship.
 static func swarm(display_name: String) -> UnitStats:
 	var stats := UnitStats.new()
 	stats.display_name = display_name
@@ -83,18 +83,19 @@ static func swarm(display_name: String) -> UnitStats:
 	# the melee cost with a flat CLAW_AP_COST); it only feeds the other
 	# Reflexes-discounted actions, none of which a swarm takes.
 	stats.reflexes = 40
-	stats.fitness = 10
+	stats.fitness = 30
 	stats.luck = 15
 	# 6-8 HP: one or two rifle hits. In a horde the attrition is the COUNT, not
 	# the body — each kill has to feel like ground gained against five more. The
 	# one that takes work is the brute (below), one per horde. Was 15-20 while
-	# Fodder came singly.
-	stats.base_hp = randi_range(6, 8)
+	# Fodder came singly. Authored 2 under that range because Fitness 30 adds 2.4
+	# on top (UnitStats.HP_PER_FITNESS), and the pace bump is not meant to buy HP.
+	stats.base_hp = randi_range(4, 6)
 	# stats.weapon stays null — no ranged weapon at all (Sec 11.4); the
 	# weapon_base_accuracy/weapon_damage/mag_size getters all read 0 from that.
 	stats.melee_base_accuracy = 45
 	stats.melee_damage = 3
-	stats.base_initiative = 17  # -> ~23
+	stats.base_initiative = 17  # -> 27 (draws last regardless, SwarmUnit.draws_last)
 	stats.equipment_initiative = 2
 	return stats
 
@@ -132,7 +133,7 @@ static func hunter(display_name: String) -> UnitStats:
 
 ## The horde's anchor: one per group, the body that holds the line while the
 ## regulars wrap around. The swarm's block with HP and claw damage moved and
-## nothing else — the same 3 AP claw against the same 6 AP pool
+## nothing else — the same 3 AP claw against the same 8 AP pool
 ## (test_swarm_pace.gd checks it).
 ##
 ## 18-22 HP is three or four rifle hits, against a regular's one or two. Claw 5
@@ -140,7 +141,7 @@ static func hunter(display_name: String) -> UnitStats:
 ## first.
 static func brute(display_name: String) -> UnitStats:
 	var stats := swarm(display_name)
-	stats.base_hp = randi_range(18, 22)
+	stats.base_hp = randi_range(16, 20)  # -> 18-22 with the Fitness term
 	stats.melee_damage = 5
 	return stats
 
@@ -162,7 +163,7 @@ static func brute(display_name: String) -> UnitStats:
 ## brawler in contact is a problem to solve this turn rather than a tax to absorb.
 static func brawler(display_name: String) -> UnitStats:
 	var stats := swarm(display_name)
-	stats.base_hp = randi_range(28, 32)  # -> 29-33 HP
+	stats.base_hp = randi_range(26, 30)  # -> 28-32 HP with the Fitness term
 	stats.melee_damage = 6
 	return stats
 

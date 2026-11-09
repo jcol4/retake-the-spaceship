@@ -34,19 +34,46 @@ const BREACH_DAMAGE := 999
 var head_broken: bool = false
 
 
-## Replaces the ranged loop entirely, the same way SwarmUnit's does: advance and
-## swing. Reached only in COMBAT — awareness is CerberusUnit's business.
+## The swing's price, flat rather than read off Reflexes, the same way
+## SwarmUnit.CLAW_AP_COST is. Against a 12 AP pool: nine tiles and a strike.
+const SWING_AP_COST := 3
+
+
+func action_cost(action: UnitStats.Action) -> int:
+	if action == UnitStats.Action.MELEE:
+		return SWING_AP_COST
+	return super(action)
+
+
+## Replaces the ranged loop entirely: close and swing, with the wrist gun for a
+## quarry it cannot reach this activation. Reached only in COMBAT — awareness is
+## CerberusUnit's business.
 ##
-## Its pace is its AP pool now, not a private tiles-per-AP rate (rework doc Sec
-## 4.1/4.5): slow and heavy, but it does close — the threat is arrival.
+## Melee always wins when it is affordable: if the quarry is within reach of a
+## walk-and-swing, it walks. Otherwise it advances holding back a snap shot's
+## price and fires once it has closed as far as that allows, so a target out of
+## reach is still shot at rather than merely approached.
 func _combat_turn() -> void:
 	var melee_cost := action_cost(UnitStats.Action.MELEE)
+	var shoot_cost := action_cost(UnitStats.Action.SHOOT)
+	var reload_cost := action_cost(UnitStats.Action.RELOAD)
 	while ap > 0 and not is_downed:
 		var quarry := acquire_target()
 		if quarry == null:
 			return
 		if not GridManager.is_melee_adjacent(grid_pos, quarry.grid_pos):
-			await _move_toward(quarry, melee_cost)
+			var steps := GridManager.chebyshev_dist(grid_pos, quarry.grid_pos) - 1
+			var from := grid_pos
+			if steps * move_ap_per_tile() + melee_cost <= ap:
+				await _move_toward(quarry, melee_cost)
+			elif ap > shoot_cost:
+				await _move_toward(quarry, shoot_cost)
+			if grid_pos != from:
+				continue
+			# Could not (or need not) step any closer: use the gun.
+			if not await _fire_wrist_gun(quarry, shoot_cost, reload_cost):
+				ap = 0
+				return
 			continue
 		if ap < melee_cost:
 			ap = 0  # in contact but out of AP for the swing
@@ -59,6 +86,27 @@ func _combat_turn() -> void:
 		])
 		if quarry.is_downed:
 			action_logged.emit("%s is DOWN!" % quarry.stats.display_name)
+
+
+## One wrist-gun action at `quarry`: a shot if it has one, a reload if the drum
+## is dry. Returns false when neither is possible, which ends the activation.
+func _fire_wrist_gun(quarry: Unit, shoot_cost: int, reload_cost: int) -> bool:
+	if not can_shoot():
+		if ap < reload_cost or stats.weapon == null:
+			return false
+		spend_ap(reload_cost)
+		await do_reload()
+		action_logged.emit("%s reloads its wrist gun" % stats.display_name)
+		return true
+	var in_range := GridManager.chebyshev_dist(grid_pos, quarry.grid_pos) <= ATTACK_RANGE
+	if not in_range or not has_shot_at(quarry) or ap < shoot_cost:
+		return false
+	spend_ap(shoot_cost)
+	var result: Combat.ShotResult = await fire_at(quarry, Combat.ShotAction.SHOOT)
+	action_logged.emit("%s fires its wrist gun at %s (%d%% acc): %s" % [
+		stats.display_name, quarry.stats.display_name, result.accuracy, Combat.describe(result),
+	])
+	return true
 
 
 ## Takes a tier off whatever the target is hiding behind, on the way in. This is
