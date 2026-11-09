@@ -1,0 +1,34 @@
+{
+	"kit": "kaykit_restaurant",
+	"source": "KayKit Restaurant Bits 1.0 by Kay Lousberg, CC0 (LICENSE.txt). https://github.com/KayKit-Game-Assets/KayKit-Restaurant-Bits-1.0 . glTF and texture atlas as shipped. Placeholder galley and mess furniture.",
+	"notes": [
+		"Furniture convention (sockets furniture_*, hazard_*, dressing_*, decal_*, terminal_wall, power_switch, elevator_door): the wrapper origin is the centre of the piece's footprint on the floor, its long side runs along X and its front (the side a unit uses) faces +Z.",
+		"footprint is [x, z] in tiles. tier is light or heavy (the cover tiers of ROOM_THEMES_PLAN.md D.3), dressing (no cover of its own), clutter (under 0.35 m), wall (origin on the wall face at floor level, +Z into the room) or door (centred on the wall line like door_frame).",
+		"These sockets are not drawn yet: they wait for ROOM_THEMES_PLAN.md D.1 (obstacles get a kind) and D.6 (MapBuilder picks a piece per kind). tools/test_kit_coverage.gd holds every piece to its footprint and tier; tools/room_kit_gallery.gd renders them.",
+		"rooms lists the room types a dressing piece suits. tall marks a light piece that stands above light-cover height on purpose. Scale and offset were fitted to the footprint from each model's measured bounds."
+	],
+	"pieces": [
+		{"id": "kr_counter", "file": "gltf/kitchencounter_straight_A.gltf", "socket": "furniture_galley", "tier": "light", "footprint": [1, 1], "scale": [0.7, 0.95, 0.6856], "offset": [0, 0, -0.014], "weight": 3},
+		{"id": "kr_counter_sink", "file": "gltf/kitchencounter_sink.gltf", "socket": "furniture_galley", "tier": "light", "footprint": [1, 1], "scale": [0.7, 0.95, 0.6856], "offset": [0, 0, -0.014], "weight": 2, "tall": "the tap rises above the counter"},
+		{"id": "kr_counter_corner", "file": "gltf/kitchencounter_outercorner.gltf", "socket": "furniture_galley", "tier": "light", "footprint": [1, 1], "scale": [0.7, 0.95, 0.7], "offset": [0, 0, 0], "weight": 1},
+		{"id": "kr_stove", "file": "gltf/stove_multi.gltf", "socket": "furniture_galley", "tier": "light", "footprint": [1, 1], "scale": [0.7, 0.95, 0.6119], "offset": [0, 0, -0.07], "weight": 2},
+		{"id": "kr_oven", "file": "gltf/oven.gltf", "socket": "furniture_galley", "tier": "heavy", "footprint": [1, 1], "scale": [0.7, 0.9406, 0.5963], "offset": [0, 0, -0.086], "weight": 1},
+		{"id": "kr_fridge_a", "file": "gltf/fridge_A.gltf", "socket": "furniture_galley", "tier": "heavy", "footprint": [1, 1], "scale": [0.7, 0.8, 0.625], "offset": [0, 0, -0.075], "weight": 1},
+		{"id": "kr_fridge_b", "file": "gltf/fridge_B.gltf", "socket": "furniture_galley", "tier": "heavy", "footprint": [1, 1], "scale": [0.7, 0.8, 0.625], "offset": [0, 0, -0.075], "weight": 1},
+
+		{"id": "kr_extractor_hood", "file": "gltf/extractorhood.gltf", "socket": "furniture_galley_hood", "tier": "wall", "footprint": [1, 1], "scale": [0.7, 0.75, 0.7], "offset": [0, 0, 0], "note": "Hangs on the wall above a stove."},
+
+		{"id": "kr_mess_table_a", "file": "gltf/kitchentable_A_large.gltf", "socket": "furniture_mess_table", "tier": "light", "footprint": [2, 1], "scale": [0.7, 0.7, 0.7], "offset": [0, 0.003, 0], "weight": 2},
+		{"id": "kr_mess_table_b_long", "file": "gltf/kitchentable_B_large.gltf", "socket": "furniture_mess_table", "tier": "light", "footprint": [3, 1], "scale": [1.4667, 0.7472, 0.7], "offset": [0, 0.003, 0], "weight": 2, "note": "Stretched along X to the 1x3 rows of ROOM_THEMES_PLAN.md D.2."},
+		{"id": "kr_mess_table_round", "file": "gltf/table_round_A.gltf", "socket": "furniture_mess_table", "tier": "light", "footprint": [2, 2], "scale": [0.75, 0.75, 0.75], "offset": [0, 0, 0], "weight": 1},
+
+		{"id": "kr_chair_a", "file": "gltf/chair_A.gltf", "socket": "furniture_chair", "tier": "dressing", "footprint": [1, 1], "scale": [0.75, 0.75, 0.75], "offset": [0, 0, 0.017], "weight": 2},
+		{"id": "kr_chair_b", "file": "gltf/chair_B.gltf", "socket": "furniture_chair", "tier": "dressing", "footprint": [1, 1], "scale": [0.75, 0.75, 0.75], "offset": [0, 0, 0.017], "weight": 2},
+		{"id": "kr_stool", "file": "gltf/chair_stool.gltf", "socket": "furniture_chair", "tier": "dressing", "footprint": [1, 1], "scale": [0.75, 0.75, 0.75], "offset": [0, 0, 0], "weight": 1},
+
+		{"id": "kr_dishrack", "file": "gltf/dishrack_plates.gltf", "socket": "dressing_floor", "tier": "dressing", "footprint": [1, 1], "scale": [0.75, 0.75, 0.75], "offset": [0, 0, 0], "rooms": ["galley", "mess"]},
+
+		{"id": "kr_crate", "file": "gltf/crate.gltf", "socket": "furniture_crate", "tier": "light", "footprint": [1, 1], "scale": [0.7, 0.7, 0.7], "offset": [0, 0, 0], "weight": 1},
+		{"id": "kr_crate_potatoes", "file": "gltf/crate_potatoes.gltf", "socket": "furniture_crate", "tier": "light", "footprint": [1, 1], "scale": [0.7, 0.7, 0.7], "offset": [0, 0, 0], "weight": 1, "rooms": ["galley", "cold_store"]}
+	]
+}
