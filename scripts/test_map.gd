@@ -59,7 +59,9 @@ func build_deck(deck: Dictionary) -> bool:
 	built_deck = deck.duplicate()
 	match String(deck.get("kind", "")):
 		"generated":
-			build_generated(int(deck.get("seed", 0)), ContractOffer.config_for(int(deck.get("size", CampaignEconomy.DeckSize.MEDIUM))))
+			build_generated(int(deck.get("seed", 0)), ContractOffer.config_for(
+				int(deck.get("size", CampaignEconomy.DeckSize.MEDIUM)),
+				int(deck.get("primary", -1)), int(deck.get("secondary", -1))))
 			return true
 		"layout":
 			build_layout(String(deck.get("path", layout_path)))

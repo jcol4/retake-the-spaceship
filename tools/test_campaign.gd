@@ -496,16 +496,32 @@ func _check_contract_offers() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 2024
 	var o = _offer.generate(rng)
-	var data = load("res://scripts/map_generator.gd").generate(o.map_seed, _offer.config_for(o.size))
+	var data = load("res://scripts/map_generator.gd").generate(o.map_seed, _offer.config_for(o.size, o.primary, o.secondary))
 	var c1 = o.build_contract(data)
-	var data2 = load("res://scripts/map_generator.gd").generate(o.map_seed, _offer.config_for(o.size))
+	var data2 = load("res://scripts/map_generator.gd").generate(o.map_seed, _offer.config_for(o.size, o.primary, o.secondary))
 	var c2 = o.build_contract(data2)
 	_check(c1 != null and c1.type == o.type and c1.payout == o.payout, "an offer builds its own contract at its price")
 	_check(c2 != null and c1.target_tile == c2.target_tile and c1.item_code == c2.item_code,
 		"the same offer places the same objective (every peer agrees)")
 	var round_trip = _offer.from_dict(JSON.parse_string(JSON.stringify(o.to_dict())))
 	_check(round_trip.map_seed == o.map_seed and round_trip.contract_seed == o.contract_seed
-		and round_trip.payout == o.payout, "an offer survives JSON")
+		and round_trip.payout == o.payout and round_trip.primary == o.primary
+		and round_trip.secondary == o.secondary and round_trip.deck() == o.deck(), "an offer survives JSON with its profile")
+	_check(data.profile_name() == o.profile_name() and o.describe().contains(o.profile_name()),
+		"the contract board advertises the deployed profile")
+	var legacy = _offer.from_dict({"map_seed": 7})
+	_check(legacy.primary == -1 and legacy.secondary == -1, "old offers retain seed-rolled profiles")
+	var profiles_match := true
+	var supported := true
+	for _i in 32:
+		var offered = _offer.generate(rng)
+		var saved = _offer.from_dict(JSON.parse_string(JSON.stringify(offered.to_dict())))
+		var deployment: Dictionary = saved.deck()
+		var rebuilt = load("res://scripts/map_generator.gd").generate(int(deployment.seed),
+			_offer.config_for(int(deployment.size), int(deployment.primary), int(deployment.secondary)))
+		profiles_match = profiles_match and rebuilt.profile_name() == offered.profile_name()
+		supported = supported and saved.build_contract(rebuilt) != null
+	_check(profiles_match and supported, "32 saved offers deploy their advertised profile with a supported objective")
 
 
 func _file_stamp(path: String) -> String:

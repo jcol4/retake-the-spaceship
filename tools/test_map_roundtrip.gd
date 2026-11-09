@@ -357,7 +357,7 @@ func _check_room_types(test_deck: MapData) -> void:
 	var gen_ok := gen.room_types.size() == gen.rooms.size()
 	for i in gen.rooms.size():
 		if i in gen.corridors:
-			gen_ok = gen_ok and gen.room_type(i) == RoomTypes.CORRIDOR
+			gen_ok = gen_ok and gen.room_type(i) in [RoomTypes.CORRIDOR, RoomTypes.SPINE]
 	for h in gen.hangars:
 		gen_ok = gen_ok and gen.room_type(h.room_index) == RoomTypes.HANGAR
 	_check(gen_ok, "a generated deck types every corridor and hangar bay")

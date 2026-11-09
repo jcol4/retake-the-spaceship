@@ -18,11 +18,27 @@ extends RefCounted
 ## so a few hundred decks can be generated and checked per second.
 
 class Config:
-	# 72x48 since hangar bays grew to 3–4x the landing zone (GDD §7.2): at the old
-	# 60x40 a tenth of decks could not fit three of them. = the Medium contract
-	# (CampaignEconomy.DECK_DIMENSIONS).
-	var width := 72
-	var depth := 48
+	# 84x56: the Medium contract (CampaignEconomy.DECK_DIMENSIONS), one step up
+	# from 72x48 when rooms got types (ROOM_THEMES_PLAN.md B.2) — a themed deck
+	# lays its hangars along both flanks and two passageways the length of the
+	# hull before the first room goes in.
+	var width := 84
+	var depth := 56
+	# ROOM_THEMES_PLAN.md: typed rooms in zone bands off two spines (DeckLayout).
+	# False gives back the untyped generator below — scattered rooms, an MST of
+	# corridors — kept for comparison and for tests written against it.
+	var themed_rooms := true
+	# Deck profile (plan B.1). -1 rolls it from the seed (`DeckLayout.PRIMARY_ODDS`);
+	# a contract names it so the board can show it (plan F.6). RoomTypes.Zone values.
+	var profile_primary := -1
+	var profile_secondary := -1
+	# One band of each zone and no suite larger than two rooms: every Small deck
+	# (plan "Deck profiles").
+	var mixed_profile := false
+	# Every room size range is multiplied by this (rounded, never under 3). A
+	# Small deck's middle band is too shallow for the plan's full-size engine
+	# room, so its contracts shrink the rooms rather than the hangars.
+	var room_scale := 1.0
 	# Per-axis room size band, sampled independently per room — a wide band is
 	# what gives the Dead-Space mix of tiny closets and big chambers, rather
 	# than one room "type" uniformly scaled.
@@ -56,11 +72,10 @@ class Config:
 	var hangar_count_min := 3
 	var hangar_count_max := 4
 	# Deck areas (width x depth) between which the chance of the extra hangar
-	# rises from 0 to 1. Small (60x40, 2400) gets three; the default/Medium 72x48
-	# (3456) sits ~40% of the way up, so most get three and a good share four;
-	# Large (84x56, 4704) nearly always four.
-	var hangar_area_small := 2400
-	var hangar_area_large := 5000
+	# rises from 0 to 1. Small (72x48, 3456) gets three; the default/Medium 84x56
+	# (4704) sits about halfway, so three or four; Large (96x64, 6144) always four.
+	var hangar_area_small := 3456
+	var hangar_area_large := 6144
 	# Per-axis hangar size band, and on top of it the AREA rule (GDD §7.2): a bay
 	# is 3–4x its landing zone (MapData.HANGAR_BAY_AREA_MIN/MAX of
 	# `hangar_landing_zone_area` — the 5x5 ship space plus the 3x3 square, with a
@@ -110,6 +125,12 @@ var _cfg: Config
 var _rng := RandomNumberGenerator.new()
 var _rooms: Array[Rect2i] = []
 var _room_is_corridor: Array[bool] = []  # parallel to _rooms
+## Parallel to _rooms: each one's RoomTypes key. The untyped path fills it with
+## GENERIC, CORRIDOR and HANGAR; DeckLayout names every room.
+var _room_types: Array[StringName] = []
+## Set by DeckLayout when a band could not fit a room its zone requires (plan
+## C.7): `generate` rerolls, like an unreachable hangar.
+var _layout_failed := false
 var _links: Array = []  # [a, b] index pairs into _rooms, for stats only
 ## Indices into `_rooms` of the hangar bays, in placement order. Hangars are
 ## reserved first (see `_place_hangars`), so these are always the lowest indices.
@@ -147,9 +168,9 @@ static func generate(map_seed: int, cfg: Config = null) -> MapData:
 		# promise, so that is a reroll like an unreachable one.
 		var enough := data.hangars.size() >= config.hangar_count_min \
 			or config.hangar_count_max <= 0
-		if enough and gen._hangars_reachable(data):
+		if enough and not gen._layout_failed and gen._hangars_reachable(data):
 			return data
-	push_warning("MapGenerator: seed %d still has too few or unreachable hangars after %d rerolls" % [
+	push_warning("MapGenerator: seed %d still has too few or unreachable hangars, or a missing room, after %d rerolls" % [
 		map_seed, config.max_rerolls])
 	return data
 
@@ -160,17 +181,30 @@ func _run(map_seed: int) -> MapData:
 	_fill_hull(data)
 	_rooms.clear()
 	_room_is_corridor.clear()
-	_place_hangars()
-	_place_rooms()
-	for i in _rooms.size():
-		_carve(data, _rooms[i], i)
-	_route_corridors(data)
+	_room_types.clear()
+	if _cfg.themed_rooms:
+		# Hangars on the flanks, two spines, typed rooms in zone bands, doors
+		# (ROOM_THEMES_PLAN.md B and C). Carves as it goes.
+		DeckLayout.new(self, data).build()
+	else:
+		_place_hangars()
+		_place_rooms()
+		for i in _rooms.size():
+			_carve(data, _rooms[i], i)
+		_route_corridors(data)
+		for i in _rooms.size():
+			_room_types.append(RoomTypes.CORRIDOR if _room_is_corridor[i]
+				else (RoomTypes.HANGAR if _hangar_rooms.has(i) else RoomTypes.GENERIC))
 	data.rooms = _rooms.duplicate()
 	data.room_links = _links.duplicate()
 	for i in _rooms.size():
 		if _room_is_corridor[i]:
 			data.corridors.append(i)
+	data.room_types = _room_types.duplicate()
 	data.ensure_room_types()
+	# A rejected layout is never played: avoid dressing it before the reroll.
+	if _layout_failed:
+		return data
 	# After `room_of` is complete, because MapData derives each bay from it.
 	for i in _hangar_rooms.size():
 		data.add_hangar(_hangar_pads[i][0], _hangar_pads[i][1], i == _insertion)
@@ -275,6 +309,22 @@ func _distance_to_nearest_room(rect: Rect2i) -> float:
 	for room in _rooms:
 		best = minf(best, centre.distance_to(Vector2(room.get_center())))
 	return best
+
+
+## [pad centre, side] for a hangar whose ramp must face `side` — a themed deck's
+## flank bays face inward, whatever their offset from the middle. The pad sits
+## one tile off the back wall, centred across the bay, as in `_pad_for`.
+func _pad_facing(rect: Rect2i, side: int) -> Array:
+	var cross_x := rect.position.x + rect.size.x / 2
+	var cross_z := rect.position.y + rect.size.y / 2
+	var back_gap := 1 + MapData.HANGAR_PAD_RADIUS
+	var pad: Vector3i
+	match side:
+		MapData.Side.EAST: pad = Vector3i(rect.position.x + back_gap, 0, cross_z)
+		MapData.Side.WEST: pad = Vector3i(rect.position.x + rect.size.x - 1 - back_gap, 0, cross_z)
+		MapData.Side.SOUTH: pad = Vector3i(cross_x, 0, rect.position.y + back_gap)
+		_: pad = Vector3i(cross_x, 0, rect.position.y + rect.size.y - 1 - back_gap)
+	return [pad, side]
 
 
 ## Where the pad goes in a hangar rect, and which way its ramp faces: [pad
@@ -598,17 +648,7 @@ func _place_spawns(data: MapData) -> void:
 	if insertion != null:
 		player_room = insertion.room_index
 		cells = insertion.square.duplicate()
-		# Enemy-free: the insertion bay, and every room one corridor away from it.
-		# The plan asks for the bay and "its corridor neighbours"; corridors never
-		# get a spawn anyway, so the neighbours that matter are the rooms at the
-		# far end of them — otherwise a squad steps off the ramp straight into the
-		# next room's line of fire.
-		safe_rooms[player_room] = true
-		for link: Array in _links:
-			if link[0] == player_room:
-				safe_rooms[link[1]] = true
-			elif link[1] == player_room:
-				safe_rooms[link[0]] = true
+		safe_rooms = _rooms_near_insertion(data, insertion)
 	else:
 		safe_rooms[player_room] = true
 	_shuffle(cells)
@@ -639,12 +679,7 @@ func _place_mercs(data: MapData) -> void:
 	var insertion := data.insertion_hangar()
 	var unsafe := {}
 	if insertion != null:
-		unsafe[insertion.room_index] = true
-		for link: Array in _links:
-			if link[0] == insertion.room_index:
-				unsafe[link[1]] = true
-			elif link[1] == insertion.room_index:
-				unsafe[link[0]] = true
+		unsafe = _rooms_near_insertion(data, insertion)
 	var rooms: Array = []
 	var room_spots: Dictionary = {}
 	for i in _rooms.size():
@@ -671,6 +706,51 @@ func _place_mercs(data: MapData) -> void:
 	_shuffle(spots)
 	for n in mini(_cfg.merc_squad_size, spots.size()):
 		data.get_cell(spots[n]).spawn = MapData.Spawn.MERC
+
+
+## Tiles walked from the insertion square within which a themed deck keeps rooms
+## enemy-free: about one room's depth off the spine either side of the bay door.
+const SAFE_WALK := 14
+
+
+## The insertion bay and the rooms around it that start enemy-free (and hold no
+## merc crew), as {room index: true}. The plan asks for the bay and "its
+## corridor neighbours", so a squad does not step off the ramp straight into the
+## next room's line of fire.
+##
+## On the untyped deck that is the rooms one corridor link away. A themed deck
+## joins every room to a spine that runs the length of the hull, so "one
+## corridor away" would be the whole deck: there it is every room with a tile
+## within SAFE_WALK steps of the square.
+func _rooms_near_insertion(data: MapData, insertion: MapData.Hangar) -> Dictionary:
+	var safe := {insertion.room_index: true}
+	if not _cfg.themed_rooms:
+		for link: Array in _links:
+			if link[0] == insertion.room_index:
+				safe[link[1]] = true
+			elif link[1] == insertion.room_index:
+				safe[link[0]] = true
+		return safe
+	var dist := {}
+	var frontier: Array[Vector3i] = []
+	for pos in insertion.square:
+		dist[pos] = 0
+		frontier.append(pos)
+	var head := 0
+	while head < frontier.size():
+		var cur: Vector3i = frontier[head]
+		head += 1
+		var room := data.room_index_at(cur)
+		if room >= 0 and not _room_is_corridor[room]:
+			safe[room] = true
+		if dist[cur] >= SAFE_WALK:
+			continue
+		for step: Vector3i in MapData.SIDE_STEP:
+			var n := cur + step
+			if not dist.has(n) and data.is_walkable(n):
+				dist[n] = dist[cur] + 1
+				frontier.append(n)
+	return safe
 
 
 ## Every cell actually carved as part of `room_index` — not just every cell

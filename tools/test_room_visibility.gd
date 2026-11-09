@@ -92,6 +92,13 @@ func _check_gating() -> void:
 func _check_generated_corridors() -> void:
 	var gen = load("res://scripts/map_generator.gd")
 	var cfg = load("res://scripts/campaign/contract_offer.gd").config_for(0)
+	# This reproduces an MST corridor crossing from before themed layouts.
+	# Preserve its dimensions and hangar odds as well as its placement path.
+	cfg.themed_rooms = false
+	cfg.width = 60
+	cfg.depth = 40
+	cfg.hangar_area_small = 2400
+	cfg.hangar_area_large = 5000
 	var data = gen.generate(1873861863, cfg)
 	var every_corridor_touches_a_room := true
 	# A corridor carved entirely over earlier ones owns no tile at all; it has no

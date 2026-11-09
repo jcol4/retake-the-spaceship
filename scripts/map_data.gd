@@ -115,6 +115,44 @@ var room_types: Array[StringName] = []
 ## RoomTypes.Condition. INTACT unless something rolled or authored otherwise.
 var room_conditions: Array[int] = []
 
+## A themed deck's profile (plan B.1): its primary and secondary zone
+## (RoomTypes.Zone, -1 for none), or `deck_mixed` for one band of each. All -1 /
+## false on a hand-authored or untyped deck.
+var deck_primary: int = -1
+var deck_secondary: int = -1
+var deck_mixed := false
+## The zone bands bow to stern (plan B.3): [zone, first x, last x + 1] each, in
+## order. Empty on a deck without them. What a spine tile's zone is, since a
+## passageway belongs to no room of its own.
+var zone_bands: Array = []
+## Themed decks mark every entrance explicitly. Legacy authored decks still
+## infer doorways from bulkhead lines where openings were painted as floor.
+var explicit_doorways := false
+
+
+## The zone at grid position `grid_pos`: its room's, or for a corridor or spine
+## on a banded deck, the band's it runs through. NONE outside both.
+func zone_at(grid_pos: Vector3i) -> int:
+	var zone := room_zone(room_index_at(grid_pos))
+	if zone != RoomTypes.Zone.NONE and zone != RoomTypes.Zone.UTILITY:
+		return zone
+	for band: Array in zone_bands:
+		if grid_pos.x >= band[1] and grid_pos.x < band[2]:
+			return band[0]
+	return zone
+
+
+## "Habitation deck (Medical wing)" — the contract board's line (plan F.6).
+func profile_name() -> String:
+	if deck_mixed:
+		return "Mixed deck"
+	if deck_primary < 0:
+		return ""
+	var out := "%s deck" % RoomTypes.ZONE_NAME[deck_primary]
+	if deck_secondary >= 0:
+		out += " (%s wing)" % RoomTypes.ZONE_NAME[deck_secondary]
+	return out
+
 ## Multi-tile furniture, e.g. a 3x1 table: `[Rect2i footprint, int cover_tier]`
 ## entries. The footprint's cells are Terrain.OBSTACLE (not walkable — see
 ## `is_walkable`); MapBuilder reads the whole rect here, not just per-cell
@@ -521,10 +559,16 @@ func compute_rooms() -> void:
 	room_of.clear()
 	room_types.clear()
 	room_conditions.clear()
-	var passage := _bulkhead_cells()
+	var passage := {} if explicit_doorways else _bulkhead_cells()
+	# Explicit door terrain also separates suite members whose shared wall
+	# does not extend across enough of the deck to qualify as a bulkhead.
+	for pos: Vector3i in cells:
+		if terrain_at(pos) == Terrain.DOOR:
+			passage[pos] = true
 	# Rooms first so their indices are the low ones, then corridors — matching
 	# MapGenerator's convention of putting structure before through-routes.
-	_flood_regions(func(pos: Vector3i) -> bool: return is_walkable(pos) and not passage.has(pos))
+	_flood_regions(func(pos: Vector3i) -> bool:
+		return (is_walkable(pos) or (explicit_doorways and terrain_at(pos) == Terrain.OBSTACLE)) and not passage.has(pos))
 	var first_corridor := rooms.size()
 	_flood_regions(func(pos: Vector3i) -> bool: return passage.has(pos))
 	for i in range(first_corridor, rooms.size()):

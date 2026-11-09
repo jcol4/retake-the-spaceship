@@ -16,6 +16,9 @@ extends RefCounted
 ##     9,6 S heavy
 ##
 ## Grid legend (one glyph per tile):
+## `[topology]` followed by `doors` opts into explicit door boundaries, used
+## by themed decks. All entrances must be D; unrelated hull-wide wall lines
+## no longer split interiors. Without it, legacy bulkhead inference applies.
 ##   ' ' void      '.' floor     '#' wall      'R' raised platform
 ##   'D' door — a walkable gap in a wall line, distinct from '.' only so
 ##       corridor-vs-room bookkeeping (MapData.room_of) can tell them apart;
@@ -174,6 +177,10 @@ static func parse(rows: PackedStringArray, deck: int = 0) -> MapData:
 	_parse_obstacles(data, rows, deck)
 	_parse_wrecks(data, rows, deck)
 	_parse_worms(data, rows, deck)
+	# Explicit topology avoids slicing room interiors along unrelated hull-wide
+	# bulkhead lines. Absent on older maps, preserving their inferred regions.
+	var topology := rows.find("[topology]")
+	data.explicit_doorways = topology >= 0 and topology + 1 < rows.size() and rows[topology + 1] == "doors"
 	data.resolve_stairs()
 	# Derived here rather than by the caller so every route into a MapData —
 	# file, string, or test fixture — arrives with the same graph populated.
@@ -416,6 +423,8 @@ static func _parse_rooms(data: MapData, rows: PackedStringArray, deck: int) -> v
 			push_error("MapAscii: [rooms] line '%s' names an unknown condition" % line)
 		else:
 			data.set_room_type(index, type, condition)
+			if type in [RoomTypes.SPINE, RoomTypes.CORRIDOR] and index not in data.corridors:
+				data.corridors.append(index)
 
 
 ## In top-left-cell order (lowest z, then lowest x), each room named by that
@@ -610,6 +619,8 @@ static func read_rows(path: String) -> PackedStringArray:
 
 static func to_text(data: MapData, deck: int = 0) -> String:
 	var rows := encode(data, deck)
+	if data.explicit_doorways:
+		rows.append_array(PackedStringArray(["", "[topology]", "doors"]))
 	rows.append_array(encode_cover(data, deck))
 	rows.append_array(encode_obstacles(data, deck))
 	rows.append_array(encode_wrecks(data, deck))

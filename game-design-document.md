@@ -627,6 +627,8 @@ below is **[design]** unless marked.*
 - **3–4 hangars per deck**, scaled by deck size. A hangar is a set-piece room in the generator
   (§10.4): an open bay, a landing pad, and a fixed **3×3 extraction square** in front of where the
   ramp comes down. **[built]**
+  - Generated bays sit on the port and starboard hull flanks, with ramps opening
+    inward onto two main passageways running bow to stern. **[built]**
   - **On the larger decks (§7.7): 4–6 hangars. [design]** That is more than today, but far below
     today's density. A hangar stays a real destination, but the nearest undiscovered one is never
     absurdly far away.
@@ -790,8 +792,10 @@ pistol-only and the VIP can die in the carrier's arms). **[built]**
 ### 7.7 Mission Length
 
 The target is **20–40 minutes**. Deck size, hangar count and objective placement are the levers.
-Deck sizes **[built]**: Small 60×40, Medium 72×48 (the generator default), Large 84×56. Each is one
-step up from before, to fit the bigger hangar bays (§7.2).
+Deck sizes **[built]**: Small 72×48, Medium 84×56 (the generator default), Large 96×64.
+They grew to fit the larger hangar bays (§7.2), then again for themed room suites and two spines.
+Small decks use a Mixed profile with rooms at 72% scale. Mission timing and payouts need
+another playtest at these dimensions.
 
 **Much bigger decks [design].** Exploration mode (§4.7) makes distance cheap, so decks grow
 **3× or more per side** (about 9× the area). For example: Medium around 216×144, with Small and
@@ -875,20 +879,33 @@ and the HUD stay on the root camera.
 - Per-tile data: passability, cover, occupant, light value, door reference.
 - Owned by the `GridManager` autoload, which does BFS range queries and LOS.
 
-### 10.4 Deck Generation **[built: generic decks]**
+### 10.4 Deck Generation **[built: themed layouts]**
 
-- `MapGenerator` uses **room-first placement**: independently sized rooms (3–16 tiles per axis) by
-  rejection sampling, then corridors (≥2 wide) carved along a spanning tree plus ~20% extra links
-  for loops, then a block-cover pass.
-- Deterministic in its seed; hundreds of decks per second for headless testing.
+- Contracts roll a primary profile (Habitation 35%, Medical 25%, Engineering 25%,
+  Command 15%) and a compatible secondary wing. Small decks mix all four zones.
+  The profile is displayed on the contract board, saved with the offer and sent to every peer.
+- Zone bands run bow to stern with width jitter and occasional neighbouring swaps.
+  Two passageways, two tiles wide, run the length of the deck; cross-corridors connect
+  them at every band boundary. Small decks keep the spines straight for room clearance.
+- Anchor rooms are placed first, followed by suites sharing internal doors, satellite
+  rooms and utility filler. Habitation has two berthing suites on Medium, three on
+  Large, or one as a secondary wing. Small suites have at most two members.
+- Rooms open directly onto a spine; extra links join compatible neighbours. Fuel
+  storage opens only onto engineering or a main passage. Room caps and one-door or
+  through-room rules are enforced. Missing required rooms trigger a deterministic reroll.
+- `Config.themed_rooms = false` retains the old room sampler and MST corridor router.
+- Layout, cover and encounter generation are deterministic in the seed, including rerolls.
+- Room types and conditions are stored in ASCII `[rooms]`; themed exports mark explicit
+  door topology so loading does not merge suites or split their interiors on unrelated walls.
+- **Next phases [design]:** arranged furniture, conditions and lighting; zone power,
+  locked doors and terminals; faction home rooms, themed loot, services and objectives.
 - Hand-authored decks are ASCII (`maps/*.txt`, `MapAscii`).
 - **Rooms → compartments → room graph** (`MapData.compute_rooms`) drives occlusion, alert scoping
   and robot zones.
-- **[design] for extraction:**
-  - hangars as set-piece rooms (3–4, spread apart, one tagged as insertion),
-  - objective rooms,
-  - loot placement, and
-  - a connectivity check guaranteeing every hangar is reachable.
+- **[built] for extraction:** hangar set pieces (3–4, spread apart, one insertion),
+  objective and loot placement, and a connectivity check guaranteeing every hangar
+  is reachable. Objective placement and loot still use generic room rules until
+  the themed gameplay phase.
 - **Bigger decks [design] (§7.7):** 3× or more per side, about 30,000 tiles for a Medium deck. Several
   things that are fine today won't scale and need performance work before decks grow:
   - flashlight lighting rescans every tile on every step;

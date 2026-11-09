@@ -143,15 +143,20 @@ const MEDICAL_PER_INJURY := 1
 enum DeckSize { SMALL, MEDIUM, LARGE }
 const DECK_SIZE_NAME := {DeckSize.SMALL: "Small", DeckSize.MEDIUM: "Medium", DeckSize.LARGE: "Large"}
 ## Width x depth handed to MapGenerator.Config. Medium IS the generator's default
-## deck (72x48), so a `--seed=` dev run and a Medium contract are the same size.
-## One step up from before across the board: a hangar bay is now 3–4x the ship's
-## landing zone (GDD §7.2, 210–280 tiles), and three or four of those have to fit
-## with rooms between them. Small: 3 hangars; Large: 4 nearly always.
+## deck (84x56), so a `--seed=` dev run and a Medium contract are the same size.
+## A step up twice now: once when a hangar bay grew to 3–4x the ship's landing
+## zone (GDD §7.2), and again for themed rooms (ROOM_THEMES_PLAN.md B.2), whose
+## decks lay hangars along both flanks and two spines down the hull before the
+## first room. Small: 3 hangars and a Mixed profile; Large: 4.
 const DECK_DIMENSIONS := {
-	DeckSize.SMALL: Vector2i(60, 40),
-	DeckSize.MEDIUM: Vector2i(72, 48),
-	DeckSize.LARGE: Vector2i(84, 56),
+	DeckSize.SMALL: Vector2i(72, 48),
+	DeckSize.MEDIUM: Vector2i(84, 56),
+	DeckSize.LARGE: Vector2i(96, 64),
 }
+## Room sizes per deck size, as MapGenerator.Config.room_scale: a Small deck's
+## middle band is too shallow for full-size rooms (its engine room would not fit),
+## so its rooms shrink rather than its hangars.
+const DECK_ROOM_SCALE := {DeckSize.SMALL: 0.72, DeckSize.MEDIUM: 1.0, DeckSize.LARGE: 1.0}
 ## How often each size is offered (weights, Small -> Large).
 const DECK_SIZE_WEIGHTS: Array[int] = [30, 45, 25]
 ## A Medium contract's payout per type — the Phase 3 placeholders, kept. Destroy

@@ -31,6 +31,9 @@ var payout: int = 0
 ## For the board only: what the generated deck turned out to have.
 var hangar_count: int = 0
 var room_count: int = 0
+## -1 preserves seed-rolled profiles for offers saved before themed rooms.
+var primary: int = -1
+var secondary: int = -1
 
 
 ## A fresh offer off the campaign's RNG. Seeds are 31-bit so they survive JSON
@@ -39,9 +42,18 @@ static func generate(rng: RandomNumberGenerator) -> ContractOffer:
 	var o := ContractOffer.new()
 	o.type = OFFERED_TYPES[rng.randi_range(0, OFFERED_TYPES.size() - 1)]
 	o.size = _weighted(CampaignEconomy.DECK_SIZE_WEIGHTS, rng)
+	if o.size != CampaignEconomy.DeckSize.SMALL:
+		var roll := rng.randi_range(0, 99)
+		for zone: int in DeckLayout.PRIMARY_ODDS:
+			roll -= DeckLayout.PRIMARY_ODDS[zone]
+			if roll < 0:
+				o.primary = zone
+				break
+		var options: Array = DeckLayout.SECONDARY_OPTIONS[o.primary]
+		o.secondary = options[rng.randi_range(0, options.size() - 1)]
 	for _attempt in SEED_ATTEMPTS:
 		o.map_seed = rng.randi() & 0x7fffffff
-		var data := MapGenerator.generate(o.map_seed, config_for(o.size))
+		var data := MapGenerator.generate(o.map_seed, config_for(o.size, o.primary, o.secondary))
 		var types := Contract.supported_types(data)
 		if types.is_empty():
 			continue
@@ -55,12 +67,17 @@ static func generate(rng: RandomNumberGenerator) -> ContractOffer:
 	return o
 
 
-static func config_for(p_size: int) -> MapGenerator.Config:
+static func config_for(p_size: int, p_primary: int = -1, p_secondary: int = -1) -> MapGenerator.Config:
 	var cfg := MapGenerator.Config.new()
 	var dims: Vector2i = CampaignEconomy.DECK_DIMENSIONS.get(p_size, CampaignEconomy.DECK_DIMENSIONS[CampaignEconomy.DeckSize.MEDIUM])
 	cfg.width = dims.x
 	cfg.depth = dims.y
 	cfg.player_spawn_count = CampaignEconomy.MAX_SQUAD
+	# Small decks always roll Mixed (plan "Deck profiles"), with smaller rooms.
+	cfg.mixed_profile = p_size == CampaignEconomy.DeckSize.SMALL
+	cfg.room_scale = CampaignEconomy.DECK_ROOM_SCALE.get(p_size, 1.0)
+	cfg.profile_primary = p_primary
+	cfg.profile_secondary = p_secondary
 	return cfg
 
 
@@ -92,20 +109,30 @@ func size_name() -> String:
 ## The board line: type, deck size, payout.
 func describe() -> String:
 	var dims: Vector2i = CampaignEconomy.DECK_DIMENSIONS.get(size, Vector2i.ZERO)
-	return "%s — %s deck (%dx%d, %d hangars, %d rooms) — pays %d cr" % [
-		type_name(), size_name(), dims.x, dims.y, hangar_count, room_count, payout]
+	return "%s — %s %s (%dx%d, %d hangars, %d rooms) — pays %d cr" % [
+		type_name(), size_name(), profile_name(), dims.x, dims.y, hangar_count, room_count, payout]
+
+
+func profile_name() -> String:
+	var data := MapData.new()
+	data.deck_primary = primary
+	data.deck_secondary = secondary
+	data.deck_mixed = size == CampaignEconomy.DeckSize.SMALL
+	var label := data.profile_name()
+	return label if not label.is_empty() else "deck"
 
 
 ## The deck as a deployment names it (see Campaign / TestMap): generated from a
 ## seed at a size.
 func deck() -> Dictionary:
-	return {"kind": "generated", "seed": map_seed, "size": size}
+	return {"kind": "generated", "seed": map_seed, "size": size, "primary": primary, "secondary": secondary}
 
 
 func to_dict() -> Dictionary:
 	return {
 		"type": type, "size": size, "map_seed": map_seed, "contract_seed": contract_seed,
 		"payout": payout, "hangars": hangar_count, "rooms": room_count,
+		"primary": primary, "secondary": secondary,
 	}
 
 
@@ -118,6 +145,8 @@ static func from_dict(d: Dictionary) -> ContractOffer:
 	o.payout = int(d.get("payout", 0))
 	o.hangar_count = int(d.get("hangars", 0))
 	o.room_count = int(d.get("rooms", 0))
+	o.primary = int(d.get("primary", -1))
+	o.secondary = int(d.get("secondary", -1))
 	return o
 
 
