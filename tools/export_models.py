@@ -73,9 +73,11 @@ MODELS = {
     # Fodder's demo stand-in, built from Mixamo downloads by
     # tools/build_zombie_mixamo.py.
     "zombie": "art_src/zombie_mixamo.blend",
-    # The second Fodder body: the civilian on the merc's rig, its clips named to
-    # the poses by tools/clean_zombie_2.py. Replaces the old `civilian` export.
-    "zombie_2": "assets/civilian_cleaned.blend",
+    # The second Fodder body: the civilian on the merc's rig, repainted
+    # (assets/TheRealzombieGoodTexture.blend) and moved back onto
+    # civilian_cleaned.blend's 7.7k-tri mesh and 0.683 rig scale. Its clips
+    # already carry the pose names. Replaces the old `civilian` export.
+    "zombie_2": "assets/zombie_2.blend",
     # JXM-2 Securus. Its walk, idle, punch and flinch are Mixamo clips run
     # through tools/retarget_mixamo_robot.py; `die` is tools/build_robot_die.py.
     # v3 is v2 after tools/roboticize_robot.py (machine timing, steady head,

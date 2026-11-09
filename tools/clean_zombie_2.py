@@ -1,5 +1,8 @@
 """Readies assets/civilian_cleaned.blend for export as `zombie_2`.
 
+SUPERSEDED: zombie_2 now exports from assets/zombie_2.blend, whose clips were
+renamed when it was built from the repaint; this script does not apply to it.
+
     blender.exe -b assets/civilian_cleaned.blend -P tools/clean_zombie_2.py
     blender.exe -b assets/civilian_cleaned.blend -P tools/export_models.py -- --variant zombie_2
 

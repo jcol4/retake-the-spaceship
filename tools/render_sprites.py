@@ -287,8 +287,8 @@ VARIANT_BUCKET_ZERO = {
     # The merc gets this same quarter turn only on `run` (POSE_BUCKET_ZERO);
     # every civilian pose faces like that run, so it goes on the whole rig.
     # Judged on a running unit in game: at 90 it ran toward the camera.
-    # zombie_2 is that same .blend with its own clips (tools/clean_zombie_2.py);
-    # its run's planted foot slides +Y, so it faces -Y like the old one.
+    # zombie_2 (assets/zombie_2.blend) is that same body and rig with its own
+    # clips; its run's planted foot slides +Y, so it faces -Y like the old one.
     "zombie_2": 180.0,
     # zombie_mixamo.blend: a stock Mixamo import, facing -Y like the civilian.
     # Not yet judged on a moving unit.

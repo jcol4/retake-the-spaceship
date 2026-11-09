@@ -162,8 +162,8 @@ const VARIANT_LOOP_TIME := {
 	&"brawler": {WALK: 1.6},
 	# 0.75 m/s crosses its one tile a turn in two seconds — one cycle.
 	&"worm": {WALK: 2.0},
-	# The second Fodder body (assets/civilian_cleaned.blend via
-	# tools/clean_zombie_2.py). Every clip is 14 frames keyed on the merc rig
+	# The second Fodder body (assets/zombie_2.blend, the repaint of
+	# assets/civilian_cleaned.blend). Every clip is 14 frames keyed on the merc rig
 	# and plays at that rig's 12 fps. The walk's planted foot slides ~1.04 m a
 	# cycle, so 14 / 12 s a cycle is its move_speed of 0.9 m/s
 	# (zombie_2_unit.tscn). Change the two together. Its run (in a pack,
