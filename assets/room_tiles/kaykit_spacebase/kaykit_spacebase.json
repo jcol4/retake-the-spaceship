@@ -1,0 +1,21 @@
+{
+	"kit": "kaykit_spacebase",
+	"source": "KayKit Space Base Bits 1.0 by Kay Lousberg, CC0 (LICENSE.txt). https://github.com/KayKit-Game-Assets/KayKit-Space-Base-Bits-1.0 . glTF and texture atlas as shipped. Placeholder cargo and machinery.",
+	"notes": [
+		"Furniture convention (sockets furniture_*, hazard_*, dressing_*, decal_*, terminal_wall, power_switch, elevator_door): the wrapper origin is the centre of the piece's footprint on the floor, its long side runs along X and its front (the side a unit uses) faces +Z.",
+		"footprint is [x, z] in tiles. tier is light or heavy (the cover tiers of ROOM_THEMES_PLAN.md D.3), dressing (no cover of its own), clutter (under 0.35 m), wall (origin on the wall face at floor level, +Z into the room) or door (centred on the wall line like door_frame).",
+		"These sockets are not drawn yet: they wait for ROOM_THEMES_PLAN.md D.1 (obstacles get a kind) and D.6 (MapBuilder picks a piece per kind). tools/test_kit_coverage.gd holds every piece to its footprint and tier; tools/room_kit_gallery.gd renders them.",
+		"rooms lists the room types a dressing piece suits. tall marks a light piece that stands above light-cover height on purpose. Scale and offset were fitted to the footprint from each model's measured bounds."
+	],
+	"pieces": [
+		{"id": "kb_cargo_a_stacked", "file": "gltf/cargo_A_stacked.gltf", "socket": "furniture_cargo", "tier": "heavy", "footprint": [1, 1], "scale": [1.4209, 1.4209, 1.4209], "offset": [0, 0.015, 0], "weight": 2},
+		{"id": "kb_cargo_b_stacked", "file": "gltf/cargo_B_stacked.gltf", "socket": "furniture_cargo", "tier": "heavy", "footprint": [1, 1], "scale": [1.4209, 1.4209, 1.4209], "offset": [0, 0.015, 0], "weight": 2},
+		{"id": "kb_containers_abc", "file": "gltf/containers_A.gltf", "socket": "furniture_cargo", "tier": "heavy", "footprint": [1, 1], "scale": [2.8, 2.8, 2.8], "offset": [0, 0.006, 0], "parts": [{"file": "gltf/containers_B.gltf", "scale": [2.8, 2.8, 2.8], "offset": [0, 0.566, 0], "yaw": 90}, {"file": "gltf/containers_C.gltf", "scale": [2.8, 2.8, 2.8], "offset": [0, 1.126, 0]}], "weight": 1, "note": "Three flat containers stacked."},
+		{"id": "kb_containers_dba", "file": "gltf/containers_D.gltf", "socket": "furniture_cargo", "tier": "heavy", "footprint": [1, 1], "scale": [2.8, 2.8, 2.8], "offset": [0, 0.006, 0], "parts": [{"file": "gltf/containers_B.gltf", "scale": [2.8, 2.8, 2.8], "offset": [0, 0.566, 0]}, {"file": "gltf/containers_A.gltf", "scale": [2.8, 2.8, 2.8], "offset": [0, 1.126, 0], "yaw": 90}], "weight": 1, "note": "Three flat containers stacked."},
+
+		{"id": "kb_cargo_packed", "file": "gltf/cargo_A_packed.gltf", "socket": "furniture_crate", "tier": "light", "footprint": [1, 1], "scale": [1.8859, 1.8859, 1.8859], "offset": [0, 0.019, 0], "weight": 1},
+
+		{"id": "kb_structure_tall", "file": "gltf/structure_tall.gltf", "socket": "furniture_machinery", "tier": "heavy", "footprint": [1, 1], "scale": [0.7999, 0.7999, 0.7999], "offset": [0, 0, 0], "weight": 1},
+		{"id": "kb_structure_low", "file": "gltf/structure_low.gltf", "socket": "furniture_machinery", "tier": "light", "footprint": [1, 1], "scale": [0.7999, 0.7999, 0.7999], "offset": [0, 0, 0], "weight": 1}
+	]
+}
