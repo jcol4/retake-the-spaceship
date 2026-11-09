@@ -9,7 +9,8 @@
 		"tiles is a wall piece's length along its run. squash marks the pieces that may be squeezed to 50% to fill a 1-tile run.",
 		"opening is a door frame's clear width and top in kit metres, and outer_width its full width: MapBuilder scales a frame across so the opening spans the DOOR run.",
 		"per_cell places that many copies in a 2x2 grid inside each footprint cell.",
-		"Left out after screenshots: Platform_Metal2, Platform_3Plates and Platform_CenterPlate read as flat grey squares at one tile; WallWindow_Straight's glass imports opaque white; WallAstra_Straight_Flat reads as bare white slabs beside the banded walls; Door_Frame_Square clears only 2.10 m at 0.6 height."
+		"Left out after screenshots: Platform_Metal2, Platform_3Plates and Platform_CenterPlate read as flat grey squares at one tile; WallWindow_Straight's glass imports opaque white; WallAstra_Straight_Flat reads as bare white slabs beside the banded walls; Door_Frame_Square clears only 2.10 m at 0.6 height.",
+		"The mk_* pieces are placeholder furniture for ROOM_ASSETS_SOURCING.md and follow the furniture convention in kaykit_furniture.json's notes: origin at the footprint centre on the floor, long side along X, front +Z; footprint in tiles; tier light, heavy, dressing, clutter, wall or door. Their sockets wait for ROOM_THEMES_PLAN.md D.1 and D.6."
 	],
 	"scale": [0.75, 1.0, 0.75],
 	"textures": "Textures",
@@ -48,6 +49,42 @@
 		{"id": "cover_crate_heavy", "file": "glTF/Props/Prop_Crate4.gltf", "socket": "cover_heavy", "scale": [1.249, 1.249, 1.249], "offset": [0, 0.7, 0], "weight": 1},
 
 		{"id": "loot_chest", "file": "glTF/Props/Prop_Chest.gltf", "socket": "crate", "scale": [0.73, 0.73, 0.73], "weight": 1},
-		{"id": "terminal_computer", "file": "glTF/Props/Prop_Computer.gltf", "socket": "terminal", "scale": [0.69, 0.69, 0.69], "screen_material": "M_Decal_Screen", "weight": 1}
+		{"id": "terminal_computer", "file": "glTF/Props/Prop_Computer.gltf", "socket": "terminal", "scale": [0.69, 0.69, 0.69], "screen_material": "M_Decal_Screen", "weight": 1},
+
+		{"id": "mk_console", "file": "glTF/Props/Prop_Computer.gltf", "socket": "furniture_console", "tier": "light", "footprint": [1, 1], "scale": [0.69, 0.69, 0.69], "offset": [0, 0.001, -0.045], "weight": 3},
+
+		{"id": "mk_monitor", "file": "glTF/Props/Prop_Computer.gltf", "socket": "furniture_monitor", "tier": "dressing", "footprint": [1, 1], "scale": [0.69, 0.69, 0.69], "offset": [0, 0.001, -0.045], "weight": 3},
+
+		{"id": "mk_terminal_wall", "file": "glTF/Props/Prop_AccessPoint.gltf", "socket": "terminal_wall", "tier": "wall", "footprint": [1, 1], "scale": [1, 1, 1], "yaw": -90, "offset": [-0.009, -0.012, 0.221], "weight": 1},
+
+		{"id": "mk_power_switch", "file": "glTF/Props/Prop_AccessPoint.gltf", "socket": "power_switch", "tier": "wall", "footprint": [1, 1], "scale": [1, 1, 1], "yaw": -90, "offset": [-0.009, -0.012, 0.221], "weight": 2},
+
+		{"id": "mk_pipe_column", "file": "glTF/Columns/Column_Pipes.gltf", "socket": "furniture_machinery", "tier": "heavy", "footprint": [1, 1], "scale": [0.75, 0.6, 0.75], "offset": [0, 0, 0], "weight": 2},
+		{"id": "mk_pipe_rack", "file": "glTF/Props/Prop_PipeHolder.gltf", "socket": "furniture_machinery", "tier": "light", "footprint": [2, 1], "scale": [0.7044, 0.7044, 0.7044], "offset": [0.004, -0.005, 0], "weight": 1},
+		{"id": "mk_crate_machine", "file": "glTF/Props/Prop_Crate4.gltf", "socket": "furniture_machinery", "tier": "heavy", "footprint": [1, 1], "scale": [1.249, 1.249, 1.249], "offset": [0, 0.7, 0], "weight": 1},
+
+		{"id": "mk_fuel_barrels", "file": "glTF/Props/Prop_Barrel_Large.gltf", "socket": "hazard_fuel_tank", "tier": "light", "footprint": [1, 1], "scale": [0.9, 0.9, 0.9], "offset": [-0.25, -0.007, -0.25], "tint": [1, 0.28, 0.2], "parts": [{"file": "glTF/Props/Prop_Barrel_Large.gltf", "scale": [0.9, 0.9, 0.9], "offset": [0.25, -0.007, -0.25], "tint": [1, 0.28, 0.2]}, {"file": "glTF/Props/Prop_Barrel_Large.gltf", "scale": [0.9, 0.9, 0.9], "offset": [-0.25, -0.007, 0.25], "tint": [1, 0.28, 0.2]}, {"file": "glTF/Props/Prop_Barrel_Large.gltf", "scale": [0.9, 0.9, 0.9], "offset": [0.25, -0.007, 0.25], "tint": [1, 0.28, 0.2]}], "weight": 2},
+
+		{"id": "mk_gas_barrels", "file": "glTF/Props/Prop_Barrel_Large.gltf", "socket": "hazard_gas", "tier": "light", "footprint": [1, 1], "scale": [0.6, 0.6, 0.6], "offset": [-0.2, -0.005, -0.15], "tint": [1, 0.85, 0.15], "parts": [{"file": "glTF/Props/Prop_Barrel_Large.gltf", "scale": [0.6, 0.6, 0.6], "offset": [0.2, -0.005, -0.15], "tint": [1, 0.85, 0.15]}, {"file": "glTF/Props/Prop_Barrel_Large.gltf", "scale": [0.6, 0.6, 0.6], "offset": [0, -0.005, 0.2], "tint": [1, 0.85, 0.15]}], "weight": 1},
+
+		{"id": "mk_crate_store_light", "file": "glTF/Props/Prop_Crate3.gltf", "socket": "furniture_crate", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0.5, 0], "weight": 2},
+		{"id": "mk_crate_store_heavy", "file": "glTF/Props/Prop_Crate4.gltf", "socket": "furniture_crate", "tier": "heavy", "footprint": [1, 1], "scale": [1.249, 1.249, 1.249], "offset": [0, 0.7, 0], "weight": 1},
+		{"id": "mk_chest_store", "file": "glTF/Props/Prop_Chest.gltf", "socket": "furniture_crate", "tier": "light", "footprint": [1, 1], "scale": [0.93, 0.93, 0.93], "offset": [0, -0.003, -0.011], "weight": 1},
+
+		{"id": "mk_cargo_crate", "file": "glTF/Props/Prop_Crate4.gltf", "socket": "furniture_cargo", "tier": "heavy", "footprint": [1, 1], "scale": [1.249, 1.249, 1.249], "offset": [0, 0.7, 0], "weight": 1},
+
+		{"id": "mk_morgue_drawers", "file": "glTF/Props/Prop_Chest.gltf", "socket": "furniture_morgue", "tier": "heavy", "footprint": [1, 1], "scale": [0.93, 1, 0.93], "offset": [0, -0.003, -0.011], "parts": [{"file": "glTF/Props/Prop_Chest.gltf", "scale": [0.93, 1, 0.93], "offset": [0, 0.726, -0.011]}], "note": "Stand-in until a drawer wall is modelled: two chests stacked."},
+
+		{"id": "mk_specimen_column", "file": "glTF/Columns/Column_Hollow.gltf", "socket": "furniture_specimen_tank", "tier": "heavy", "footprint": [1, 1], "scale": [0.75, 0.48, 0.75], "offset": [0, 0, 0], "weight": 1, "note": "Fallback specimen tank."},
+
+		{"id": "mk_cell_bars", "file": "glTF/Props/Prop_Rail_4.gltf", "socket": "furniture_cell_bars", "tier": "heavy", "footprint": [2, 1], "scale": [1, 1, 0.74], "yaw": 90, "offset": [1.48, 0, 0.001], "parts": [{"file": "glTF/Props/Prop_Rail_4.gltf", "scale": [1, 1, 0.74], "offset": [1.48, 0.862, 0.001], "yaw": 90}, {"file": "glTF/Props/Prop_Rail_4.gltf", "scale": [1, 1, 0.74], "offset": [1.48, 1.724, 0.001], "yaw": 90}], "weight": 2, "note": "Three railings stacked into bars."},
+		{"id": "mk_cell_sealed", "file": "glTF/Platforms/Door_Frame_Square_Blocked.gltf", "socket": "furniture_cell_bars", "tier": "heavy", "footprint": [2, 1], "scale": [0.6, 0.6, 0.75], "offset": [0, 0, 0], "weight": 1, "note": "A sealed cell front: reads as a solid wall, not bars."},
+
+		{"id": "mk_elevator_door", "file": "glTF/Platforms/Door_Frame_SquareTall.gltf", "socket": "elevator_door", "tier": "door", "footprint": [2, 1], "scale": [0.6, 0.6, 0.75], "offset": [0, 0.008, 0], "parts": [{"file": "glTF/Platforms/Door_DarkMetal.gltf", "scale": [0.6, 0.6, 0.75], "offset": [0.002, 0, 0]}, {"file": "glTF/Platforms/Door_DarkMetal.gltf", "scale": [0.6, 0.6, 0.75], "offset": [-0.002, 0, 0], "yaw": 180}], "weight": 1},
+
+		{"id": "mk_vent_small", "file": "glTF/Props/Prop_Vent_Small.gltf", "socket": "dressing_clutter", "tier": "clutter", "footprint": [1, 1], "scale": [0.9, 0.9, 0.9], "offset": [0, 0, 0], "rooms": ["engine_room", "life_support", "corridor", "storage"]},
+		{"id": "mk_vent_big", "file": "glTF/Props/Prop_Vent_Big.gltf", "socket": "dressing_clutter", "tier": "clutter", "footprint": [1, 1], "scale": [0.6999, 0.6999, 0.6999], "offset": [0, 0.048, 0.005], "rooms": ["engine_room", "life_support", "corridor"]},
+		{"id": "mk_cable", "file": "glTF/Props/Prop_Cable_1.gltf", "socket": "dressing_clutter", "tier": "clutter", "footprint": [1, 1], "scale": [0.8, 0.8, 0.8], "offset": [-0.016, 0.015, -0.199], "rooms": ["engine_room", "engineering_control", "server_room", "fabrication"]},
+		{"id": "mk_cable_long", "file": "glTF/Props/Prop_Cable_3.gltf", "socket": "dressing_clutter", "tier": "clutter", "footprint": [3, 1], "scale": [0.75, 0.75, 0.75], "yaw": 90, "offset": [-0.03, 0.01, 0.471], "rooms": ["engine_room", "server_room", "corridor"]}
 	]
 }
