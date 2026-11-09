@@ -1,0 +1,44 @@
+{
+	"kit": "kaykit_furniture",
+	"source": "KayKit Furniture Bits 1.0 by Kay Lousberg, CC0 (LICENSE.txt). https://github.com/KayKit-Game-Assets/KayKit-Furniture-Bits-1.0 . glTF and texture atlas as shipped. Placeholder furniture: cleaner and brighter than the game's art direction.",
+	"notes": [
+		"Furniture convention (sockets furniture_*, hazard_*, dressing_*, decal_*, terminal_wall, power_switch, elevator_door): the wrapper origin is the centre of the piece's footprint on the floor, its long side runs along X and its front (the side a unit uses) faces +Z.",
+		"footprint is [x, z] in tiles. tier is light or heavy (the cover tiers of ROOM_THEMES_PLAN.md D.3), dressing (no cover of its own), clutter (under 0.35 m), wall (origin on the wall face at floor level, +Z into the room) or door (centred on the wall line like door_frame).",
+		"These sockets are not drawn yet: they wait for ROOM_THEMES_PLAN.md D.1 (obstacles get a kind) and D.6 (MapBuilder picks a piece per kind). tools/test_kit_coverage.gd holds every piece to its footprint and tier; tools/room_kit_gallery.gd renders them.",
+		"rooms lists the room types a dressing piece suits. tall marks a light piece that stands above light-cover height on purpose. Scale and offset were fitted to the footprint from each model's measured bounds."
+	],
+	"pieces": [
+		{"id": "kk_bed_single_a", "file": "gltf/bed_single_A.gltf", "socket": "furniture_bed", "tier": "light", "footprint": [2, 1], "scale": [0.75, 0.75, 0.75], "yaw": 90, "offset": [0, 0, 0], "weight": 2},
+		{"id": "kk_bed_single_b", "file": "gltf/bed_single_B.gltf", "socket": "furniture_bed", "tier": "light", "footprint": [2, 1], "scale": [0.75, 0.75, 0.75], "yaw": 90, "offset": [0, 0, 0], "weight": 2},
+		{"id": "kk_bed_double_a", "file": "gltf/bed_double_A.gltf", "socket": "furniture_bed", "tier": "light", "footprint": [2, 2], "scale": [0.75, 0.75, 0.75], "yaw": 90, "offset": [0, 0, 0], "weight": 1},
+
+		{"id": "kk_med_bed_white", "file": "gltf/bed_single_A.gltf", "socket": "furniture_med_bed", "tier": "light", "footprint": [2, 1], "scale": [0.75, 0.75, 0.75], "yaw": 90, "offset": [0, 0, 0], "paint": [0.82, 0.85, 0.86], "note": "Stand-in: no free medical bed was found; KayKit bed_single_A painted clinical white."},
+
+		{"id": "kk_surgery_table", "file": "gltf/table_medium_long.gltf", "socket": "furniture_surgery", "tier": "light", "footprint": [2, 1], "scale": [0.7, 0.7, 0.7], "offset": [0, 0, 0], "paint": [0.62, 0.66, 0.68], "parts": [{"file": "res://assets/room_tiles/quaternius_scifi/glTF/Props/Prop_Light_Floor.gltf", "scale": [1.2, 1, 1.2], "offset": [0, 0.701, 0]}], "note": "Stand-in: no free operating table was found; KayKit table_medium_long painted steel with the MegaKit floor light on top."},
+
+		{"id": "kk_couch", "file": "gltf/couch.gltf", "socket": "furniture_couch", "tier": "light", "footprint": [2, 1], "scale": [0.75, 0.75, 0.75], "offset": [0, 0, -0.038], "weight": 2},
+		{"id": "kk_armchair", "file": "gltf/armchair.gltf", "socket": "furniture_couch", "tier": "light", "footprint": [1, 1], "scale": [0.75, 0.75, 0.75], "offset": [0, 0, -0.038], "weight": 2},
+		{"id": "kk_coffee_table", "file": "gltf/table_low.gltf", "socket": "furniture_couch", "tier": "light", "footprint": [2, 1], "scale": [0.75, 0.75, 0.75], "offset": [0, 0, 0], "weight": 1},
+
+		{"id": "kk_cabinet_stack", "file": "gltf/cabinet_medium.gltf", "socket": "furniture_locker", "tier": "heavy", "footprint": [1, 1], "scale": [0.7, 0.7, 0.7], "offset": [0, 0, -0.001], "parts": [{"file": "gltf/cabinet_medium.gltf", "scale": [0.7, 0.7, 0.7], "offset": [0, 0.7, -0.001]}], "weight": 1, "note": "Fallback locker: two cabinet_medium stacked."},
+		{"id": "kk_cabinet_small_stack", "file": "gltf/cabinet_small.gltf", "socket": "furniture_locker", "tier": "heavy", "footprint": [1, 1], "scale": [0.9, 0.9, 0.9], "offset": [0, 0, -0.001], "parts": [{"file": "gltf/cabinet_small.gltf", "scale": [0.9, 0.9, 0.9], "offset": [0, 0.9, -0.001]}], "weight": 1, "note": "Fallback locker: two cabinet_small stacked."},
+
+		{"id": "kk_table_long", "file": "gltf/table_medium_long.gltf", "socket": "furniture_mess_table", "tier": "light", "footprint": [2, 1], "scale": [0.7, 0.7, 0.7], "offset": [0, 0, 0], "weight": 2},
+		{"id": "kk_table_square", "file": "gltf/table_medium.gltf", "socket": "furniture_mess_table", "tier": "light", "footprint": [1, 1], "scale": [0.7, 0.7, 0.7], "offset": [0, 0, 0], "weight": 1},
+
+		{"id": "kk_workbench", "file": "gltf/table_medium_long.gltf", "socket": "furniture_workbench", "tier": "light", "footprint": [2, 1], "scale": [0.7, 0.7, 0.7], "offset": [0, 0, 0], "parts": [{"file": "res://assets/room_tiles/quaternius_scifi/glTF/Props/Prop_Computer.gltf", "scale": [0.32, 0.32, 0.32], "offset": [0.5, 0.7, -0.371]}], "weight": 1},
+
+		{"id": "kk_lab_bench", "file": "gltf/table_medium_long.gltf", "socket": "furniture_lab_bench", "tier": "light", "footprint": [2, 1], "scale": [0.7, 0.7, 0.7], "offset": [0, 0, 0], "paint": [0.8, 0.82, 0.83], "parts": [{"file": "res://assets/room_tiles/quaternius_scifi/glTF/Props/Prop_Computer.gltf", "scale": [0.32, 0.32, 0.32], "offset": [-0.5, 0.7, -0.371]}], "weight": 1, "note": "Fallback lab bench: KayKit long table painted white plus the MegaKit computer."},
+
+		{"id": "kk_gym_bench", "file": "gltf/table_low.gltf", "socket": "furniture_gym", "tier": "light", "footprint": [2, 1], "scale": [0.75, 0.75, 0.75], "offset": [0, 0, 0], "paint": [0.2, 0.21, 0.23], "weight": 1, "note": "Fallback gym bench: table_low painted dark."},
+
+		{"id": "kk_chair", "file": "gltf/chair_A.gltf", "socket": "furniture_chair", "tier": "dressing", "footprint": [1, 1], "scale": [0.75, 0.75, 0.75], "offset": [0, 0, 0.036], "weight": 1},
+
+		{"id": "kk_lamp_standing", "file": "gltf/lamp_standing.gltf", "socket": "dressing_floor", "tier": "dressing", "footprint": [1, 1], "scale": [0.6746, 0.6746, 0.6746], "offset": [0, 0, 0], "rooms": ["lounge", "cabin", "captains_quarters"]},
+
+		{"id": "kk_shelf_a", "file": "gltf/shelf_A_big.gltf", "socket": "dressing_wall", "tier": "wall", "footprint": [1, 1], "scale": [0.6, 0.6, 0.6], "offset": [0, 1.58, 0], "rooms": ["cabin", "captains_quarters", "lounge", "bunk_room"]},
+		{"id": "kk_shelf_b", "file": "gltf/shelf_B_large.gltf", "socket": "dressing_wall", "tier": "wall", "footprint": [1, 1], "scale": [0.6, 0.6, 0.6], "offset": [0, 1.46, 0], "rooms": ["cabin", "captains_quarters", "lounge", "storage"]},
+
+		{"id": "kk_rug", "file": "gltf/rug_rectangle_A.gltf", "socket": "dressing_clutter", "tier": "clutter", "footprint": [2, 1], "scale": [0.7, 0.7, 0.7], "offset": [0, 0, 0], "rooms": ["lounge", "cabin", "captains_quarters"]}
+	]
+}
