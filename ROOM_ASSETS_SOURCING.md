@@ -195,8 +195,10 @@ licence file, so a bad pack can be reverted alone.
 
 ## Status
 
-Done 2026-11-09 on `3d-models`. Every kind in the mapping table has at least one piece; 119
-placeholder pieces in 37 sockets. D.1 is **not** built, so `MapBuilder` still draws only the cover
+Done 2026-11-09 on `3d-models`. Every kind in the mapping table has at least one piece; 162
+placeholder pieces in 37 sockets, 43 of them photoscanned Poly Haven props (a second pass for a
+grittier, more realistic set; they outweigh the stylised kits in every socket they share).
+D.1 is **not** built, so `MapBuilder` still draws only the cover
 sockets: the four Sci-Fi Essentials crates added to `cover_light`/`cover_heavy` are the only change
 visible in a deck today. Everything else waits for D.1/D.6.
 
@@ -209,7 +211,7 @@ visible in a deck today. Everything else waits for D.1/D.6.
 | Quaternius Sci-Fi Essentials | Yes (itch.io, Standard) | 18 models; prop/gun textures only | `quaternius_essentials.json`, 26 pieces | No | Trim textures are byte-identical to the MegaKit's, so its manifest points at `quaternius_scifi/Textures/` instead of shipping a second copy. The Standard glTF set has no separate screens: desks stand in for consoles. Its blue tarp crates are tinted down in the cover sockets. |
 | Quaternius House Interior | **No** | | | | Google Drive answers "Quota exceeded" for every file (even License.txt). Not needed: Kenney Furniture Kit covered toilet, sink, shower, washer and bunk. |
 | Quaternius Ultimate Furniture | **No** | | | | Drive quota, as above. Not needed: KayKit covers beds, chairs and tables. |
-| Quaternius Ultimate Modular Sci-Fi | **No** | | | | Drive quota, as above. Its Drive listing shows `Props_Pod`, `Props_Capsule`, `Props_Computer`, `Props_ComputerSmall`, `Props_Shelf_Tall`, `Props_Vessel*`, `Props_Laser`, `Pipes`: worth a manual download (below) for better specimen tanks and consoles. FBX/OBJ/Blend only. |
+| Quaternius Ultimate Modular Sci-Fi | **No** | | | | Drive quota, as above. Since found as a direct CC0 download on OpenGameArt (https://opengameart.org/content/lowpoly-modular-sci-fi-environments, `ultimate_modular_sci-fi_-_feb_2021.zip`), but not imported: it is as stylised as the MegaKit, and the second pass went for grittier art. FBX/OBJ/Blend only. |
 | Quaternius Scifi Pod | Yes (Poly Pizza GLB) | Yes | `polypizza_cc0.json` | No | Reads as a white pod-pillar; fine as a specimen tank. |
 | Quaternius Survival | **No** | | | | Drive quota. Not needed: Sci-Fi Essentials `Prop_HealthPack` is the medbay first-aid prop. |
 | Kenney Furniture Kit | Yes (kenney.nl) | 8 `.glb` | `kenney_furniture.json`, 8 pieces | No (courtesy) | `bedBunk` (CC0) replaces the CC-BY Zsky bunk; `shower`/`showerRound` and `washerDryerStacked` fill two of the "Blender" gaps. |
@@ -220,6 +222,8 @@ visible in a deck today. Everything else waits for D.1/D.6.
 | Ali12 Lab Table | Yes | Yes | `polypizza_ccby.json` | **Yes: done** | |
 | Nick Slough Scifi Canister | Yes | Yes | `polypizza_ccby.json` | **Yes: done** | CC BY 3.0 (checked); the gas-canister hazard. |
 | Floor textures | Yes (ambientCG, 1K JPG) | Tiles107, DiamondPlate003, Carpet012, MetalPlates004 | `floors/floor_{medical,engineering,quarters,command}.tres` | No | Not kit pieces, so no manifest. World triplanar, one repeat per tile. Nothing uses them until D.5. |
+| **Poly Haven** (second pass) | Yes (API, 1k glTF) | 40 photoscanned props, one folder each | `polyhaven.json`, 42 pieces | No (courtesy) | CC0. Real-world metres, so most keep scale 1 (`steel_frame_shelves_01` is authored at 10x). Medical bed (rusted iron frame), treatment chair, lab benches with microscope or chemistry set, metal desks (one with a radio as a comms console), tool carts and a vice bench, generator, aircon, welding cart, drill press, fuel drums and jerrycans, propane/LPG cylinders, electrical cabinets, a fuse box as the power switch, steel racks, military crates, stools, armchair, and dressing (medical box, extinguisher, trash cans, hand truck, security camera, ammo cans). 1.5k-50k tris per model; ~100 MB of textures in LFS. Weighted 2-4 against the stylised kits' 1-3. |
+| OpenGameArt hospital bed | Yes | Converted `.blend` → `.glb` in Blender | `opengameart_ccby.json` | **Yes: done** | "Small Hospital Bed", TiZiana / qubodup, CC BY 3.0. Its licence file carries the author's moral-rights note; see `CREDITS.md`. |
 
 Credits: the CC BY entries are in `CREDITS.md` and `scripts/credits.gd` (in-game "Art" section);
 each CC BY `.glb` also has a `<name>.LICENSE.txt` beside it.
@@ -234,7 +238,7 @@ each CC BY `.glb` also has a `<name>.LICENSE.txt` beside it.
   floor, long side along X, front +Z; each piece has `footprint` (tiles) and `tier` (light, heavy,
   dressing, clutter, wall, door). D.6 can pick by kind and filter by footprint and tier.
 - **`tools/test_kit_coverage.gd`** now checks every furniture piece against its footprint and
-  tier, and that every kind in the mapping table has a piece. 1,125 checks pass.
+  tier, and that every kind in the mapping table has a piece. 1,414 checks pass.
 - **`tools/room_kit_gallery.gd`** renders every furniture socket from the tactical camera's angle
   with footprints outlined: the check this brief asks for, repeatable after any art swap.
 - Sockets not in the mapping table: `furniture_galley_hood` (wall-mounted above a stove),
@@ -248,58 +252,91 @@ each CC BY `.glb` also has a `<name>.LICENSE.txt` beside it.
 |---|---|
 | `cover_light` / `cover_heavy` (new only) | `qe_crate_light`, `qe_tarp_light` / `qe_crate_heavy`, `qe_tarp_heavy` |
 | `furniture_bunk` | `kf_bunk` |
-| `furniture_bed` | `kk_bed_single_a`, `kk_bed_single_b`, `kk_bed_double_a` |
+| `furniture_bed` | `ph_iron_bed`, `kk_bed_single_a`, `kk_bed_single_b`, `kk_bed_double_a` |
 | `furniture_locker` | `qe_locker`, `qe_locker_pair`, `kk_cabinet_stack`, `kk_cabinet_small_stack` |
 | `furniture_toilet` | `kf_toilet`, `kf_toilet_square`, `pp_toilet` |
 | `furniture_sink` | `kf_sink`, `kf_sink_square` |
 | `furniture_shower` | `kf_shower`, `kf_shower_round` |
 | `furniture_washer` | `kf_washer_dryer` |
 | `furniture_mess_table` | `kr_mess_table_a`, `kr_mess_table_b_long` (1x3), `kr_mess_table_round`, `kk_table_long`, `kk_table_square` |
-| `furniture_chair` | `kk_chair`, `kr_chair_a`, `kr_chair_b`, `kr_stool`, `qe_chair` |
+| `furniture_chair` | `ph_metal_stool`, `ph_metal_stool_low`, `ph_school_chair`, `kk_chair`, `kr_chair_a`, `kr_chair_b`, `kr_stool`, `qe_chair` |
 | `furniture_galley` | `kr_counter`, `kr_counter_sink`, `kr_counter_corner`, `kr_stove` (light); `kr_oven`, `kr_fridge_a`, `kr_fridge_b` (heavy) |
 | `furniture_galley_hood` | `kr_extractor_hood` (wall) |
-| `furniture_couch` | `kk_couch`, `kk_armchair`, `kk_coffee_table` |
+| `furniture_couch` | `ph_armchair`, `kk_couch`, `kk_armchair`, `kk_coffee_table` |
 | `furniture_gym` | `pb_punching_bag`, `pb_barbell`, `kk_gym_bench` |
-| `furniture_med_bed` | `kk_med_bed_white` (stand-in) |
-| `furniture_surgery` | `kk_surgery_table` (stand-in) |
+| `furniture_med_bed` | `og_hospital_bed`, `ph_iron_bed_med`, `kk_med_bed_white` (stand-in) |
+| `furniture_surgery` | `ph_treatment_chair`, `kk_surgery_table` (stand-in) |
 | `furniture_monitor` | `mk_monitor`, `kst_display_wall`, `kst_display_wall_wide` |
-| `furniture_lab_bench` | `pb_lab_table` (1x3), `kk_lab_bench` |
+| `furniture_lab_bench` | `ph_lab_bench_microscope`, `ph_lab_bench_chemistry`, `pb_lab_table` (1x3), `kk_lab_bench` |
 | `furniture_specimen_tank` | `pp_scifi_pod`, `mk_specimen_column` |
 | `furniture_morgue` | `mk_morgue_drawers` (stand-in) |
-| `furniture_machinery` | `pp_engine` (3x2), `mk_pipe_column`, `mk_crate_machine`, `kb_structure_tall` (heavy); `mk_pipe_rack`, `kb_structure_low` (light) |
-| `furniture_console` | `mk_console`, `qe_desk_medium`, `qe_desk_small`, `qe_desk_l`, `kst_computer`, `kst_computer_screen`, `kst_computer_wide`, `kst_computer_system` |
+| `furniture_machinery` | `pp_engine` (3x2), `ph_welding_cart`, `mk_pipe_column`, `mk_crate_machine`, `kb_structure_tall` (heavy); `ph_generator`, `ph_aircon`, `ph_drill_press`, `mk_pipe_rack`, `kb_structure_low` (light) |
+| `furniture_console` | `ph_desk`, `ph_comms_desk`, `mk_console`, `qe_desk_medium`, `qe_desk_small`, `qe_desk_l`, `kst_computer`, `kst_computer_screen`, `kst_computer_wide`, `kst_computer_system` |
 | `furniture_server_rack` | `pb_server_rack`, `pp_scifi_computer` |
-| `furniture_weapon_rack` | `qe_rack_thin`, `qe_rack_wide` (shelves with guns as parts) |
-| `furniture_workbench` | `qe_workbench`, `kk_workbench` |
+| `furniture_weapon_rack` | `ph_rack_ammo`, `ph_steel_shelves`, `qe_rack_thin`, `qe_rack_wide` (shelves with guns as parts) |
+| `furniture_workbench` | `ph_vice_bench`, `ph_tool_cart`, `ph_storage_cart`, `qe_workbench`, `kk_workbench` |
 | `furniture_cell_bars` | `mk_cell_bars` (stacked railings), `mk_cell_sealed` |
-| `furniture_crate` | `mk_crate_store_light`, `mk_crate_store_heavy`, `mk_chest_store`, `qe_crate_store_light`, `qe_crate_store_heavy`, `qe_tarp_store_light`, `kr_crate`, `kr_crate_potatoes`, `kb_cargo_packed` |
-| `furniture_cargo` | `kb_cargo_a_stacked`, `kb_cargo_b_stacked`, `kb_containers_abc`, `kb_containers_dba`, `qe_cargo_long`, `qe_cargo_tarp_long`, `mk_cargo_crate` |
-| `hazard_fuel_tank` | `mk_fuel_barrels` (four, tinted red), `qe_fuel_barrel` |
-| `hazard_gas` | `pb_gas_canister`, `mk_gas_barrels` (three, tinted yellow), `qe_gas_barrel` |
-| `hazard_panel` | `pp_power_cell` |
+| `furniture_crate` | `ph_military_crates`, `ph_wooden_crates`, `ph_plastic_totes`, `ph_steel_shelves_narrow`, `ph_metal_rack_store`, `mk_crate_store_light`, `mk_crate_store_heavy`, `mk_chest_store`, `qe_crate_store_light`, `qe_crate_store_heavy`, `qe_tarp_store_light`, `kr_crate`, `kr_crate_potatoes`, `kb_cargo_packed` |
+| `furniture_cargo` | `ph_wooden_crate_stack`, `kb_cargo_a_stacked`, `kb_cargo_b_stacked`, `kb_containers_abc`, `kb_containers_dba`, `qe_cargo_long`, `qe_cargo_tarp_long`, `mk_cargo_crate` |
+| `hazard_fuel_tank` | `ph_fuel_drum`, `ph_fuel_drums`, `ph_jerrycans`, `mk_fuel_barrels` (four, tinted red), `qe_fuel_barrel` |
+| `hazard_gas` | `ph_gas_cylinders`, `ph_lpg_pair`, `pb_gas_canister`, `mk_gas_barrels` (three, tinted yellow), `qe_gas_barrel` |
+| `hazard_panel` | `ph_utility_box`, `ph_utility_box_wide`, `pp_power_cell` |
 | `terminal_wall` | `mk_terminal_wall` |
-| `power_switch` | `mk_power_switch`, `kst_wall_switch` |
+| `power_switch` | `ph_fuse_box`, `mk_power_switch`, `kst_wall_switch` |
 | `elevator_door` | `mk_elevator_door` (frame + two dark-metal leaves) |
-| `dressing_floor` / `dressing_wall` / `dressing_clutter` / `dressing_weapon` | lamp, dish rack, ammo boxes / shelves, wall medkit / rug, gym mat, dumbbells, vents, cables / rifle, pistol, weapon holder (MegaKit holder + rifle) |
+| `dressing_floor` / `dressing_wall` / `dressing_clutter` / `dressing_weapon` | lamp, dish rack, ammo boxes, tool chest, extinguisher, trash cans, hand truck / shelves, wall medkit, security camera / rug, gym mat, dumbbells, vents, cables, medical box, cardboard box, ammo cans / rifle, pistol, weapon holder (MegaKit holder + rifle) |
 
 ### Open questions for the designer
 
-- **Tall light furniture.** `kf_bunk` (1.6 m), `kr_counter_sink` (tap to 1.7 m) and
-  `pb_punching_bag` (1.8 m) are light tier but stand well above light-cover height; each carries a
-  `tall` reason and the test lets them through. D.3 says light pieces are low: either accept these,
-  or make bunks heavy.
+- **Tall light furniture.** `kf_bunk` (1.6 m), `kr_counter_sink` (tap to 1.7 m),
+  `pb_punching_bag` (1.8 m) and `ph_treatment_chair` (1.5 m) are light tier but stand well above
+  light-cover height; each carries a `tall` reason and the test lets them through. D.3 says light
+  pieces are low: either accept these, or make bunks heavy.
 - **Style.** KayKit and Kenney pieces are bright and toy-like beside the MegaKit (see the brief's
-  intro). The Sci-Fi Essentials pieces match; the rest are stand-ins until Phase G.
+  intro). The Sci-Fi Essentials and Poly Haven pieces match the gritty direction; Poly Haven's are
+  weighted to win wherever they share a socket. Poly Haven is Earth-realistic (wooden crates,
+  school chair): grimy, not sci-fi.
+- **Scale.** Poly Haven props are true size, so a generator or gas bottle is small inside a 1.5 m
+  cover block. If D.6 wants each block to read as full cover, give those kinds a cluster (as the
+  fuel and gas pieces already are) rather than scaling a prop up.
 
-**Still needs Blender (no free model found):** medical bed, operating table, morgue drawer wall.
-Each has a stand-in (painted KayKit bed; painted table with the MegaKit floor light; two MegaKit
-chests stacked). The shower stall and washing machine came from the Kenney Furniture Kit.
+**Still needs Blender or a manual download:** operating table and morgue drawer wall. Stand-ins:
+the Poly Haven treatment chair (surgery) and two MegaKit chests stacked (morgue). The medical bed is
+covered now (OpenGameArt hospital bed, Poly Haven iron bed frame). Sketchfab has CC BY models of
+both, below.
 
-**Manual downloads for the user** (optional; nothing is blocked on them). Quaternius's Google
-Drive refused every scripted download with "Quota exceeded":
-- **Quaternius Ultimate Modular Sci-Fi Pack**: https://quaternius.com/packs/ultimatemodularscifi.html
-  → Download → the `FBX` folder (or the Blends). Put it in a scratch folder outside the repo and
-  ask an agent to convert `Props_Pod`, `Props_Capsule`, `Props_Computer`, `Props_ComputerSmall`
-  and `Props_Shelf_Tall` to glTF into `assets/room_tiles/quaternius_modular_scifi/glTF/`, then add
-  them to `furniture_specimen_tank`, `furniture_console` and `furniture_server_rack`.
-- Quaternius House Interior, Ultimate Furniture and Survival are no longer needed.
+**Manual downloads for the user** (optional; nothing is blocked on them). Sketchfab serves
+downloads only to a logged-in account, so these could not be fetched by script. All are CC BY
+(credit required; checked 2026-11-09) and downloadable. On each page choose Download → glTF, and
+save the zips, unopened, into `C:\Users\jpcol\Downloads\sketchfab_medical\`; an agent then imports
+them as a `sketchfab_ccby` kit with credits, the same way as the Poly Pizza CC BY models.
+
+| Kind | Model (author, faces) | Page |
+|---|---|---|
+| Operating table | Hospital Bed (cobblegames, 5.5k): padded table on a pedestal | https://sketchfab.com/3d-models/hospital-bed-02ab679ff3f24018a8bcaf30b3b2cd47 |
+| Operating table | C Arm Neurosurgery Operating Table (INGSOC1984, 9.2k) | https://sketchfab.com/3d-models/c-arm-neurosurgery-operating-table-f92ebb77ec8249f8bb53cb9f256f55cc |
+| Morgue drawer wall | Morgue Body Storage (JanStrydom, 4k) | https://sketchfab.com/3d-models/morgue-body-storage-1d81efc4d3e84abe8d20c413a1018730 |
+| Morgue drawer wall | morgue refrigerator (ahmagh2e, 26k, 12 MB) | https://sketchfab.com/3d-models/morgue-refrigerator-12mb-3d582d8eabed42619ace30ab639c6e66 |
+| Morgue / surgery | Autopsy table (windofglass, 0.9k) | https://sketchfab.com/3d-models/autopsy-table-c56bae8cd45747fda74e2f0180f494a0 |
+| Medical bed | Hospital Bed (loxfear, 4k): old iron bed | https://sketchfab.com/3d-models/hospital-bed-f8c13a19e84343e7b644c19f7b9488d3 |
+| Gurney | OLD Hospital Stretcher (shubham_mishra, 0.9k); PS1 Horror Hospital Gurney (JanStrydom, 1.7k) | https://sketchfab.com/3d-models/old-hospital-stretcher-f6f350bf2c754644a69dac2ac21e1230 · https://sketchfab.com/3d-models/ps1-horror-hospital-gurney-7fce61ac484343959e25208bc75c08ff |
+| Monitor | Bed Curtain and Vital Signs Monitor (EDIIIC, 8.8k); Medical Console (OliverTriplett, 3.3k); IV Stand and Bag (Somar52, 3.8k) | https://sketchfab.com/3d-models/bed-curtain-and-vital-signs-monitor-295ed50eeaa249e8bbeed7b305d3da71 · https://sketchfab.com/3d-models/medical-console-89065e109790417191467cfececf2c7c · https://sketchfab.com/3d-models/iv-stand-and-bag-a93a8e70ecd2459c99e7812c6e09b88c |
+| Toilet / sink | Filthy Prison Toilet (mark-peters, 3.7k); Filthy Metal Sink (mark-peters, 18.6k) | https://sketchfab.com/3d-models/filthy-prison-toilet-4096px2-b8bdb85f59a44a8ea4b0783c8d22f373 · https://sketchfab.com/3d-models/filthy-metal-sink-4096px2-dcd2b91f54014e95bd488e12f0d54d61 |
+| Locker | Metal Cabinet (berkgedik, 0.5k): worn steel locker | https://sketchfab.com/3d-models/metal-cabinet-low-poly-1053729ad9d24d71a578622251f76deb |
+| Bunk | Metal Bunk Bed (grimaudk, 4.4k) | https://sketchfab.com/3d-models/metal-bunk-bed-9c05091f02074a908120600e5dbbf5d8 |
+| Washer | HL2 Inspired laundry machine 3 (kidney_02, 7.9k) | https://sketchfab.com/3d-models/hl2-inspired-laundry-machine-3-2c2fb960c66743d19e6459cfe95de1ac |
+| Server rack | Server Rack (Spellkaze, 0.7k) | https://sketchfab.com/3d-models/server-rack-62f6779cb7e448b19aaf58544c3c7218 |
+| Hazard panel | Electrical Control Panel sci-fi (aleksfotoart, 3.9k) | https://sketchfab.com/3d-models/electrical-control-panel-sci-fi-c0dfab99f2c34b4aa76e895362608677 |
+| Cell bars | Prison cell door (Rivaldragon, 1.5k); jail (Cell) (Badboy17Aiden, 2.2k) | https://sketchfab.com/3d-models/prison-cell-door-f8148fab4dc44903b9644170edf0e58c · https://sketchfab.com/3d-models/jail-cell-ddc41a6835374fd7aa4574e93e0590ca |
+| Mess table | School Cafeteria Table (avot, 8k): bench table | https://sketchfab.com/3d-models/school-cafeteria-table-e0a0be3011da4e19963467d20daeaf61 |
+| Clutter | PSX Industrial Pack (Tomitos_, 8.6k): pipes, drums, crates, a container | https://sketchfab.com/3d-models/psx-industrial-pack-12cb749961974f94a4063e67dafb2d76 |
+
+Paid but CC0 (cheap, PS1-style gritty, cover every medical gap): **PSX Hospital Pack** by Wildenza,
+~90 assets incl. a GLB, from $5.99 (https://wildenza.itch.io/psx-hospital-pack), and **Abandoned
+Asylum** by Codyanka, from €1 (https://codyanka.itch.io/asylum). Buy one and drop it in the same
+folder to have it imported.
+
+Looked at and **not used**: Atomic Realm's and Madduck's free itch.io hospital packs (own licences
+that forbid redistributing the files: this repo is public), samgauths' Hospital Room pack and
+Retro Assets Library's PSX Med Pack (no licence stated), every CGTrader/RenderHub/Fab result
+(paid, "royalty free"), Poly Pizza's hospital results (whole rooms or buildings).
