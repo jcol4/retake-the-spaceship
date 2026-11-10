@@ -49,6 +49,7 @@ func clear() -> void:
 	_floors.clear()
 	_reservations.clear()
 	_reserved_tile.clear()
+	GridTileData.topology_version += 1
 	invalidate_sight_cache()
 
 
@@ -63,6 +64,7 @@ func add_tile(pos: Vector3i, world_pos: Vector3) -> GridTileData:
 	t.world_pos = world_pos
 	tiles[pos] = t
 	_floors[pos.y] = true
+	GridTileData.topology_version += 1
 	return t
 
 
@@ -117,6 +119,7 @@ func add_stair_link(a: Vector3i, b: Vector3i) -> void:
 		stair_links[b] = []
 	stair_links[a].append(b)
 	stair_links[b].append(a)
+	GridTileData.topology_version += 1
 
 
 func world_to_grid(world: Vector3) -> Vector3i:
@@ -243,6 +246,46 @@ func neighbors(pos: Vector3i) -> Array[Vector3i]:
 	return out
 
 
+## `neighbors` written into a caller's array, cleared first — the same tiles in
+## the same order, for the searches that ask it once per tile they visit and
+## would otherwise allocate an array each time.
+func _neighbors_into(pos: Vector3i, out: Array[Vector3i]) -> void:
+	out.clear()
+	for step in STEPS:
+		var n := pos + step
+		if not tiles.has(n):
+			continue
+		if step.x != 0 and step.z != 0 \
+				and not _corner_is_open(pos + Vector3i(step.x, 0, 0)) \
+				and not _corner_is_open(pos + Vector3i(0, 0, step.z)):
+			continue
+		out.append(n)
+	if stair_links.has(pos):
+		for n: Vector3i in stair_links[pos]:
+			out.append(n)
+
+
+## `neighbors(pos)` from a cache, for the searches that ask it of every tile they
+## visit. The list depends only on which tiles exist, which are passable and the
+## stair links, so it is rebuilt whenever GridTileData.topology_version moves.
+## SHARED — callers read it and must never modify it.
+var _adjacency: Dictionary = {}
+var _adjacency_version := -1
+
+
+func _adjacent(pos: Vector3i) -> Array[Vector3i]:
+	if _adjacency_version != GridTileData.topology_version:
+		_adjacency.clear()
+		_adjacency_version = GridTileData.topology_version
+	var cached: Variant = _adjacency.get(pos)
+	if cached != null:
+		return cached
+	var out: Array[Vector3i] = []
+	_neighbors_into(pos, out)
+	_adjacency[pos] = out
+	return out
+
+
 ## Every tile within `max_tiles` steps, mapped to the number of steps it takes to
 ## get there. Excludes `from` itself.
 ##
@@ -259,17 +302,26 @@ func neighbors(pos: Vector3i) -> Array[Vector3i]:
 # 1 AP per tile now (Unit.MOVE_AP_PER_TILE), so a tile's depth here IS its price,
 # and the overlay can price every candidate destination without pathing to each
 # one separately.
-func reachable_costs(from: Vector3i, max_tiles: int) -> Dictionary:
+##
+## `through` is find_path's: tiles (Vector3i -> anything) walked through even
+## while somebody holds them — a zombie squeezing past its own kind
+## (SwarmUnit). They are reached and priced like any other, so a caller that
+## must END on a tile of its own checks `is_free` on what it picks.
+func reachable_costs(from: Vector3i, max_tiles: int, through: Dictionary = {}) -> Dictionary:
 	var costs := {}
 	var visited := {from: 0}
 	var frontier: Array[Vector3i] = [from]
-	while not frontier.is_empty():
-		var cur: Vector3i = frontier.pop_front()
+	var head := 0  # by index: pop_front shifts the whole queue on every pop
+	while head < frontier.size():
+		var cur: Vector3i = frontier[head]
+		head += 1
 		var depth: int = visited[cur]
 		if depth >= max_tiles:
 			continue
-		for n in neighbors(cur):
-			if visited.has(n) or not is_free(n):
+		for n in _adjacent(cur):
+			if visited.has(n):
+				continue
+			if not is_free(n) and not (through.has(n) and _corner_is_open(n)):
 				continue
 			visited[n] = depth + 1
 			costs[n] = depth + 1
@@ -348,6 +400,22 @@ func find_path(from: Vector3i, to: Vector3i, max_tiles: int, allow_occupied_goal
 	# whole path.
 	if from == to:
 		return []
+	# A goal nothing can step onto, or one whose every way in is held, is not
+	# reached however far the search runs — and finding that out by search
+	# floods the whole deck (tens of ms on a big one). A horde ringing its prey
+	# hits exactly this for every body at the back, pass after pass. `neighbors`
+	# is symmetric (the corner guard reads the same two tiles either way, stair
+	# links go both ways), so the tiles a path can enter `to` FROM are its own
+	# neighbours: `from` itself, or one the path may stand on.
+	if not _path_open(to, to, allow_occupied_goal, trample_for, through):
+		return []
+	var way_in := false
+	for n in neighbors(to):
+		if n == from or _path_open(n, to, allow_occupied_goal, trample_for, through):
+			way_in = true
+			break
+	if not way_in:
+		return []
 	var parent := {from: from}
 	var depth := {from: 0}
 	var turns := {from: 0}
@@ -357,8 +425,20 @@ func find_path(from: Vector3i, to: Vector3i, max_tiles: int, allow_occupied_goal
 	var heading := {from: Vector3i.ZERO}
 	var goal_depth := -1
 	var frontier: Array[Vector3i] = [from]
-	while not frontier.is_empty():
-		var cur: Vector3i = frontier.pop_front()
+	# Read by index rather than pop_front, which shifts the whole queue down on
+	# every pop and made a deck-wide search quadratic.
+	var head := 0
+	var probed := false
+	while head < frontier.size():
+		var cur: Vector3i = frontier[head]
+		head += 1
+		# A search this big may be filling the deck round a goal that sits in a
+		# sealed pocket — prey with the pack plugging the doorway to it. Asked
+		# once, only of searches already this large, so short ones pay nothing.
+		if not probed and head > _SEALED_PROBE_AFTER:
+			probed = true
+			if _goal_sealed(from, to, allow_occupied_goal, trample_for, through):
+				return []
 		var cur_depth: int = depth[cur]
 		if cur_depth >= max_tiles:
 			continue
@@ -366,17 +446,27 @@ func find_path(from: Vector3i, to: Vector3i, max_tiles: int, allow_occupied_goal
 		# tiles one step shallower can still become its parent.
 		if goal_depth >= 0 and cur_depth >= goal_depth:
 			break
-		for n in neighbors(cur):
-			if not _path_open(n, to, allow_occupied_goal, trample_for, through):
+		var cur_heading: Vector3i = heading[cur]
+		var cur_turns: int = turns[cur]
+		for n in _adjacent(cur):
+			# A tile already reached at another depth can change nothing below;
+			# skipped before the open test, which is pure, so the answer is the same.
+			var seen: int = depth.get(n, -1)
+			if seen >= 0 and seen != cur_depth + 1:
+				continue
+			# `is_free` inline — the common answer — before the full gate.
+			var tile: GridTileData = tiles.get(n)
+			if not (tile != null and tile.passable and tile.occupant == null) \
+					and not _path_open(n, to, allow_occupied_goal, trample_for, through):
 				continue
 			var step: Vector3i = n - cur
 			# A stair link is neither a turn nor a heading: it changes floor, so
 			# the step vector is not one of STEPS and carrying it forward would
 			# charge a phantom turn to whatever comes next.
 			var straight: bool = step.y != 0 \
-				or heading[cur] == Vector3i.ZERO or heading[cur] == step
-			var cost: int = turns[cur] + (0 if straight else 1)
-			if not depth.has(n):
+				or cur_heading == Vector3i.ZERO or cur_heading == step
+			var cost: int = cur_turns + (0 if straight else 1)
+			if seen < 0:
 				depth[n] = cur_depth + 1
 				turns[n] = cost
 				heading[n] = Vector3i.ZERO if step.y != 0 else step
@@ -398,6 +488,38 @@ func find_path(from: Vector3i, to: Vector3i, max_tiles: int, allow_occupied_goal
 		path.push_front(walk)
 		walk = parent[walk]
 	return path
+
+
+## Tiles a `find_path` search visits before it checks for a sealed goal, and the
+## most the check itself visits before giving up and letting the search run.
+const _SEALED_PROBE_AFTER := 200
+const _SEALED_PROBE_BUDGET := 400
+
+
+## Whether `to` is provably cut off from `from`: a flood back out of the goal,
+## through the same tiles `find_path` may stand on, that runs out of tiles
+## without meeting `from` inside the budget. False means "reachable, or the
+## goal's side is too big to tell cheaply" — the caller searches on as before,
+## so the answer never changes, only how long a hopeless search takes.
+func _goal_sealed(from: Vector3i, to: Vector3i, allow_occupied_goal: bool, trample_for: Unit,
+		through: Dictionary) -> bool:
+	var seen := {to: true}
+	var frontier: Array[Vector3i] = [to]
+	var head := 0
+	while head < frontier.size():
+		if frontier.size() > _SEALED_PROBE_BUDGET:
+			return false
+		var cur: Vector3i = frontier[head]
+		head += 1
+		for n in _adjacent(cur):
+			if n == from:
+				return false
+			if seen.has(n):
+				continue
+			seen[n] = true
+			if _path_open(n, to, allow_occupied_goal, trample_for, through):
+				frontier.append(n)
+	return true
 
 
 ## `find_path` with a per-tile surcharge: Dijkstra over cost 1 + `extra_cost(tile)`

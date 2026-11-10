@@ -74,15 +74,6 @@ var is_brute := false
 ## Hordes part-way through waking (`_enter_combat`), by horde_id.
 static var _waking_hordes := {}
 
-## Set while TurnManager decides this body's horde (`_horde_turn`). A body whose
-## way is held by its own mates may then WAIT for them instead of detouring round
-## them or giving its turn up — see `_move_toward`.
-var in_horde_turn := false
-
-## Set when this body stopped to wait for a mate. `_horde_turn` comes back to it
-## once the others have moved.
-var waiting := false
-
 ## Whether this body was in the synapse when last checked (`_refresh_synapse`).
 var linked := false
 
@@ -338,52 +329,73 @@ func _combat_turn() -> void:
 			# way. It holds back the price of a swing where it can, so arriving
 			# adjacent with AP to spare means arriving with a claw in hand.
 			await _move_toward(quarry, melee_cost)
-			if waiting:
-				return  # held up by the pack; the horde turn comes back for it
 
 
-## Closing in as a pack. The plain route treats every body as a wall, and a horde
-## is decided one body at a time — so a body behind its mates (in the clump it
-## starts in, or in a doorway) found no way out before they had moved, gave its
-## whole activation up, and lagged a round behind the rest.
+## SQUEEZING PAST (2026-11-09). The zombie tier walks THROUGH any standing
+## alien's tile mid-move — its own pack, another horde, a ranged alien in a
+## corridor — and only has to END on a tile of its own (Unit.move_along steps it
+## off a shared one). A pack therefore pours through a doorway instead of queueing
+## at it, and a horde turn needs no waiting and retrying round its own bodies.
+## Soldiers, robots and mercs still block. The worm, which attacks by moving onto
+## its prey, keeps its own rules (WormUnit).
+func squeezes_past() -> bool:
+	return true
+
+
+## The plain route, squeezing past other aliens (see `squeezes_past`).
+func _route_path(dest: Vector3i, allow_occupied_goal: bool) -> Array[Vector3i]:
+	return GridManager.find_path(grid_pos, dest, 999, allow_occupied_goal, null, alien_tiles())
+
+
+## Closing in as a crowd: the walk this activation can afford that ends on a tile
+## of this body's own, as close to the prey as it gets.
 ##
-## During a horde turn this plans THROUGH the pack instead, since the mates are
-## heading the same way, and walks only as far as the way is clear: the body
-## comes up behind the one in front and waits there (`waiting`) for
-## `_horde_turn` to try it again. A way round that is no longer than the way
-## through is simply taken, as before.
+## In reach, it takes the free tile beside the prey it reaches soonest, so a pack
+## WRAPS ROUND its prey rather than every body aiming for the one tile in front.
+## Out of reach, it walks as far along its route as the AP allows and stops on the
+## last free tile of that stretch. Nothing to walk (or nowhere free to stop) ends
+## its activation, as a blocked walk always has.
 func _move_toward(quarry: Unit, reserve_ap: int = 0) -> void:
-	waiting = false
-	if not in_horde_turn or horde_id == "":
+	if not squeezes_past():
 		await super(quarry, reserve_ap)
 		return
-	var direct := GridManager.find_path(grid_pos, quarry.grid_pos, 999, true, null, _mate_tiles())
-	var around := _route_path(quarry.grid_pos, true)
-	if direct.is_empty() or (not around.is_empty() and around.size() <= direct.size()):
-		await super(quarry, reserve_ap)
+	var path := _squeeze_path(quarry.grid_pos, _move_budget(reserve_ap), alien_tiles())
+	if path.is_empty():
+		ap = 0
 		return
-	direct.resize(direct.size() - 1)  # never step onto the prey itself
-	var clear := 0
-	while clear < direct.size() and GridManager.is_free(direct[clear]):
-		clear += 1
-	var steps := mini(_move_budget(reserve_ap), clear)
-	if steps < 1:
-		waiting = true
-		return
-	var path := direct.slice(0, steps)
 	spend_ap(move_cost_for(path.size()))
 	await move_along(path)
 	action_logged.emit("%s moved to %s" % [stats.display_name, path[-1]])
 
 
-## The tiles this body's standing horde-mates hold.
-func _mate_tiles() -> Dictionary:
-	var out := {}
-	for node in get_tree().get_nodes_in_group("enemy_units"):
-		var mate := node as SwarmUnit
-		if mate != null and mate != self and mate.horde_id == horde_id and not mate.is_downed:
-			out[mate.grid_pos] = true
-	return out
+## The walk `_move_toward` takes toward `prey`, at most `budget` tiles, crossing
+## the tiles in `through`, ending on a tile nobody holds or reserves. [] for none.
+func _squeeze_path(prey: Vector3i, budget: int, through: Dictionary) -> Array[Vector3i]:
+	var none: Array[Vector3i] = []
+	if budget < 1:
+		return none
+	var reach: Dictionary = GridManager.reachable_costs(grid_pos, budget, through)
+	var best := Vector3i.ZERO
+	var best_cost := budget + 1
+	for spot: Vector3i in GridManager.neighbors(prey):
+		var cost: int = reach.get(spot, budget + 1)
+		if cost < best_cost and _can_stop_on(spot):
+			best = spot
+			best_cost = cost
+	if best_cost <= budget:
+		return GridManager.find_path(grid_pos, best, budget, false, null, through)
+	var route := GridManager.find_path(grid_pos, prey, 999, true, null, through)
+	if route.is_empty():
+		return none
+	route.resize(route.size() - 1)  # never onto the prey itself
+	route = route.slice(0, mini(budget, route.size()))
+	while not route.is_empty() and not _can_stop_on(route[-1]):
+		route.pop_back()
+	return route
+
+
+func _can_stop_on(tile: Vector3i) -> bool:
+	return GridManager.is_free(tile) and GridManager.open_destination(tile, self)
 
 
 ## What the log calls this unit's melee blow. The worm bites.

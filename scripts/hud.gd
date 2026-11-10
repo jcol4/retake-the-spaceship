@@ -71,6 +71,9 @@ const HANGAR_MARKER_HEIGHT := 4.0
 @onready var settings_panel: Control = $SettingsPanel
 @onready var fullscreen_check: CheckButton = $SettingsPanel/Panel/VBox/FullscreenCheck
 @onready var settings_close: Button = $SettingsPanel/Panel/VBox/Close
+## Volume sliders in the ⚙ panel, keyed by GameSettings property. Built in code
+## (see `_build_volume_sliders`) so they match the pause menu's rows.
+var _volume_sliders: Dictionary = {}
 
 var _aimed_shot_target: Unit = null
 var _grenade_target: Vector3i = PlayerUnit.NO_TILE
@@ -177,6 +180,7 @@ func _ready() -> void:
 	settings_button.pressed.connect(_on_settings_pressed)
 	settings_close.pressed.connect(_on_settings_close)
 	fullscreen_check.toggled.connect(_on_fullscreen_toggled)
+	_build_volume_sliders()
 	_refresh(null)
 
 
@@ -533,6 +537,7 @@ func _toggle_tracers() -> void:
 
 
 func _on_command_rejected(reason: String) -> void:
+	Sfx.ui(&"denied")
 	_on_extraction_notice(reason, true)
 
 
@@ -552,6 +557,9 @@ func _input(event: InputEvent) -> void:
 	if key == null or not key.pressed or key.echo or key.keycode != KEY_TAB:
 		return
 	if _target_bar != null and _target_bar.visible and not _skull_targets.is_empty():
+		# Stands in for clicking a skull, so it clunks like one. Unit cycling
+		# below stays silent: no on-screen button does that.
+		Sfx.ui(&"confirm")
 		_cycle_target(-1 if key.shift_pressed else 1)
 		get_viewport().set_input_as_handled()
 		return
@@ -1340,7 +1348,37 @@ func _on_end_turn() -> void:
 
 func _on_settings_pressed() -> void:
 	fullscreen_check.button_pressed = GameSettings.fullscreen
+	# Re-read on open: the pause menu (MissionMenu) moves the same settings.
+	for prop: String in _volume_sliders:
+		(_volume_sliders[prop] as HSlider).set_value_no_signal(GameSettings.get(prop))
 	settings_panel.visible = true
+
+
+## The same three volume rows the pause menu has (MissionMenu._slider), between
+## Fullscreen and Close. "Interface" is the press clunk (Sfx.ui, on the UI bus).
+func _build_volume_sliders() -> void:
+	var vbox := settings_close.get_parent()
+	for spec: Array in [
+			["Sound effects", "sfx_volume", GameSettings.set_sfx_volume],
+			["Music", "music_volume", GameSettings.set_music_volume],
+			["Interface", "ui_volume", GameSettings.set_ui_volume]]:
+		var row := HBoxContainer.new()
+		var label := Label.new()
+		label.text = spec[0]
+		label.custom_minimum_size = Vector2(120, 0)
+		row.add_child(label)
+		var slider := HSlider.new()
+		slider.min_value = 0.0
+		slider.max_value = 1.0
+		slider.step = 0.05
+		slider.custom_minimum_size = Vector2(160, 0)
+		slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		slider.value = GameSettings.get(spec[1])
+		slider.value_changed.connect(spec[2])
+		row.add_child(slider)
+		vbox.add_child(row)
+		vbox.move_child(row, settings_close.get_index())
+		_volume_sliders[spec[1]] = slider
 
 
 func _on_settings_close() -> void:

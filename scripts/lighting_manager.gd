@@ -115,10 +115,19 @@ func recompute_dynamic() -> void:
 ## layer both call it, so what is drawn lit and what counts as lit cannot drift.
 func _beam_contribution(origin_tile: Vector3i, origin_pos: Vector3, aim: Vector3, unit: Node3D) -> Dictionary:
 	var out := {}
-	for pos: Vector3i in GridManager.tiles.keys():
-		if GridManager.chebyshev_dist(origin_tile, pos) > FLASHLIGHT_RANGE:
-			continue
+	# Only the square the beam can reach, on every floor (Chebyshev range ignores
+	# floors), rather than every tile on the deck — this runs on each step of a
+	# lit walk and each slot of a playback.
+	var reach := int(FLASHLIGHT_RANGE)
+	var span: Array[Vector3i] = []
+	for level: int in GridManager._floors:
+		for dz in range(-reach, reach + 1):
+			for dx in range(-reach, reach + 1):
+				span.append(Vector3i(origin_tile.x + dx, level, origin_tile.z + dz))
+	for pos: Vector3i in span:
 		var t: GridTileData = GridManager.get_tile(pos)
+		if t == null:
+			continue
 		if not _within_cone(origin_pos, aim, t.world_pos, FLASHLIGHT_CONE_DEGREES):
 			continue
 		var c := _falloff(origin_tile, pos, FLASHLIGHT_INTENSITY, FLASHLIGHT_RANGE)

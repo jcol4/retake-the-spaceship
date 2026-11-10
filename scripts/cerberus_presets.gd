@@ -50,6 +50,8 @@ const SCENE := {
 
 ## `weapon` null means no ranged attack at all (mag_size 0 -> can_shoot() is
 ## false forever), the same way the alien swarm is unarmed at range.
+## `wrist_gun` instead of `weapon` arms the robot with a WristGunPresets type:
+## the gun's own numbers, and its model on the robot's forearm.
 ##
 ## `fitness` is PACE (AP pool = 6 + 0.075 x Fitness, floored), `base_hp` carries
 ## toughness, and `initiative` is [base, equipment bonus] — both now additive
@@ -111,16 +113,18 @@ const DATA := {
 	},
 	MapData.Spawn.SECURUS: {
 		"name": "JXM-2 Securus",
-		# 12 AP, the biggest pool on either roster, against a flat 3 AP swing
-		# (SecurusUnit.SWING_AP_COST): nine tiles and a strike, or four strikes in
-		# contact. The threat is still arrival — it just arrives from much further.
-		"perception": 50, "reflexes": 25, "fitness": 80, "luck": 10,
-		"base_hp": 20,  # -> 26 HP with the Fitness term, the thickest on either roster
+		# 11 AP, the biggest pool on either roster, against a flat 4 AP swing
+		# (SecurusUnit.SWING_AP_COST) and a 5 AP shot (SecurusUnit.SHOT_AP_DISCOUNT):
+		# seven tiles and a strike, or two strikes in contact. The threat is still
+		# arrival — it just arrives from much further.
+		"perception": 50, "reflexes": 25, "fitness": 67, "luck": 10,
+		# Fitness 67 is the lowest that floors to 11 AP; base_hp went up by one to
+		# keep the HP its Fitness term took off.
+		"base_hp": 21,  # -> 26 HP with the Fitness term, the thickest on either roster
 		"initiative": [21, 4],  # -> 30
 		# Wrist-mounted machine gun: what it does to a target it cannot reach this
-		# activation. A 6 AP snap shot, so it advances and fires, or fires twice.
-		# No model yet — it fires from the body like any armed robot without one.
-		"weapon": {"display_name": "JXM Wrist Gun", "base_accuracy": 30, "damage": 6, "mag_size": 12},
+		# activation. Its numbers live with the gun (WristGunPresets).
+		"wrist_gun": WristGunPresets.WristGunId.WRIST_LMG,
 		"melee": [60, 12],  # two connected swings kill a soldier outright
 	},
 }
@@ -142,7 +146,8 @@ static func make_stats(kind: int, index: int = 1) -> UnitStats:
 	stats.equipment_initiative = d["initiative"][1]
 	stats.melee_base_accuracy = d["melee"][0]
 	stats.melee_damage = d["melee"][1]
-	stats.weapon = _make_weapon(d["weapon"])
+	stats.weapon = WristGunPresets.make(d["wrist_gun"]) if d.has("wrist_gun") \
+		else _make_weapon(d["weapon"])
 	return stats
 
 

@@ -28,7 +28,10 @@ extends SceneTree
 ## nothing about the roster.
 
 const SWARM := "res://scenes/swarm_unit.tscn"
-const ZOMBIE_2 := "res://scenes/zombie_2_unit.tscn"
+const ZOMBIE_2 := "res://scenes/swarm_unit.tscn"  # the Fodder IS zombie 2 now
+## A single-gait body (the old Mixamo zombie, the brute's), whose pace the
+## synapse's linked tempo drives — zombie 2's crowd gait replaces that.
+const ZOMBIE_1 := "res://scenes/zombie_1_unit.tscn"
 const BRAWLER := "res://scenes/brawler_unit.tscn"
 const WORM := "res://scenes/worm_unit.tscn"
 const PLAYER := "res://scenes/player_unit.tscn"
@@ -328,11 +331,12 @@ func _check_worm_feels_footsteps() -> void:
 ## SYNAPSE (SwarmUnit): a critical mass of awake swarm is agitated — free
 ## tiles and a faster tempo — and gunfire close to it primes a bigger surge. The
 ## free tiles are MOVE-ONLY: the AP pool, and so the number of claws in contact,
-## must not move. A lone body gets none of it.
+## must not move. A lone body gets none of it. Run on a single-gait body: zombie
+## 2's crowd gait sets its own pace (`_check_zombie_2_runs_with_the_pack`).
 func _check_synapse_moves_but_never_claws_more() -> void:
 	var pack: Array = []
 	for i in 6:
-		var body = await _spawn(SWARM, ANCHOR + Vector3i(i % 3, 0, i / 3), AlienPresets.swarm("Swarm"))
+		var body = await _spawn(ZOMBIE_1, ANCHOR + Vector3i(i % 3, 0, i / 3), AlienPresets.swarm("Swarm"))
 		body.rouse(ANCHOR + Vector3i(0, 0, 6))
 		pack.append(body)
 	var lead = pack[0]

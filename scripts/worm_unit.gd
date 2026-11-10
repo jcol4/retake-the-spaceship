@@ -259,6 +259,12 @@ func joins_synapse() -> bool:
 	return false
 
 
+## A worm moves onto what it attacks and merges with its own kind on arrival
+## (`_trample_along`, `_try_merge`): it does not squeeze past other aliens.
+func squeezes_past() -> bool:
+	return false
+
+
 func take_turn() -> void:
 	if _dissolved:
 		return

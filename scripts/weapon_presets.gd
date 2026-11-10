@@ -102,14 +102,22 @@ const DATA := {
 
 ## The gun model each weapon is drawn with: `assets/models/guns/<model>.glb`,
 ## built by tools/build_guns.py. Every one shares the rifle's grip, so any of
-## them fits any gun-carrying character (UnitVisual.set_gun). The pistol has no
-## model yet; a unit with its sidearm out keeps showing its primary.
+## them fits any gun-carrying character (UnitVisual.set_gun). The pistol is
+## Poly Haven's Service Pistol, fitted to the same grip by tools/build_pistol.py.
 const GUN_MODEL := {
 	WeaponId.ASSAULT_RIFLE: &"assault_rifle",
 	WeaponId.SHOTGUN: &"shotgun",
 	WeaponId.SMG: &"smg",
 	WeaponId.LMG: &"lmg",
 	WeaponId.BATTLE_RIFLE: &"battle_rifle",
+	WeaponId.PISTOL: &"pistol",
+}
+
+## The pose family a weapon is held with (UnitVisual.WEAPON_FAMILIES); absent
+## means the rifle poses. Every family pose is optional, so this can name a
+## family before any of its animations exist.
+const ANIM_FAMILY := {
+	WeaponId.PISTOL: &"pistol",
 }
 
 ## The Sfx key each weapon fires with (SfxManager.STREAMS). Calibres from Snake's
@@ -166,8 +174,13 @@ static func make(id: WeaponId, attachment_ids: PackedInt32Array = PackedInt32Arr
 	return w
 
 
-## The gun model for weapon `id`, or "" for one with none (the pistol, and the
-## non-roster weapons aliens and the door gun are built with, id -1).
+## The pose family weapon `id` is held with, or "" for the rifle poses.
+static func anim_family(id: int) -> StringName:
+	return ANIM_FAMILY.get(id, &"")
+
+
+## The gun model for weapon `id`, or "" for one with none (the non-roster
+## weapons aliens and the door gun are built with, id -1).
 static func gun_model(id: int) -> StringName:
 	return GUN_MODEL.get(id, &"")
 

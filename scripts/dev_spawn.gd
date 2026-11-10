@@ -19,7 +19,7 @@ extends Node
 
 const ENEMY_SCENE := preload("res://scenes/enemy_unit.tscn")
 const SWARM_SCENE := preload("res://scenes/swarm_unit.tscn")
-const ZOMBIE_2_SCENE := preload("res://scenes/zombie_2_unit.tscn")
+const ZOMBIE_1_SCENE := preload("res://scenes/zombie_1_unit.tscn")
 const BRAWLER_SCENE := preload("res://scenes/brawler_unit.tscn")
 const MERC_SCENE := preload("res://scenes/merc_unit.tscn")
 const HUNTER_SCENE := preload("res://scenes/agile_hunter_unit.tscn")
@@ -32,7 +32,7 @@ const TOGGLE_KEY := KEY_P
 ## than one tile's worth; everything else is one unit on the clicked tile.
 const KINDS := [
 	["zombie", "Zombie", "Aliens"],
-	["zombie_2", "Zombie 2", "Aliens"],
+	["zombie_old", "Zombie (old)", "Aliens"],
 	["brute", "Brute", "Aliens"],
 	["horde", "Zombie horde (brute + pack)", "Aliens"],
 	["alien", "Ranged alien", "Aliens"],
@@ -192,15 +192,17 @@ func _build(kind: StringName, tile: Vector3i, unit_name: String, extra: Dictiona
 	var unit: Unit = null
 	match kind:
 		&"zombie", &"brute":
-			var swarm: SwarmUnit = SWARM_SCENE.instantiate()
+			# The brute keeps the old Mixamo body (main.gd BRUTE_SCENE).
+			var swarm: SwarmUnit = (ZOMBIE_1_SCENE if kind == &"brute" else SWARM_SCENE).instantiate()
 			swarm.is_brute = kind == &"brute"
 			swarm.stats = AlienPresets.brute(display) if swarm.is_brute else AlienPresets.swarm(display)
 			swarm.horde_id = String(extra.get("horde_id", ""))
 			unit = swarm
-		&"zombie_2":
-			var zombie_2: SwarmUnit = ZOMBIE_2_SCENE.instantiate()
-			zombie_2.stats = AlienPresets.swarm(display)
-			unit = zombie_2
+		&"zombie_old":
+			# The old Mixamo zombie, as a plain Fodder, for comparison.
+			var old: SwarmUnit = ZOMBIE_1_SCENE.instantiate()
+			old.stats = AlienPresets.swarm(display)
+			unit = old
 		&"alien":
 			unit = ENEMY_SCENE.instantiate()
 			unit.stats = AlienPresets.ranged(display)

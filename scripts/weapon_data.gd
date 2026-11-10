@@ -53,6 +53,27 @@ extends Resource
 # instead (Penetration.splash_tiles). A mod with `replaces_splash` turns it off.
 @export var splash: bool = false
 
+# --- How it fires on screen and in the ear -----------------------------------
+# Presentation only: nothing here reaches a roll. Blank or 0 takes the roster's
+# answer (WeaponPresets by `id`, Unit.BURST_MIN/MAX, Unit.TRACER_EVERY), so a
+# weapon that sets none of them fires exactly as before. WristGunPresets sets all.
+
+## The gun drawn on the unit's mount: guns/<model>.glb on a `weapon_mount`,
+## wrist_guns/<model>.glb on a `wrist_mount` (UnitVisual._mount_gun). Blank:
+## WeaponPresets.gun_model(id).
+@export var model: StringName = &""
+## SfxManager key, played once per burst (Unit._on_muzzle). Blank:
+## WeaponPresets.fire_sfx(id).
+@export var fire_sfx: String = ""
+## Rounds one trigger pull draws, rolled per shot (Unit.fire_at). 0: the
+## roster's Unit.BURST_MIN/MAX.
+@export var burst_min: int = 0
+@export var burst_max: int = 0
+## One round in this many draws a tracer, from the first. 0: Unit.TRACER_EVERY.
+## On a gun whose barrels take turns, a multiple of the barrel count puts every
+## tracer on the same barrel; barrels + 1 walks them across all of them.
+@export var tracer_every: int = 0
+
 # --- Attachments and ammo (design doc `weapons/attachments.md`) --------------
 # One attachment per slot, null for empty, plus one ammo type (null = Standard).
 # All of them are WeaponMods; read the totals through the accessors below, never

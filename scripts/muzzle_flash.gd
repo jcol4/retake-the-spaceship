@@ -23,6 +23,9 @@ const GAIN := 6.0
 ## Drawn size against authored size. At 1 the lance reaches most of a tile past
 ## the barrel.
 const SIZE := 0.67
+## Empty barrel markers carry position and bore direction only. Older guns use
+## the authored flash mesh as their marker, including this reduction in scale.
+const EMPTY_MARKER_SCALE := 0.237123
 
 ## Shared by every flash in the game — they never differ.
 static var _materials: Dictionary = {}

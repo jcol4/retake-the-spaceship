@@ -17,8 +17,10 @@ const REQUIRED := {
 	&"nest": [&"idle"],
 	&"zombie_2": [&"idle", &"run", &"walk", &"melee", &"hit_react", &"downed"],
 	&"zombie": [&"idle", &"run", &"melee", &"downed", &"alert_scream"],
-	# walks_only, so `walk` and no `run`; `downed` is what lets it ragdoll.
-	&"securus": [&"idle", &"walk", &"melee", &"hit_react", &"downed"],
+	# walks_only, so `walk` and no `run`; `downed` is what lets it ragdoll. The
+	# three shoot phases are its wrist gun's raise_gun / fire_gun / lower_gun.
+	&"securus": [&"idle", &"walk", &"melee", &"hit_react", &"downed",
+		&"begin_shoot", &"fire_shoot", &"end_shoot"],
 }
 ## WormUnit.TIER_FLOOR tops, per pile layout.
 const PILE_COUNTS := {&"worm_clutch": 5, &"worm_knot": 9, &"worm_tide": 16}
@@ -77,6 +79,36 @@ func _init() -> void:
 		gun.free()
 	_check(ResourceLoader.exists("res://assets/vfx/muzzle_flash.glb"),
 		"the baked muzzle flash exists (tools/bake_muzzle_flash.py)")
+
+	# The robot's wrist gun (tools/rig_wrist_gun.py): the model carries the mount
+	# and NOT the preview gun, which would double up with the one mounted on it.
+	var robot: Node = (load("res://assets/models/securus.glb") as PackedScene).instantiate()
+	_check(robot.find_child("wrist_mount", true, false) != null,
+		"securus carries the wrist_mount node its wrist gun hangs from")
+	_check(robot.find_child("muzzle_flash", true, false) == null,
+		"securus's .glb leaves the preview wrist gun out")
+	robot.free()
+	# Every wrist gun a robot can be issued, and the barrels it fires in turn.
+	for id: int in WristGunPresets.DATA:
+		var model: StringName = WristGunPresets.DATA[id]["model"]
+		var path := "res://assets/models/wrist_guns/%s.glb" % model
+		_check(ResourceLoader.exists(path), "wrist gun %s has a .glb" % model)
+		if not ResourceLoader.exists(path):
+			continue
+		var wrist: Node = (load(path) as PackedScene).instantiate()
+		_check(wrist.find_child("muzzle_flash", true, false) != null,
+			"%s carries a muzzle_flash on its first barrel" % model)
+		wrist.free()
+	var twin: Node = (load("res://assets/models/wrist_guns/wrist_lmg.glb") as PackedScene).instantiate()
+	var first := twin.find_child("muzzle_flash", true, false) as Node3D
+	var second := twin.find_child("muzzle_flash_2", true, false) as Node3D
+	_check(first != null and second != null, "wrist_lmg marks both its barrels")
+	if first and second:
+		_check(first.position.distance_to(second.position) > 0.05,
+			"wrist_lmg's barrels are apart (%.3f m)" % first.position.distance_to(second.position))
+		_check(first.basis.z.dot(second.basis.z) > 0.999 and first.position.z < -0.5,
+			"wrist_lmg's barrels both point down -Z, at the far end")
+	twin.free()
 
 	var sidecar: Variant = JSON.parse_string(
 		FileAccess.get_file_as_string("res://assets/models/merc.json"))

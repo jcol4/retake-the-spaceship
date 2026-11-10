@@ -1,0 +1,51 @@
+[gd_scene format=3 uid="uid://c0ombie1unit1"]
+
+[ext_resource type="Script" path="res://scripts/swarm_unit.gd" id="1_script"]
+[ext_resource type="Script" path="res://scripts/unit_visual.gd" id="2_visual"]
+
+[sub_resource type="CapsuleShape3D" id="capsule_shape"]
+radius = 0.42
+height = 1.8
+
+; Zombie 1: the old Mixamo zombie body (assets/models/zombie.glb). The Fodder
+; itself is drawn as zombie 2 now (swarm_unit.tscn); this body is the horde's
+; brute (main.gd `_spawn_hordes`) and the dev menu's "Zombie (old)".
+[node name="Zombie1Unit" type="Node3D" groups=["enemy_units", "units"]]
+script = ExtResource("1_script")
+; Half the soldier's 4.5, so the swarm still reads as outrunnable (Sec 11.3).
+; Fitted to the zombie run: ~1.8 m a cycle at UnitVisual's 0.8 s zombie RUN
+; time. Change the two together or the feet skate.
+move_speed = 2.25
+
+; `layers` only shapes the placeholder, which a model replaces: ONE layer, no
+; weapon — the swarm has no ranged attack at all (Sec 11.4).
+[node name="Visual" type="Node3D" parent="."]
+script = ExtResource("2_visual")
+layers = Array[StringName]([&"body"])
+variant = &"zombie"
+has_light = false
+; The zombie's skin is pale, and the character lighting is tuned for dark gear:
+; the hotspot blew it out to a glossy white in the beam, and the darkness floor
+; (an unshaded glow of the model's own colour) turned it into a flat grey
+; cut-out in the dark — and, reading the RULES' light for its tile, lifted a
+; body at a beam's edge to pale and flat as well. So the Fodder is lit like the
+; walls, and is dark until a light finds it: the horde in the dark is a threat
+; you lose track of, by choice.
+darkness_floor = false
+takes_hotspot = false
+
+; Layer 2, mask 0 — nothing raycasts against it today (grid_manager's LOS and
+; lighting occlusion both query layer 1 map geometry only), so this is a body
+; volume rather than a gameplay surface.
+[node name="Body" type="StaticBody3D" parent="."]
+collision_layer = 2
+collision_mask = 0
+
+[node name="Collision" type="CollisionShape3D" parent="Body"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+shape = SubResource("capsule_shape")
+
+[node name="NameLabel" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.2, 0)
+billboard = 1
+text = "Zombie"

@@ -17,6 +17,8 @@ extends Node3D
 const PLAYER_SCENE := preload("res://scenes/player_unit.tscn")
 const ENEMY_SCENE := preload("res://scenes/enemy_unit.tscn")
 const SWARM_SCENE := preload("res://scenes/swarm_unit.tscn")
+## The horde's brute keeps the old Mixamo zombie body; the pack is zombie 2.
+const BRUTE_SCENE := preload("res://scenes/zombie_1_unit.tscn")
 const BRAWLER_SCENE := preload("res://scenes/brawler_unit.tscn")
 const MERC_SCENE := preload("res://scenes/merc_unit.tscn")
 const HUNTER_SCENE := preload("res://scenes/agile_hunter_unit.tscn")
@@ -751,8 +753,8 @@ func _spawn_hordes(map: Node3D, nest_spawns: Array[Vector3i], contract: Contract
 		var size := roundi(randi_range(AlienPresets.HORDE_MIN, AlienPresets.HORDE_MAX) * _scale())
 		var tiles := _horde_tiles(map, anchors[h], size, reserved)
 		for i in tiles.size():
-			var swarm: SwarmUnit = SWARM_SCENE.instantiate()
 			# The first body, on the anchor, is the horde's brute.
+			var swarm: SwarmUnit = (BRUTE_SCENE if i == 0 else SWARM_SCENE).instantiate()
 			swarm.is_brute = i == 0
 			swarm.stats = AlienPresets.brute("Brute_%d" % index) if i == 0 \
 				else AlienPresets.swarm("Swarm_%d" % index)

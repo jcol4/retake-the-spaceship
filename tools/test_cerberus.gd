@@ -47,6 +47,7 @@ func _initialize() -> void:
 	await _check_light_exception()
 	await _check_armor_and_emp()
 	await _check_head_weak_point()
+	await _check_securus_gun()
 	await _check_network_alert()
 	await _check_standing_post()
 	await _check_sound()
@@ -214,6 +215,71 @@ func _check_head_weak_point() -> void:
 		"and every hit after it lands harder (%d -> %d)" % [normal, securus.damage_taken(20)])
 
 	_free([securus])
+
+
+## Securus closes and swings when the WALK allows it, and otherwise spends the
+## activation on its wrist gun — including at a quarry it cannot walk to. Staged
+## on the deck's bottom corridor (z 11-12). "Can't walk to it" is a fence of
+## impassable tiles round the quarry: it blocks feet, not sight, like a chasm.
+func _check_securus_gun() -> void:
+	var start := Vector3i(6, 0, 12)
+
+	# In range and seen, but fenced off: it stands and fires with all of it.
+	var r = await _securus_turn(start, Vector3i(12, 0, 11), true)
+	_check(r["moved"] == 0 and r["shots"] == 2,
+		"Securus fires twice from where it stands at a quarry it cannot walk to (moved %d, %d shots)" % [r["moved"], r["shots"]])
+
+	# Fenced off AND out of range: it walks just far enough for a shot, and fires.
+	r = await _securus_turn(start, Vector3i(17, 0, 12), true)
+	_check(r["dist"] <= 8 and r["shots"] == 1,
+		"and walks into range of one out of range, then fires (ended %d tiles off, %d shots)" % [r["dist"], r["shots"]])
+	_check(r["moved"] == 3, "walking only the tiles the shot needs (moved %d)" % r["moved"])
+
+	# Reachable, but too far to walk to and still swing: the gun, from as close as needed.
+	r = await _securus_turn(start, Vector3i(18, 0, 12), false)
+	_check(r["shots"] == 1 and r["moved"] == 4 and r["swings"] == 0,
+		"a quarry beyond walk-and-swing is shot at instead (moved %d, %d shots)" % [r["moved"], r["shots"]])
+
+	# Within walk-and-swing: it closes and strikes, no gun.
+	r = await _securus_turn(start, Vector3i(13, 0, 12), false)
+	_check(r["swings"] >= 1 and r["shots"] == 0,
+		"one it can walk to and strike gets the fist (%d swings, %d shots)" % [r["swings"], r["shots"]])
+
+
+## One Securus activation in COMBAT at a player soldier on `at`, optionally
+## fenced in. Returns how far it walked, how many shots and swings it made, and
+## how far off it ended.
+func _securus_turn(from: Vector3i, at: Vector3i, fenced: bool) -> Dictionary:
+	var fence: Array = []
+	if fenced:
+		for dx in [-1, 0, 1]:
+			for dz in [-1, 0, 1]:
+				var tile: Vector3i = at + Vector3i(dx, 0, dz)
+				var data = _grid.tiles.get(tile)
+				if tile != at and data != null and data.passable:
+					data.passable = false
+					fence.append(tile)
+	var bait = await _spawn(PLAYER, at)
+	bait.current_hp = 9999
+	var robot = await _spawn_robot(MapData.Spawn.SECURUS, from)
+	robot._set_state(robot.AlertState.COMBAT)
+	robot.target = bait
+	robot.begin_activation()
+	var ammo: int = robot.ammo
+	var swings := [0]
+	robot.action_logged.connect(func(line: String): if " strikes " in line: swings[0] += 1)
+	await robot._combat_turn()
+	var out := {
+		"moved": _grid.chebyshev_dist(from, robot.grid_pos),
+		"shots": ammo - robot.ammo,
+		"swings": swings[0],
+		"dist": _grid.chebyshev_dist(robot.grid_pos, at),
+	}
+	for tile in fence:
+		_grid.tiles[tile].passable = true
+	_free([robot, bait])
+	await process_frame
+	return out
 
 
 # --- The network -------------------------------------------------------------

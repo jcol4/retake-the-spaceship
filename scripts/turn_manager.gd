@@ -1002,17 +1002,14 @@ func _horde_mates(unit: Unit) -> Array[Unit]:
 
 ## A horde's activation: every body decided one at a time as logic only and
 ## recorded — the tick's machinery (plan B.12), borrowed for one draw — then
-## played back as a pack (TickPlayback.play_horde): everyone walks at once, a
-## beat apart, and the blows land one after another. `drawn` has already had
+## played back as a pack (TickPlayback.play_horde): everyone flows in at once as
+## a crowd, and the blows land one after another. `drawn` has already had
 ## `begin_activation`; the mates get theirs here.
 ##
-## Decided NEAREST THE PREY FIRST, so the front of the pack is out of the way
-## before the back plans its route. A body still boxed in by its mates waits
-## (SwarmUnit._move_toward) and is tried again once the others have moved —
-## pass after pass, while anybody is still getting somewhere. Only then does a
-## body that is truly stuck fall back to the plain route: round the pack, or
-## nowhere. Without this a horde opening a fight from its huddle left the bodies
-## in the middle standing a whole round.
+## Decided NEAREST THE PREY FIRST, so the front of the pack takes the places
+## beside the prey and the rest wrap round it. A body squeezes past its mates
+## (SwarmUnit.squeezes_past), so nobody is boxed in by its own pack and each body
+## is decided exactly once — there used to be waiting and retry passes here.
 func _horde_turn(drawn: Unit, mates: Array[Unit]) -> void:
 	var pack: Array[SwarmUnit] = [drawn as SwarmUnit]
 	for mate in mates:
@@ -1027,33 +1024,14 @@ func _horde_turn(drawn: Unit, mates: Array[Unit]) -> void:
 		pack.append(mate as SwarmUnit)
 	pack.sort_custom(func(a: SwarmUnit, b: SwarmUnit) -> bool:
 		return _distance_to_prey(a) < _distance_to_prey(b))
-	for body in pack:
-		body.in_horde_turn = true
-		body.waiting = false
 	resolving_tick = true
 	_timeline.clear()
 	for body in pack:
 		if mission_over:
 			break
+		if not is_instance_valid(body) or body.is_downed:
+			continue  # dropped by reaction fire on an earlier body's walk
 		await body.take_turn()
-	var progress := true
-	while progress and not mission_over:
-		progress = false
-		for body in pack:
-			if not _take_waiting(body):
-				continue
-			var before := body.ap
-			await body._combat_turn()
-			progress = progress or body.ap < before
-	for body in pack:
-		if is_instance_valid(body):
-			body.in_horde_turn = false
-	for body in pack:
-		if _take_waiting(body) and not mission_over:
-			await body._combat_turn()  # truly stuck: the plain route, round or nowhere
-	for body in pack:
-		if is_instance_valid(body):
-			body.waiting = false
 	resolving_tick = false
 	var events := _timeline.duplicate()
 	_timeline.clear()
@@ -1072,13 +1050,6 @@ func _distance_to_prey(body: SwarmUnit) -> int:
 	return 1 << 20
 
 
-## Whether `body` stopped behind its pack and can still act on another try —
-## clearing the flag, since the caller is about to give it that try.
-func _take_waiting(body: SwarmUnit) -> bool:
-	if not is_instance_valid(body) or body.is_downed or not body.waiting or body.ap <= 0:
-		return false
-	body.waiting = false
-	return true
 
 
 ## Every non-player unit's turn for a tick, in weighted-initiative order (plan

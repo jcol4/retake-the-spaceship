@@ -720,6 +720,14 @@ func _move_to_tile(dest: Vector3i, stop_short: bool, reserve_ap: int = 0) -> voi
 		ap = 0  # adjacent already, fully blocked, or a tile is unaffordable
 		return
 	var path := full_path.slice(0, mini(budget, full_path.size()))
+	if squeezes_past():
+		# Its route may cross other aliens' tiles (`_route_path`), but the walk
+		# must end on one of its own: cut back to the last tile nobody holds.
+		while not path.is_empty() and not GridManager.is_free(path[-1]):
+			path.pop_back()
+		if path.is_empty():
+			ap = 0
+			return
 	spend_ap(move_cost_for(path.size()))
 	await move_along(path)
 	action_logged.emit("%s moved to %s" % [stats.display_name, path[-1]])

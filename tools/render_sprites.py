@@ -394,7 +394,14 @@ POSE_ACTION = {
     # punch is its melee swing and the standing react its flinch. `die` is a
     # scripted PLACEHOLDER slump (tools/build_robot_die.py): the death the
     # player sees is the ragdoll, and `downed` mostly exists to allow it.
-    "securus": {"melee": "hook_punch", "hit_react": "get_hit", "downed": "die"},
+    #
+    # The wrist gun's burst: `raise_gun` brings the left forearm up onto the
+    # target, `fire_gun` is the held aim with one round's kick (replayed per
+    # round; tools/rig_wrist_gun.py keyed the kick), `lower_gun` takes it back
+    # to idle. The three chain end to start with no pose jump.
+    "securus": {"melee": "hook_punch", "hit_react": "get_hit", "downed": "die",
+                "begin_shoot": "raise_gun", "fire_shoot": "fire_gun",
+                "end_shoot": "lower_gun"},
     # The worm has three actions and no attack: its bite plays the idle thrash,
     # by decision, the way the brawler's swing plays its stance. Its third
     # action, `just emerged`, is not wired to any pose yet.

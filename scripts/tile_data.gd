@@ -2,7 +2,16 @@ class_name GridTileData
 extends RefCounted
 ## One tile's data. Grid key is Vector3i(x, floor, z) — see design doc Sec 10.3.
 
-var passable: bool = true
+## Bumped whenever the walkable layout changes — any tile's `passable` flipping
+## (a door, loot, a landed ship) or GridManager adding tiles and stair links — so
+## GridManager's cached neighbour lists know to rebuild.
+static var topology_version := 0
+
+var passable: bool = true:
+	set(value):
+		if value != passable:
+			passable = value
+			topology_version += 1
 ## MapData.Side -> CoverEdge, for the sides of this tile that carry cover.
 ## Missing keys mean an open edge; there is deliberately no per-tile cover value
 ## any more, because cover is a property of a boundary and a tile has four.

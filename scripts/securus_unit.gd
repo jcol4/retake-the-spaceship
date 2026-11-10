@@ -35,13 +35,17 @@ var head_broken: bool = false
 
 
 ## The swing's price, flat rather than read off Reflexes, the same way
-## SwarmUnit.CLAW_AP_COST is. Against a 12 AP pool: nine tiles and a strike.
-const SWING_AP_COST := 3
+## SwarmUnit.CLAW_AP_COST is. Against an 11 AP pool: seven tiles and a strike.
+const SWING_AP_COST := 4
+## AP off the wrist gun's shot, after the usual Reflexes pricing (6 -> 5).
+const SHOT_AP_DISCOUNT := 1
 
 
 func action_cost(action: UnitStats.Action) -> int:
 	if action == UnitStats.Action.MELEE:
 		return SWING_AP_COST
+	if action == UnitStats.Action.SHOOT:
+		return maxi(UnitStats.MIN_AP_COST, super(action) - SHOT_AP_DISCOUNT)
 	return super(action)
 
 
@@ -49,31 +53,33 @@ func action_cost(action: UnitStats.Action) -> int:
 ## quarry it cannot reach this activation. Reached only in COMBAT — awareness is
 ## CerberusUnit's business.
 ##
-## Melee always wins when it is affordable: if the quarry is within reach of a
-## walk-and-swing, it walks. Otherwise it advances holding back a snap shot's
-## price and fires once it has closed as far as that allows, so a target out of
-## reach is still shot at rather than merely approached.
+## Melee always wins when it is affordable: if the WALKING ROUTE to the quarry
+## (not the straight-line distance) leaves AP for a swing, it walks in. Otherwise
+## the whole activation goes to the gun (`_gun_step`): fire from where it stands
+## if it has a shot, else walk the fewest tiles to one that has, then fire with
+## everything left. A quarry it cannot walk to at all is still closed on as far
+## as the deck allows and shot at.
 func _combat_turn() -> void:
 	var melee_cost := action_cost(UnitStats.Action.MELEE)
-	var shoot_cost := action_cost(UnitStats.Action.SHOOT)
-	var reload_cost := action_cost(UnitStats.Action.RELOAD)
+	var fired := false
 	while ap > 0 and not is_downed:
 		var quarry := acquire_target()
 		if quarry == null:
 			return
 		if not GridManager.is_melee_adjacent(grid_pos, quarry.grid_pos):
-			var steps := GridManager.chebyshev_dist(grid_pos, quarry.grid_pos) - 1
-			var from := grid_pos
-			if steps * move_ap_per_tile() + melee_cost <= ap:
+			# The route ends ON the quarry's tile; the swing is thrown from the one before.
+			var route := _route_path(quarry.grid_pos, true)
+			var walk := route.size() - 1
+			if walk > 0 and walk * move_ap_per_tile() + melee_cost <= ap:
+				var from := grid_pos
 				await _move_toward(quarry, melee_cost)
-			elif ap > shoot_cost:
-				await _move_toward(quarry, shoot_cost)
-			if grid_pos != from:
-				continue
-			# Could not (or need not) step any closer: use the gun.
-			if not await _fire_wrist_gun(quarry, shoot_cost, reload_cost):
+				if grid_pos != from:
+					continue
+			var step := await _gun_step(quarry, route.size() > 0, fired)
+			if step == GunStep.NONE:
 				ap = 0
 				return
+			fired = fired or step == GunStep.FIRED
 			continue
 		if ap < melee_cost:
 			ap = 0  # in contact but out of AP for the swing
@@ -88,24 +94,119 @@ func _combat_turn() -> void:
 			action_logged.emit("%s is DOWN!" % quarry.stats.display_name)
 
 
-## One wrist-gun action at `quarry`: a shot if it has one, a reload if the drum
-## is dry. Returns false when neither is possible, which ends the activation.
-func _fire_wrist_gun(quarry: Unit, shoot_cost: int, reload_cost: int) -> bool:
+## What one `_gun_step` did. NONE ends the activation.
+enum GunStep { NONE, FIRED, RELOADED, MOVED }
+
+
+## One wrist-gun action at `quarry`, for a quarry it cannot reach and swing at:
+##   * the drum is dry: reload;
+##   * it has a shot: fire;
+##   * a tile it can walk to with a shot's price still in hand has a line of
+##     fire: walk there (the cheapest; the next step fires);
+##   * none does, and it has not fired yet: close with all of it — along the
+##     route when there is one (`reachable`), else to whichever reachable tile
+##     is nearest the quarry, so a quarry it cannot walk to (across a gap, behind
+##     a locked door with a window) is still brought into range.
+## Once it has fired, AP short of another shot is left unspent rather than
+## walking it out of the spot it just fired from.
+func _gun_step(quarry: Unit, reachable: bool, fired: bool) -> GunStep:
+	var shoot_cost := action_cost(UnitStats.Action.SHOOT)
 	if not can_shoot():
+		var reload_cost := action_cost(UnitStats.Action.RELOAD)
 		if ap < reload_cost or stats.weapon == null:
-			return false
+			return GunStep.NONE
 		spend_ap(reload_cost)
 		await do_reload()
 		action_logged.emit("%s reloads its wrist gun" % stats.display_name)
-		return true
-	var in_range := GridManager.chebyshev_dist(grid_pos, quarry.grid_pos) <= ATTACK_RANGE
-	if not in_range or not has_shot_at(quarry) or ap < shoot_cost:
+		return GunStep.RELOADED
+	if ap < shoot_cost and fired:
+		return GunStep.NONE
+	if ap >= shoot_cost and _in_range(quarry) and has_shot_at(quarry):
+		spend_ap(shoot_cost)
+		var result: Combat.ShotResult = await fire_at(quarry, Combat.ShotAction.SHOOT)
+		action_logged.emit("%s fires its wrist gun at %s (%d%% acc): %s" % [
+			stats.display_name, quarry.stats.display_name, result.accuracy, Combat.describe(result),
+		])
+		return GunStep.FIRED
+	var spot: Variant = _firing_tile(quarry, (ap - shoot_cost) / move_ap_per_tile())
+	if spot != null:
+		return GunStep.MOVED if await _walk_to(spot) else GunStep.NONE
+	if fired:
+		return GunStep.NONE
+	if reachable:
+		var from := grid_pos
+		await _move_toward(quarry)
+		return GunStep.MOVED if grid_pos != from else GunStep.NONE
+	spot = _closing_tile(quarry, ap / move_ap_per_tile())
+	if spot != null and await _walk_to(spot):
+		return GunStep.MOVED
+	return GunStep.NONE
+
+
+func _in_range(quarry: Unit) -> bool:
+	return GridManager.chebyshev_dist(grid_pos, quarry.grid_pos) <= ATTACK_RANGE
+
+
+## Whether this robot may end a move on `tile`: free, and inside its post's
+## leash if it is posted (CerberusUnit.holds_position).
+func _may_stand(tile: Vector3i) -> bool:
+	return GridManager.is_free(tile) and (not holds_position
+		or GridManager.chebyshev_dist(post_pos, tile) <= post_leash)
+
+
+## The cheapest tile within `tiles` steps that is in ATTACK_RANGE of `quarry`
+## and sees it, nearer the quarry breaking a tie; null when there is none. A
+## candidate's sight is judged without leaning, so it never banks on a peek the
+## tile might not give; Unit.has_shot_at has the last word once it is there.
+func _firing_tile(quarry: Unit, tiles: int) -> Variant:
+	if tiles < 1:
+		return null
+	var best: Variant = null
+	var best_cost := 1 << 30
+	var best_dist := 1 << 30
+	var costs := GridManager.reachable_costs(grid_pos, tiles)
+	for tile: Vector3i in costs:
+		var cost: int = costs[tile]
+		var dist := GridManager.chebyshev_dist(tile, quarry.grid_pos)
+		if dist > ATTACK_RANGE or cost > best_cost or (cost == best_cost and dist >= best_dist):
+			continue
+		if not _may_stand(tile) or not GridManager.tiles_have_sight(self, tile, quarry.grid_pos):
+			continue
+		best = tile
+		best_cost = cost
+		best_dist = dist
+	return best
+
+
+## The reachable tile within `tiles` steps nearest `quarry` (straight line, the
+## shorter walk breaking a tie), if it is nearer than where the robot stands.
+func _closing_tile(quarry: Unit, tiles: int) -> Variant:
+	if tiles < 1:
+		return null
+	var best: Variant = null
+	var best_dist := GridManager.chebyshev_dist(grid_pos, quarry.grid_pos)  # standing still
+	var best_cost := 0
+	var costs := GridManager.reachable_costs(grid_pos, tiles)
+	for tile: Vector3i in costs:
+		var dist := GridManager.chebyshev_dist(tile, quarry.grid_pos)
+		var cost: int = costs[tile]
+		var better := dist < best_dist or (best != null and dist == best_dist and cost < best_cost)
+		if not better or not _may_stand(tile):
+			continue
+		best = tile
+		best_dist = dist
+		best_cost = cost
+	return best
+
+
+## Walks to `tile` by the shortest route. False if there is none it can afford.
+func _walk_to(tile: Vector3i) -> bool:
+	var path := GridManager.find_path(grid_pos, tile, 999)
+	if path.is_empty() or move_cost_for(path.size()) > ap:
 		return false
-	spend_ap(shoot_cost)
-	var result: Combat.ShotResult = await fire_at(quarry, Combat.ShotAction.SHOOT)
-	action_logged.emit("%s fires its wrist gun at %s (%d%% acc): %s" % [
-		stats.display_name, quarry.stats.display_name, result.accuracy, Combat.describe(result),
-	])
+	spend_ap(move_cost_for(path.size()))
+	await move_along(path)
+	action_logged.emit("%s moved to %s" % [stats.display_name, tile])
 	return true
 
 

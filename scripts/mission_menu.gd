@@ -36,6 +36,8 @@ func _ready() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	var key := event as InputEventKey
 	if key != null and key.pressed and not key.echo and key.keycode == KEY_ESCAPE:
+		# Esc stands in for the menu's own buttons, so it clunks like them.
+		Sfx.ui(&"cancel" if _panel.visible else &"confirm")
 		_set_open(not _panel.visible)
 		get_viewport().set_input_as_handled()
 
@@ -98,6 +100,7 @@ func _build() -> void:
 
 	var resume := Button.new()
 	resume.text = "Resume"
+	resume.set_meta(&"ui_sfx", &"cancel")  # backs out of the menu (Sfx._ui_kind_for)
 	resume.pressed.connect(func() -> void: _set_open(false))
 	vbox.add_child(resume)
 

@@ -45,6 +45,9 @@ const TURN_TIME := 0.09  # seconds to swing toward the next tile
 # Raised from 3-5 to buy the muzzle flash more time on screen. The flash lasts
 # one BURST_CADENCE (0.11 s) a round, so the only dial that makes a burst read
 # as a burst is how many times it repeats.
+#
+# The roster's default: a weapon can set its own (WeaponData.burst_min), and
+# TRACER_EVERY likewise (WeaponData.tracer_every). See `_burst_size`.
 const BURST_MIN := 4
 const BURST_MAX := 6
 # On a hit, this many rounds are thrown wide anyway so the burst reads as a
@@ -766,7 +769,9 @@ func show_to_peer(peer_id: int) -> void:
 ## move_along), so this is a single authoritative correction per move rather
 ## than a fight with mid-walk occupancy the client has no stake in anyway.
 func _on_moved_broadcast_grid_pos(_unit: Unit) -> void:
-	if multiplayer.is_server():
+	# Nobody to tell in single player (whose offline peer still reads as the
+	# server): skipped, or every move of every unit printed a line.
+	if multiplayer.is_server() and not SteamLobby.ready_peers.is_empty():
 		print("[NET] host broadcasting grid_pos for %s -> %s" % [stats.display_name, grid_pos])
 		for peer_id in SteamLobby.ready_peers:  # in the mission (MULTIPLAYER_PLAN.md)
 			_rpc_sync_grid_pos.rpc_id(peer_id, grid_pos)
@@ -894,7 +899,72 @@ func _can_enter(tile: Vector3i) -> bool:
 	var t: GridTileData = GridManager.get_tile(tile)
 	if t == null or not t.passable:
 		return false
-	return t.occupant == null or t.occupant == self
+	return t.occupant == null or t.occupant == self or passes_through(t.occupant as Unit)
+
+
+## Whether this unit squeezes past other aliens mid-walk (the zombie tier —
+## SwarmUnit). It may cross a tile one holds without claiming it, but still
+## ends every walk on a tile of its own (`move_along`).
+func squeezes_past() -> bool:
+	return false
+
+
+## Whether this unit may walk through the tile `other` is holding: it squeezes
+## past (`squeezes_past`) and `other` is an alien still on its feet.
+func passes_through(other: Unit) -> bool:
+	return other != null and other != self and squeezes_past() 		and other.faction == Faction.Id.ALIENS and not other.is_downed
+
+
+## Every tile a standing alien other than this unit holds, as find_path's
+## `through` set — what a unit that `squeezes_past` may walk through.
+func alien_tiles() -> Dictionary:
+	var out := {}
+	for node in get_tree().get_nodes_in_group("units"):
+		var other := node as Unit
+		if other != null and passes_through(other):
+			out[other.grid_pos] = true
+	return out
+
+
+## The way off a tile this unit is sharing with somebody it squeezed past, to
+## the nearest tile it can stand on alone — or [] when it holds its own tile, or
+## none is near. A walk that would end shared (cut short by a reservation, or by
+## a soldier stepping into the way) ends there instead: two bodies may cross a
+## tile, never rest on one.
+const _SHARED_SEARCH := 6
+
+
+func _off_shared_tile() -> Array[Vector3i]:
+	var none: Array[Vector3i] = []
+	if not squeezes_past():
+		return none
+	var here: GridTileData = GridManager.get_tile(grid_pos)
+	if here == null or here.occupant == null or here.occupant == self:
+		return none
+	var parent := {grid_pos: grid_pos}
+	var depth := {grid_pos: 0}
+	var frontier: Array[Vector3i] = [grid_pos]
+	var head := 0
+	while head < frontier.size():
+		var cur: Vector3i = frontier[head]
+		head += 1
+		if depth[cur] >= _SHARED_SEARCH:
+			continue
+		for n in GridManager.neighbors(cur):
+			if parent.has(n) or not _can_enter(n):
+				continue
+			parent[n] = cur
+			depth[n] = depth[cur] + 1
+			var t: GridTileData = GridManager.get_tile(n)
+			if t.occupant == null and GridManager.open_destination(n, self):
+				var path: Array[Vector3i] = []
+				var walk := n
+				while walk != grid_pos:
+					path.push_front(walk)
+					walk = parent[walk]
+				return path
+			frontier.append(n)
+	return none
 
 
 func move_along(path: Array[Vector3i]) -> void:
@@ -930,24 +1000,43 @@ func move_along(path: Array[Vector3i]) -> void:
 	var was_hidden := is_instant()
 	var goal: Vector3i = path[-1]
 	var repathed := false
+	var stepped_off := 0
 	var i := 0
-	while i < path.size():
+	while true:
+		if i >= path.size():
+			# Two bodies may cross a tile, never rest on one: a squeezer whose
+			# walk ended on somebody else's tile carries on to one of its own.
+			var off: Array[Vector3i] = []
+			if stepped_off < 2:
+				off = _off_shared_tile()
+			if off.is_empty():
+				break
+			stepped_off += 1
+			path = off
+			goal = off[-1]
+			repathed = false
+			i = 0
+			continue
 		var step: Vector3i = path[i]
 		# The goal is closed to anyone but the unit that reserved it (A.2), so a
 		# walker whose last tile somebody else is bound for stops one short.
 		if i == path.size() - 1 and not GridManager.open_destination(step, self):
-			break
+			i = path.size()  # stop here — or, standing on a shared tile, step off it
+			continue
 		if not _can_enter(step):
 			# Somebody has stepped into the way since the path was planned (E18).
 			# One fresh route from here, no longer than what is left of this one
 			# in turn mode (it was paid for by the tile); else stop where we stand.
 			if repathed:
-				break
+				i = path.size()  # stop where we stand (stepping off a shared tile)
+				continue
 			repathed = true
 			var cap := 999 if TurnManager.in_exploration() else path.size() - i
-			var fresh := GridManager.find_path(grid_pos, goal, cap)
+			var fresh := GridManager.find_path(grid_pos, goal, cap, false, null,
+				alien_tiles() if squeezes_past() else {})
 			if fresh.is_empty() or fresh[-1] != goal:
-				break
+				i = path.size()
+				continue
 			path = fresh
 			i = 0
 			continue
@@ -968,7 +1057,11 @@ func move_along(path: Array[Vector3i]) -> void:
 		# Any watcher this run is about to trigger starts tracking it now, so its
 		# rounds go out the moment the trigger tile is reached, not a beat later.
 		TurnManager.anticipate_reactions(self, path, i)
-		GridManager.set_occupant(step, self)
+		# A tile somebody else is standing on is passed through, not claimed:
+		# its holder keeps it (`passes_through`).
+		var holder: Node3D = GridManager.get_tile(step).occupant
+		if holder == null or holder == self:
+			GridManager.set_occupant(step, self)
 		var from_yaw := rotation.y
 		await _step_to(GridManager.grid_to_world(step), speed)
 		if _halted:
@@ -1046,7 +1139,10 @@ func move_along(path: Array[Vector3i]) -> void:
 	# Grid state is settled before the transition plays out: the unit owns its
 	# destination tile from the moment it arrives, and what is left is purely
 	# cosmetic — nothing downstream waits on it to know where the unit is.
-	GridManager.set_occupant(grid_pos, self)
+	# (Never over somebody it squeezed past and found no way off from: they keep it.)
+	var settled: Node3D = GridManager.get_tile(grid_pos).occupant if GridManager.has_tile(grid_pos) else null
+	if settled == null or settled == self:
+		GridManager.set_occupant(grid_pos, self)
 	global_position = GridManager.grid_to_world(grid_pos)
 	# Turn out over whatever this tile has to hide behind before settling. MUST
 	# precede the settle rather than follow it: `cover_pose` is facing-dependent,
@@ -1483,14 +1579,24 @@ func refresh_cover_pose() -> void:
 	visual.set_cover_pose(cover_pose())
 
 
-## Puts the primary weapon's gun model in the visual's hands. Called at spawn
-## and whenever the weapon is swapped (PlayerUnit._equip). A weapon with no
-## model leaves the model's own default gun.
+## Puts the gun IN HAND (the primary, or the sidearm while it is drawn) in the
+## visual's hands (or on its wrist), and picks the pose family it is held with
+## (WeaponPresets.anim_family). Called at spawn, whenever the weapon is swapped
+## (PlayerUnit._equip), and on every draw/holster (`_apply_drawn`). A weapon
+## with no model leaves the model's own default gun.
 func sync_gun_model() -> void:
 	# `visual` is @onready: a loadout applied before the unit enters the tree is
 	# picked up by the call in _ready instead.
-	if visual and stats and stats.weapon:
-		visual.set_gun(WeaponPresets.gun_model(stats.weapon.id))
+	if visual == null or stats == null:
+		return
+	# Nothing in hand (no primary, sidearm holstered): the model's own gun and
+	# the rifle poses. Both calls are no-ops when nothing changed.
+	var w := stats.active_weapon()
+	var model := &""
+	if w:
+		model = w.model if w.model != &"" else WeaponPresets.gun_model(w.id)
+	visual.set_gun(model)
+	visual.set_weapon_family(WeaponPresets.anim_family(w.id) if w else &"")
 
 
 ## Settles into idle in whatever posture the unit's current tile and facing call
@@ -1961,6 +2067,8 @@ func _swap_weapon_rounds() -> void:
 ## Every peer derives it the same way from replicated state.
 func _apply_drawn() -> void:
 	stats.sidearm_drawn = stats.sidearm != null and (carrying != null or sidearm_selected)
+	# Cheap when nothing changed: set_gun and set_weapon_family both return early.
+	sync_gun_model()
 
 
 ## Why this unit cannot switch weapons now, or "" (GDD §4.3). Only a soldier with
@@ -1999,8 +2107,9 @@ func _carry_follow() -> void:
 ##   carried  hidden, and its click/LOS body switched off so it neither eats a
 ##            click meant for its carrier nor stands in a line of fire;
 ##   carrier  a slung-body marker on the back, the body's name on its label, and
-##            the sidearm drawn (UnitStats.sidearm_drawn). The rifle stays on the
-##            model, and the rifle poses play — no pistol art yet.
+##            the sidearm drawn (UnitStats.sidearm_drawn): the pistol model in
+##            hand and the `_pistol` pose family, each pistol pose falling back
+##            to the rifle's until it is animated (UnitVisual._bases).
 func _apply_carry() -> void:
 	_apply_drawn()
 	_show_carry_marker(carrying != null)
@@ -2649,7 +2758,7 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	var result := Penetration.resolve(self, target, action, body_part) if penetrates \
 		else Combat.resolve_shot(self, target, action, body_part)
 	is_busy = true
-	var rounds := randi_range(BURST_MIN, BURST_MAX)
+	var rounds := _burst_size()
 	_pending_shot = result
 	_pending_target = target
 	_burst_round = 0
@@ -2760,6 +2869,21 @@ func _land_collateral(result: Combat.ShotResult) -> void:
 		_report_incoming(body)
 
 
+## Rounds this trigger pull draws: the weapon's own burst where it sets one (a
+## robot's wrist gun), the roster's BURST_MIN-BURST_MAX otherwise.
+func _burst_size() -> int:
+	var weapon := active_weapon()
+	if weapon and weapon.burst_max > 0:
+		return randi_range(maxi(1, weapon.burst_min), weapon.burst_max)
+	return randi_range(BURST_MIN, BURST_MAX)
+
+
+## One round in this many draws a tracer. See WeaponData.tracer_every.
+func _tracer_every() -> int:
+	var weapon := active_weapon()
+	return weapon.tracer_every if weapon and weapon.tracer_every > 0 else TRACER_EVERY
+
+
 func _pick_strays(rounds: int, hit: bool) -> Array[int]:
 	# A miss throws everything wide. A hit still throws one or two away, because
 	# a burst where every round lands in the same spot reads as a single shot.
@@ -2865,9 +2989,10 @@ func _on_muzzle() -> void:
 	# no mark at the target.
 	var lands := _pending_shot != null and _pending_shot.hit and round_index not in _burst_strays
 	var crit := _pending_shot != null and _pending_shot.crit
-	# The tracer leaves the drawn barrel (where the flash is), not `from`. Drawn
-	# on the first round and every TRACER_EVERY after it, so a 4-6 round burst
-	# shows 2-3 streaks instead of a solid stream.
+	# The tracer leaves the drawn barrel (where the flash is), not `from` -- on a
+	# gun with several, the one this round fired from. Drawn on the first round
+	# and every `_tracer_every` after it, so a 4-6 round burst shows 2-3 streaks
+	# instead of a solid stream.
 	var at := _pending_target.visual.global_position
 	# A runner tracked through a reaction burst: a round that misses goes where
 	# the shooter's aim is lagging, just behind it, not anywhere round it.
@@ -2876,7 +3001,7 @@ func _on_muzzle() -> void:
 	if not lands and runner_vel.length() > 0.5:
 		at -= runner_vel.normalized() * TRAIL_MISS * clampf(runner_vel.length() / maxf(0.1,
 			_pending_target.move_speed), 0.0, 1.0)
-	vfx.shot_impact(visual.barrel_tip(), at, lands, crit, round_index % TRACER_EVERY == 0)
+	vfx.shot_impact(visual.barrel_tip(), at, lands, crit, round_index % _tracer_every() == 0)
 	# The round into the body: the one that drops it starts the fall, every one
 	# after jolts it (UnitVisual.take_round). The first landing round strikes
 	# where the shot was rolled to land; the rest go where rounds go.
@@ -2905,7 +3030,9 @@ func _on_muzzle() -> void:
 	# sidearm, and should sound like it.
 	if round_index == 0:
 		var weapon := active_weapon()
-		Sfx.play(WeaponPresets.fire_sfx(weapon.id if weapon else -1), from)
+		var key := weapon.fire_sfx if weapon and weapon.fire_sfx != "" \
+			else WeaponPresets.fire_sfx(weapon.id if weapon else -1)
+		Sfx.play(key, from)
 
 
 ## The Sfx key this unit's feet make on the deck, or "" for none. By faction,

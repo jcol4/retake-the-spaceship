@@ -76,9 +76,48 @@ const LOW_PRIORITY := {
 	"step_heavy_metal": true,
 }
 
+## Interface feedback: the clunk a press makes. Flat (no position) — it is the
+## player's own hand on the console, not something happening on the deck.
+##
+## Deliberately QUIET: this is a subconscious "got it", not an event. It should
+## sit far under gunfire and footsteps, so that a player who was asked "is there
+## a click sound?" would have to stop and listen. UI_LEVEL_DB is the one knob for
+## the whole family; the per-kind entries below are trims relative to it.
+const UI_LEVEL_DB := -22.0
+
+## kind -> [stream path, trim dB, pitch]. "cancel" is the confirm clunk pitched
+## down, so going back sounds like the same switch thrown the other way rather
+## than a different device. "denied" (a disabled button, an order the click can
+## already tell is illegal) is a dull thud, trimmed because it is the
+## denser sample.
+const UI_KINDS := {
+	&"confirm": ["res://assets/audio/sfx/ui/ui_confirm.ogg", 0.0, 1.0],
+	&"cancel": ["res://assets/audio/sfx/ui/ui_confirm.ogg", 0.0, 0.8],
+	&"denied": ["res://assets/audio/sfx/ui/ui_denied.ogg", -5.0, 1.0],
+}
+
+## A press often reaches more than one hook in the same instant (a Back button
+## that also closes a panel whose close is wired, a click both a HUD button and
+## an order). One press, one clunk: anything inside this window is swallowed.
+const UI_DEBOUNCE_MS := 40
+
+## Buttons whose text or node name reads as backing out play "cancel" rather
+## than "confirm". A button can say otherwise with `set_meta(&"ui_sfx", kind)`,
+## where kind is any UI_KINDS key or &"none" to stay silent. Whole words only
+## ("Backpack" is not "Back"). "Resume" is NOT here: on the front end it means
+## "carry on into the mission", so the pause menu tags its own Resume instead.
+const UI_CANCEL_PATTERN := "\\b(back|cancel|close|leave|quit|exit|abort)\\b"
+
+const UI_VOICES := 4
+
 var _voices: Array[AudioStreamPlayer3D] = []
 var _next_voice := 0
 var _loaded: Dictionary = {}
+var _ui_voices: Array[AudioStreamPlayer] = []
+var _ui_next := 0
+var _ui_streams: Dictionary = {}
+var _ui_last_ms := -1000
+var _ui_cancel_re := RegEx.create_from_string(UI_CANCEL_PATTERN)
 
 
 func _ready() -> void:
@@ -91,6 +130,85 @@ func _ready() -> void:
 		add_child(player)
 		_voices.append(player)
 	_preload_streams()
+	for i in UI_VOICES:
+		var player := AudioStreamPlayer.new()
+		# The UI bus, so the "Interface" volume slider (GameSettings.ui_volume)
+		# turns the clicks down or off without touching gunfire.
+		player.bus = GameSettings.BUS_UI
+		# The solo pause menu pauses the tree; its own Resume/Leave must still click.
+		player.process_mode = Node.PROCESS_MODE_ALWAYS
+		add_child(player)
+		_ui_voices.append(player)
+	for kind: StringName in UI_KINDS:
+		var path: String = UI_KINDS[kind][0]
+		if ResourceLoader.exists(path):
+			_ui_streams[kind] = load(path)
+		else:
+			push_warning("UI SFX '%s' has no file at %s — calls will be silent" % [kind, path])
+	# Every button in the game gets its clunk here rather than at each call site:
+	# menus build buttons in code all over the place, and a hook per `pressed`
+	# would be forgotten on the next one. Autoloads are in the tree before the
+	# main scene, so node_added sees every button that will ever exist.
+	get_tree().node_added.connect(_on_node_added)
+
+
+## The press feedback sound. `kind` is a UI_KINDS key.
+func ui(kind: StringName = &"confirm") -> void:
+	var stream: AudioStream = _ui_streams.get(kind)
+	if stream == null:
+		return
+	var now := Time.get_ticks_msec()
+	if now - _ui_last_ms < UI_DEBOUNCE_MS:
+		return
+	_ui_last_ms = now
+	var voice := _ui_voices[_ui_next]
+	_ui_next = (_ui_next + 1) % _ui_voices.size()
+	voice.stream = stream
+	voice.volume_db = UI_LEVEL_DB + float(UI_KINDS[kind][1])
+	voice.pitch_scale = UI_KINDS[kind][2]
+	voice.play()
+
+
+func _on_node_added(node: Node) -> void:
+	# Reparenting re-fires node_added; connecting twice would error (and clunk twice).
+	if node.has_meta(&"_ui_sfx_hooked"):
+		return
+	if node is BaseButton or node is PopupMenu:
+		node.set_meta(&"_ui_sfx_hooked", true)
+	if node is BaseButton:
+		var button := node as BaseButton
+		button.pressed.connect(_on_button_pressed.bind(button))
+		button.gui_input.connect(_on_button_gui_input.bind(button))
+	elif node is PopupMenu:
+		(node as PopupMenu).index_pressed.connect(func(_i: int) -> void: ui(&"confirm"))
+
+
+func _on_button_pressed(button: BaseButton) -> void:
+	var kind := _ui_kind_for(button)
+	if kind != &"none":
+		ui(kind)
+
+
+## `pressed` never fires on a disabled button, which is exactly when a player
+## most needs to hear that the click landed and was refused.
+func _on_button_gui_input(event: InputEvent, button: BaseButton) -> void:
+	if not button.disabled:
+		return
+	var mb := event as InputEventMouseButton
+	if mb != null and mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT \
+			and _ui_kind_for(button) != &"none":
+		ui(&"denied")
+
+
+func _ui_kind_for(button: BaseButton) -> StringName:
+	if button.has_meta(&"ui_sfx"):
+		return button.get_meta(&"ui_sfx")
+	# Node names are PascalCase/snake_case ("GrenadeCancel", "settings_close"),
+	# so split them into words before the whole-word match.
+	var label := String(button.name).to_snake_case().replace("_", " ")
+	if button is Button:
+		label += " " + (button as Button).text
+	return &"cancel" if _ui_cancel_re.search(label.to_lower()) != null else &"confirm"
 
 
 ## Loads what exists and quietly skips what doesn't, so a missing sample is a

@@ -1,11 +1,15 @@
 {
   "variant": "securus",
   "poses": [
+    "begin_shoot",
     "downed",
+    "end_shoot",
+    "fire_shoot",
     "hit_react",
     "idle",
     "melee",
     "walk"
   ],
-  "pose_yaw_degrees": {}
+  "pose_yaw_degrees": {},
+  "gun": "wrist_lmg"
 }

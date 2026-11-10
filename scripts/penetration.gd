@@ -238,6 +238,11 @@ static func trace(shooter: Unit, target: Unit, past_target: bool) -> Array:
 			continue
 		if i == n:
 			out.append({"unit": target})
+			# Whoever shares the target's tile is the first body behind it: a
+			# zombie squeezing past another alien (Unit.passes_through) is shot
+			# with that one pressed against it.
+			for u: Unit in bodies:
+				out.append({"unit": u})
 			continue
 		# Behind the target: the round stays on the target's deck.
 		var tile := Vector3i(col.x, end.y, col.y)

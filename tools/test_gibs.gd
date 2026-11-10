@@ -13,6 +13,9 @@ extends SceneTree
 ## --script tool is compiled before the autoloads register.
 
 const ZOMBIE := "res://assets/models/zombie.glb"
+## The Fodder's body now (swarm_unit.tscn): the soldier-style rig, whose hands
+## and feet ride IK bones outside the arm and leg subtrees.
+const ZOMBIE_2 := "res://assets/models/zombie_2.glb"
 ## An open tile on maps/test_deck.txt with the x=14 bulkhead's wall end beside
 ## it (see test_corner_peek.gd), so its sight rays cross both open deck and wall.
 const TILE := Vector3i(13, 0, 11)
@@ -31,6 +34,7 @@ func _initialize() -> void:
 	_check_planner_shapes()
 	await _check_severed_bodies()
 	await _check_heavy()
+	await _check_zombie_2_severs_whole_limbs()
 	await _check_rng_untouched()
 	await _check_layers_and_sight()
 	await _check_live_cap()
@@ -121,8 +125,8 @@ func _check_planner_shapes() -> void:
 
 
 ## A zombie model standing at `at`, posed and paused, and its skeleton.
-func _zombie(at: Vector3) -> Skeleton3D:
-	var inst := (load(ZOMBIE) as PackedScene).instantiate() as Node3D
+func _zombie(at: Vector3, model := ZOMBIE) -> Skeleton3D:
+	var inst := (load(model) as PackedScene).instantiate() as Node3D
 	root.add_child(inst)
 	inst.global_position = at
 	var ap := inst.find_children("*", "AnimationPlayer", true, false)[0] as AnimationPlayer
@@ -183,6 +187,41 @@ func _check_severed_bodies() -> void:
 	_check(skel.get_bone_pose_scale(arm).is_equal_approx(Vector3.ONE), "clear() (a rewind) puts the arm back")
 	_check(FodderGibs.live_count == 0, "clear() hands the live budget back")
 	await process_frame
+
+
+## Zombie 2's rig gibs too, and an arm or leg takes its hand or foot with it
+## even though those hang off IK bones, not the limb: nothing is left floating
+## on the corpse and no ragdoll body is built under a severed part.
+func _check_zombie_2_severs_whole_limbs() -> void:
+	var at := Vector3(48, 0, 40)
+	var skel := _zombie(at, ZOMBIE_2)
+	var parts := Ragdoll.gib_parts(skel)
+	_check(parts.size() == 5, "the zombie 2 rig has all five parts (%d)" % parts.size())
+	var arm: int = skel.find_bone("arm.L")
+	var hand: int = skel.find_bone("hand.L")
+	var foot: int = skel.find_bone("foot.R")
+	_check(not Ragdoll.subtree(skel, arm).has(hand), "(the hand is not under the arm in the hierarchy)")
+	_check(Ragdoll.part_bones(skel, arm).has(hand), "the left arm takes its hand with it")
+	_check(Ragdoll.part_bones(skel, skel.find_bone("leg.R")).has(foot), "the right leg takes its foot with it")
+	_check(not Ragdoll.part_bones(skel, skel.find_bone("head")).has(hand), "the head takes no hand")
+	var out := _die(skel, [&"arm_l", &"leg_r"], at)
+	var r: Ragdoll = out[1]
+	_check((out[2] as PackedInt32Array).size() == 2, "two zombie 2 parts severed")
+	_check(skel.get_bone_pose_scale(hand).is_equal_approx(Ragdoll.SEVERED_SCALE), "the severed hand is folded away too")
+	_check(skel.get_bone_pose_scale(foot).is_equal_approx(Ragdoll.SEVERED_SCALE), "and the severed foot")
+	var gone := {}
+	for root_bi: int in out[2]:
+		for bi in Ragdoll.part_bones(skel, root_bi):
+			gone[String(skel.get_bone_name(bi))] = true
+	var stray := false
+	for b: RigidBody3D in r.bodies():
+		if gone.has(String(b.name).trim_prefix("rb_")):
+			stray = true
+	_check(not stray, "no zombie 2 ragdoll body under a severed part")
+	(out[0] as FodderGibs).clear()
+	r.clear()
+	await process_frame
+	_check(skel.get_bone_pose_scale(hand).is_equal_approx(Vector3.ONE), "clear() puts the hand back")
 
 
 func _check_heavy() -> void:

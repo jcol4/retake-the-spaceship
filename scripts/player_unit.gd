@@ -638,7 +638,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	# way therefore resolved to the wall's own tile — never a legal destination —
 	# so the click did nothing at all. Projection needs no hit.
 	if mode == Mode.MOVE:
-		_issue(&"_try_move", [_tile_under_mouse()])
+		var tile := _tile_under_mouse()
+		_order_sfx(_move_click_valid(tile))
+		_issue(&"_try_move", [tile])
 		return
 	if mode in [Mode.SHOOT, Mode.AIMED_SHOT, Mode.SUPPRESS]:
 		# Layer 2 (units) only, same reasoning as `_update_target_hover`: a wall
@@ -650,8 +652,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		var unit := _unit_from_collider(unit_hit["collider"])
 		# A click only PICKS, the same as its skull on the HUD; Confirm fires
 		# (`confirm_target`). Local, like everything before Confirm.
-		if unit and is_hostile_to(unit) and unit in shot_targets():
-			pick_target(unit)
+		if unit and is_hostile_to(unit):
+			var can_shoot := unit in shot_targets()
+			_order_sfx(can_shoot)
+			if can_shoot:
+				pick_target(unit)
 		return
 	if mode in [Mode.REVIVE, Mode.PICK_UP]:
 		# Ahead of the general raycast, which needs SOMETHING under the cursor:
@@ -660,7 +665,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		# tile, so a soldier standing over one would otherwise hide it.
 		var body := _body_under_mouse()
 		if body != null:
+			var blocker := revive_blocker(body) if mode == Mode.REVIVE else pick_up_blocker(body)
+			var cost := action_cost(UnitStats.Action.REVIVE if mode == Mode.REVIVE else UnitStats.Action.PICK_UP)
+			_order_sfx(blocker == "" and can_afford(cost) and not is_busy)
 			_issue(&"try_revive" if mode == Mode.REVIVE else &"try_pick_up", [body])
+		else:
+			_order_sfx(false)
 		return
 	var hit := _raycast_mouse()
 	if hit.is_empty():
@@ -669,12 +679,37 @@ func _unhandled_input(event: InputEvent) -> void:
 		# Ahead of the unit lookup, like FACE: landing it on the machine itself is
 		# the normal way to use this. Local, not `_issue` — same reasoning as the
 		# AIMED_SHOT branch above: this only opens a menu, it doesn't throw yet.
-		_try_pick_grenade_target(_tile_under_mouse_any())
+		var at := _tile_under_mouse_any()
+		_order_sfx(can_afford(action_cost(UnitStats.Action.GRENADE)) and grenade_charges > 0 \
+				and not is_busy and _can_throw_grenade_at(at))
+		_try_pick_grenade_target(at)
 		return
 	if mode == Mode.FACE:
 		# Deliberately ahead of the unit lookup: aiming the beam *at* something is
 		# the main reason to use this, so clicking an alien has to be allowed.
+		_order_sfx(true)
 		_issue(&"_try_face", [hit["position"]])
+
+
+## The press feedback for a click on the deck (Sfx.ui): a clunk when the order is
+## one this peer can already see is legal, a thud when it can already see it is
+## not. Asked locally and up front, mirroring the checks the order itself runs,
+## so a co-op client hears it without waiting on the host — and only the
+## clicking player hears it. A refusal only the host can know about (a tile
+## reserved a moment ago) arrives later as `command_rejected`, which the HUD
+## answers with the same thud.
+func _order_sfx(ok: bool) -> void:
+	Sfx.ui(&"confirm" if ok else &"denied")
+
+
+## Mirrors `_try_move`/`_explore_move`'s own refusals. In a fight `_cost_for` is
+## already 0 for anything out of reach or out of AP (see there).
+func _move_click_valid(tile: Vector3i) -> bool:
+	if tile == NO_TILE:
+		return false
+	if TurnManager.in_exploration():
+		return _can_enter(tile)
+	return not is_busy and _cost_for(tile) > 0
 
 
 ## Out of combat a click on another of this player's soldiers selects them rather

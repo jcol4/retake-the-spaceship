@@ -174,6 +174,18 @@ const RIGS := [
 		"follow": {"hand.L": "forearm.L", "hand.R": "forearm.R", "foot.L": "shin.L", "foot.R": "shin.R"},
 		"parts": {0: ["head"], 1: ["chest", "chest", "spine_1"], 2: ["arm.L", "forearm.L"],
 			3: ["arm.R", "forearm.R"], 4: ["leg.L", "shin.L"], 5: ["leg.R", "shin.R"]},
+		## Fodder dismemberment, for the zombie 2 body that wears this rig. Only
+		## a Fodder ever gibs (UnitVisual._start_gibs asks `is_fodder`), so the
+		## soldiers and mercs on the same skeleton never do. The hands and feet
+		## ride IK bones outside the arm and leg subtrees; `part_bones` takes
+		## them along through `follow`.
+		"gib": {
+			"head": {"bone": "head", "stump": 0.065},
+			"arm_l": {"bone": "arm.L", "stump": 0.05},
+			"arm_r": {"bone": "arm.R", "stump": 0.05},
+			"leg_l": {"bone": "leg.L", "stump": 0.07},
+			"leg_r": {"bone": "leg.R", "stump": 0.07},
+		},
 	},
 	## Mixamo (the Fodder zombie, the civilian). Spine, neck and legs bend on X as
 	## above, Z the sideways swing. The arms are turned a quarter: on an upper arm
@@ -285,6 +297,37 @@ static func subtree(skeleton: Skeleton3D, root: int) -> PackedInt32Array:
 	return out
 
 
+## Every bone that comes off with the part rooted at `root`: its subtree, plus
+## the subtree of any follower (RIGS "follow") whose bone it keeps to is in it —
+## a hand riding an IK bone goes with the forearm it follows.
+static func part_bones(skeleton: Skeleton3D, root: int) -> PackedInt32Array:
+	var out := subtree(skeleton, root)
+	var profile := profile_for(skeleton)
+	if profile.is_empty():
+		return out
+	var grew := true
+	while grew:
+		grew = false
+		for f: String in profile.rig.follow:
+			var fi := skeleton.find_bone(profile.prefix + f)
+			var ti := skeleton.find_bone(profile.prefix + String(profile.rig.follow[f]))
+			if fi >= 0 and ti >= 0 and out.has(ti) and not out.has(fi):
+				out.append_array(subtree(skeleton, fi))
+				grew = true
+	return out
+
+
+## The bones drawn folded away (SEVERED_SCALE) for the part rooted at `root`:
+## the root itself, and the root of each follower `part_bones` takes along.
+static func part_roots(skeleton: Skeleton3D, root: int) -> PackedInt32Array:
+	var all := part_bones(skeleton, root)
+	var out := PackedInt32Array([root])
+	for bi in all:
+		if bi != root and not all.has(skeleton.get_bone_parent(bi)):
+			out.append(bi)
+	return out
+
+
 ## The scale a severed part's root bone is drawn at: everything under it folds
 ## into its head. Not zero, so nothing downstream inverts a singular basis.
 const SEVERED_SCALE := Vector3.ONE * 1e-4
@@ -376,7 +419,7 @@ func start(skeleton: Skeleton3D, hit: Dictionary, floor_y: float,
 
 	var gone := {}
 	for root_bi in severed:
-		for bi in subtree(skeleton, root_bi):
+		for bi in part_bones(skeleton, root_bi):
 			gone[bi] = true
 	for fi: int in _follow.keys():
 		if gone.has(fi) or gone.has(int(_follow[fi][0])):
@@ -399,7 +442,8 @@ func start(skeleton: Skeleton3D, hit: Dictionary, floor_y: float,
 	# After `_pose0` was taken, so `clear` restores the scale too. Nothing drives
 	# these bones from here on (they have no bodies), so the fold stays put.
 	for root_bi in severed:
-		skeleton.set_bone_pose_scale(root_bi, SEVERED_SCALE)
+		for fold in part_roots(skeleton, root_bi):
+			skeleton.set_bone_pose_scale(fold, SEVERED_SCALE)
 	# Overlapping pairs never collide with each other, or the solver's first act
 	# is to blow them apart — checked on the rest pose AND the pose the body falls
 	# from (hands meet on a rifle, in front of the chest).

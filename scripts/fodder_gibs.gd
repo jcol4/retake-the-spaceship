@@ -272,7 +272,7 @@ static func _part_tris(skel: Skeleton3D, mi: MeshInstance3D, root: int) -> Array
 	if per_mesh.has(root):
 		return per_mesh[root]
 	var in_part := {}
-	for bi in Ragdoll.subtree(skel, root):
+	for bi in Ragdoll.part_bones(skel, root):
 		in_part[bi] = true
 	# Skin bind -> whether it drives a bone in the part. Mixamo binds by name.
 	var skin := mi.skin

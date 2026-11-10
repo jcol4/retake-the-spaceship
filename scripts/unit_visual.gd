@@ -184,8 +184,11 @@ const VARIANT_LOOP_TIME := {
 	# authored 47 and 12 frames (the idle is tools/roboticize_robot.py's head
 	# scan, IDLE_FRAMES). The hook punch is 26 frames (2.17 s) of guard,
 	# wind-up, swing and recovery, played at 1.6 s; see STRIKE_AT for when it
-	# connects.
-	&"securus": {WALK: 1.2, IDLE: 47 / 12.0, MELEE: 1.6, HIT_REACT: 12 / 12.0, DOWNED: 12 / 12.0},
+	# connects. The wrist gun's raise and lower were keyed by hand at the
+	# scene's 30 fps, 16 frames each, and play at that speed rather than
+	# squeezed to RAISE_TIME / SETTLE_TIME (`_play_burst` waits on these too).
+	&"securus": {WALK: 1.2, IDLE: 47 / 12.0, MELEE: 1.6, HIT_REACT: 12 / 12.0, DOWNED: 12 / 12.0,
+		BEGIN_SHOOT: 16 / 30.0, END_SHOOT: 16 / 30.0},
 }
 
 ## When a variant's MELEE connects, as a fraction of the action's length:
@@ -236,6 +239,16 @@ const BUCKET_OFFSET := PI / 4.0
 const COVER_LOW := &"low"
 const COVER_HIGH := &"high"
 
+## Weapon pose families. A unit holding a weapon that is animated differently
+## from the rifle (the pistol: arms out, no stock) resolves every pose through
+## the family's suffix as well — `aim_hold` becomes `aim_hold_pistol`, and in
+## cover `aim_hold_pistol_low`. Every family pose is optional and falls back to
+## the rifle's (see `_bases`), and the gun contract is shared, so a pistol in a
+## rifle pose still sits in the fist. Timing is the base pose's: a family pose
+## is time-scaled to the same LOOP_TIME / ONE_SHOT_TIME (see `_timing_pose`).
+const FAMILY_PISTOL := &"pistol"
+const WEAPON_FAMILIES: Array[StringName] = [FAMILY_PISTOL]
+
 ## Parts of the PLACEHOLDER, back to front. Ignored once a model exists for the
 ## variant: an authored model is one piece.
 @export var layers: Array[StringName] = [&"body", &"head", &"helmet", &"weapon"]
@@ -244,9 +257,10 @@ const COVER_HIGH := &"high"
 ## `<variant>.json`. A gear swap is a reassignment of this — see `set_variant`.
 @export var variant: StringName = &"soldier"
 
-## Which gun to put in the model's hands: `assets/models/guns/<gun>.glb`. Empty
-## takes the gun the model was animated with (its sidecar's `gun`). See
-## `set_gun`, and MOUNT_NODE for what a gun has to look like to fit.
+## Which gun to put in the model's hands: `assets/models/guns/<gun>.glb` (or,
+## on a model with a WRIST_MOUNT_NODE, `wrist_guns/<gun>.glb`). Empty takes the
+## gun the model was animated with (its sidecar's `gun`). See `set_gun`, and
+## MOUNT_NODE for what a gun has to look like to fit.
 @export var gun: StringName = &""
 
 ## Uniform scale on the model. 1.0 is true size, which every export is authored
@@ -318,6 +332,11 @@ const MIN_BRIGHTNESS := 0.3
 ## the old muzzle flash mesh, now hidden and read only for where it sits: the
 ## flash (MuzzleFlash, baked from assets/gun_vfx.blend) and the rig light both
 ## mount there.
+##
+## A gun with more than one barrel marks the rest MUZZLE_NODE_2, _3, ... (from
+## Blender's `muzzle_flash_2`). Each gets its own flash and the barrels take
+## turns, a round each, in name order — see `_play_burst`. The first is the one
+## the rig light and the barrel-aim loop use.
 const MUZZLE_NODE := "muzzle_flash"
 
 ## The node on the model's `weapon` bone a gun hangs from, at the trigger-hand
@@ -328,6 +347,11 @@ const MUZZLE_NODE := "muzzle_flash"
 ## tools/standardize_gun_mount.py made the merc's.
 const MOUNT_NODE := "weapon_mount"
 const GUN_DIR := MODEL_DIR + "guns/"
+## The security robot's equivalent, on its forearm (tools/rig_wrist_gun.py), and
+## the guns that fit it (WristGunPresets): mount point at the origin, barrels
+## down -Z, top +Y, a MUZZLE_NODE per barrel. A model has one mount or the other.
+const WRIST_MOUNT_NODE := "wrist_mount"
+const WRIST_GUN_DIR := MODEL_DIR + "wrist_guns/"
 
 ## Inverted-hull outline, drawn as a second pass on every character surface in
 ## a darkened copy of that surface's own colour. See `_outline_for`.
@@ -365,6 +389,11 @@ var _current: StringName = &""
 ## The model's barrel-tip marker (MUZZLE_NODE) and the flash mounted beside it.
 var _muzzle: Node3D = null
 var _flash: MuzzleFlash = null
+## Every barrel's marker and flash, in firing order; `_muzzle` and `_flash` are
+## the first. `_barrel` indexes the one the last round left from.
+var _muzzles: Array[Node3D] = []
+var _flashes: Array[MuzzleFlash] = []
+var _barrel := 0
 ## The model's MOUNT_NODE, or null for a model that holds no gun.
 var _mount: Node3D = null
 ## The glowing eye's lens material and light, or null for a model with no
@@ -392,6 +421,8 @@ var _stepping: bool = false
 var _fidgeting: bool = false
 ## COVER_LOW, COVER_HIGH, or "" for a unit not using cover.
 var _cover: StringName = &""
+## A WEAPON_FAMILIES entry, or "" for the rifle poses. See set_weapon_family.
+var _family: StringName = &""
 var _status_color := Color.WHITE
 
 
@@ -440,6 +471,9 @@ func _build_model() -> void:
 	_pose_yaw.clear()
 	_muzzle = null
 	_flash = null
+	_muzzles.clear()
+	_flashes.clear()
+	_barrel = 0
 	_mount = null
 	_eye_material = null
 	_eye_light = null
@@ -590,9 +624,7 @@ func _build_single(sidecar: Dictionary) -> bool:
 	# Before the muzzle lookup and dressing: the muzzle is on the gun, and the
 	# gun is tinted and outlined like the rest of the model.
 	_mount_gun(inst, gun if gun != &"" else StringName(sidecar.get("gun", "")))
-	_muzzle = inst.find_child(MUZZLE_NODE, true, false) as Node3D
-	if _muzzle:
-		_muzzle.visible = false
+	_find_muzzles(inst)
 	# Before dressing, which skips them: they glow, so no tint or outline.
 	_find_status_lights(inst)
 	_dress_surfaces(inst)
@@ -603,14 +635,44 @@ func _build_single(sidecar: Dictionary) -> bool:
 	return true
 
 
-## Hangs `gun_name`'s .glb on the model's MOUNT_NODE. A model with no mount, or
-## a gun with no .glb, is left empty-handed.
+## Hangs `gun_name`'s .glb on the model's MOUNT_NODE, or on its WRIST_MOUNT_NODE
+## from WRIST_GUN_DIR. A model with no mount, or a gun with no .glb, is left
+## empty-handed.
 func _mount_gun(inst: Node, gun_name: StringName) -> void:
 	_mount = inst.find_child(MOUNT_NODE, true, false) as Node3D
-	var path := GUN_DIR + String(gun_name) + ".glb"
+	var dir := GUN_DIR
+	if _mount == null:
+		_mount = inst.find_child(WRIST_MOUNT_NODE, true, false) as Node3D
+		dir = WRIST_GUN_DIR
+	var path := dir + String(gun_name) + ".glb"
 	if _mount == null or gun_name == &"" or not ResourceLoader.exists(path):
 		return
 	_mount.add_child((load(path) as PackedScene).instantiate())
+
+
+## Every barrel marker on the model, in firing order: MUZZLE_NODE, then
+## MUZZLE_NODE_2, _3... Hidden: they only say where the flashes go.
+func _find_muzzles(inst: Node) -> void:
+	var found := {}
+	for node in inst.find_children(MUZZLE_NODE + "*", "Node3D", true, false):
+		var n := _barrel_number(String(node.name))
+		if n > 0 and not found.has(n):
+			found[n] = node
+	var order := found.keys()
+	order.sort()
+	for n: int in order:
+		var marker := found[n] as Node3D
+		marker.visible = false
+		_muzzles.append(marker)
+	_muzzle = _muzzles[0] if not _muzzles.is_empty() else null
+
+
+## 1 for MUZZLE_NODE, k for MUZZLE_NODE_k, 0 for any other name.
+static func _barrel_number(node_name: String) -> int:
+	if node_name == MUZZLE_NODE:
+		return 1
+	var suffix := node_name.trim_prefix(MUZZLE_NODE + "_")
+	return int(suffix) if suffix != node_name and suffix.is_valid_int() else 0
 
 
 ## A worm mass: N copies of the single worm laid out by export_models.py, each a
@@ -669,23 +731,31 @@ func _adopt_players(inst: Node, phase: float) -> void:
 			# The imported resource is shared by every unit of the variant, so
 			# setting this is idempotent rather than per-unit.
 			player.get_animation(name).loop_mode = Animation.LOOP_LINEAR \
-				if StringName(name) in LOOPING else Animation.LOOP_NONE
+				if _timing_pose(StringName(name)) in LOOPING else Animation.LOOP_NONE
 		player.speed_scale = tempo
 		_players.append(player)
 		_phases.append(phase)
 
 
-## Hangs a MuzzleFlash on the rifle at the marker's rest transform. A sibling of
-## the marker rather than its child: `fire_shoot` animates the marker's scale to
-## nothing, which would take the flash with it before it ever showed.
+## Hangs a MuzzleFlash on the gun at each barrel marker's rest transform. A
+## sibling of the marker rather than its child: `fire_shoot` animates the
+## marker's scale to nothing, which would take the flash with it before it ever
+## showed.
 func _mount_flash() -> void:
-	var barrel := _muzzle.get_parent() as Node3D if _muzzle else null
-	if barrel == null:
-		return
-	_flash = MuzzleFlash.new()
-	_flash.name = "MuzzleFlash"
-	barrel.add_child(_flash)
-	_flash.transform = _muzzle.transform
+	for marker in _muzzles:
+		var barrel := marker.get_parent() as Node3D
+		if barrel == null:
+			continue
+		var flash := MuzzleFlash.new()
+		flash.name = "MuzzleFlash" if _flashes.is_empty() else "MuzzleFlash%d" % (_flashes.size() + 1)
+		barrel.add_child(flash)
+		flash.transform = marker.transform
+		if not marker is MeshInstance3D:
+			# Empty wrist-gun markers have no authored flash mesh scale. Keep
+			# their bore direction, but size the effect like the rifle flashes.
+			flash.basis = marker.basis.orthonormalized() * MuzzleFlash.EMPTY_MARKER_SCALE
+		_flashes.append(flash)
+	_flash = _flashes[0] if not _flashes.is_empty() else null
 
 
 ## Per-unit copies of the model's materials, carrying the faction tint and the
@@ -704,7 +774,7 @@ func _mount_flash() -> void:
 func _dress_surfaces(root: Node) -> void:
 	for node in root.find_children("*", "MeshInstance3D", true, false):
 		var mesh := node as MeshInstance3D
-		if mesh.mesh == null or mesh == _muzzle or mesh == _health_band \
+		if mesh.mesh == null or mesh in _muzzles or mesh == _health_band \
 				or mesh in _down_pips or mesh == _ammo_bar or mesh in _mag_pips:
 			continue
 		if takes_hotspot:
@@ -792,8 +862,9 @@ func set_variant(new_variant: StringName) -> void:
 	_play(_action if _action != &"" else _stance, true)
 
 
-## Swaps the gun in the model's hands. The animation is untouched: every gun
-## shares the grip, so the same poses hold any of them.
+## Swaps the gun in the model's hands, or on its wrist. The animation is
+## untouched: every gun shares the grip (or the wrist mount), so the same poses
+## hold any of them.
 func set_gun(new_gun: StringName) -> void:
 	if new_gun == gun:
 		return
@@ -1182,7 +1253,13 @@ static func _bracket_color(hp_fraction: float) -> Color:
 ## a unit killed there is standing up rather than lying where it fell.
 func refresh() -> void:
 	snap_facing()
-	_play(_action if _action != &"" else _stance, true)
+	# Hidden AnimationPlayers keep advancing. Rewinding a live walk on every
+	# visibility handover (or end_display) snaps the legs back mid-stride.
+	# Still restart one-shots and stopped players so stale poses are repaired.
+	var keep_phase := _action == &"" and _timing_pose(_current) in LOOPING
+	for player in _players:
+		keep_phase = keep_phase and player.is_playing() and player.current_animation == _current
+	_play(_action if _action != &"" else _stance, not keep_phase)
 
 
 ## Static so the mapping can be checked without a scene — see
@@ -1195,10 +1272,30 @@ static func direction_bucket(relative_yaw: float) -> int:
 ## The poses to try for `base`, most specific first: the current cover family's
 ## variant, then the plain pose. A cover animation that does not exist costs
 ## nothing — the plain pose answers instead.
+##
+## With a weapon family the order is family+cover, rifle cover, family, rifle:
+## being in cover is information the player reads, so a pistol pose with no
+## cover variant yields to the rifle's cover pose rather than standing the unit
+## up out of it.
 func _bases(base: StringName) -> Array[StringName]:
-	if _cover == &"":
-		return [base]
-	return [&"%s_%s" % [base, _cover], base]
+	var out: Array[StringName] = []
+	if _family != &"" and _cover != &"":
+		out.append(StringName("%s_%s_%s" % [base, _family, _cover]))
+	if _cover != &"":
+		out.append(StringName("%s_%s" % [base, _cover]))
+	if _family != &"":
+		out.append(StringName("%s_%s" % [base, _family]))
+	out.append(base)
+	return out
+
+
+## The pose `pose`'s timing and looping are looked up under: the pose with any
+## weapon-family suffix removed (`aim_hold_pistol_low` -> `aim_hold_low`).
+static func _timing_pose(pose: StringName) -> StringName:
+	var s := String(pose)
+	for family in WEAPON_FAMILIES:
+		s = s.replace("_%s" % family, "")
+	return StringName(s)
 
 
 ## Which candidate `base` resolves to — the cover variant or the plain pose — or
@@ -1226,6 +1323,9 @@ func _duration(pose: StringName) -> float:
 ## already playing.
 func _authored_duration(pose: StringName) -> float:
 	var per_variant: Dictionary = VARIANT_LOOP_TIME.get(variant, {})
+	if per_variant.has(pose):
+		return per_variant[pose]
+	pose = _timing_pose(pose)
 	if per_variant.has(pose):
 		return per_variant[pose]
 	if pose in LOOPING:
@@ -1337,6 +1437,16 @@ func _set_cover_pose(family: StringName) -> void:
 	if family == _cover:
 		return
 	_cover = family
+	_play(_action if _action != &"" else _stance)
+
+
+## Sets which weapon family (WEAPON_FAMILIES, or "" for the rifle) every
+## subsequent pose resolves through. Local, like `set_gun`: Unit applies it on
+## every peer from the replicated weapon state (Unit.sync_gun_model).
+func set_weapon_family(family: StringName) -> void:
+	if family == _family:
+		return
+	_family = family
 	_play(_action if _action != &"" else _stance)
 
 
@@ -1494,23 +1604,28 @@ func _play_burst(rounds: int, raised := false) -> void:
 		_play(AIM_HOLD, true)
 	else:
 		_play(BEGIN_SHOOT if begin != &"" else AIM_HOLD, true)
-		await get_tree().create_timer(
-			_phase_time(BEGIN_SHOOT, begin, RAISE_TIME, COVER_RAISE_TIME)).timeout
+		# RAISE_TIME unless the variant times its own raise (VARIANT_LOOP_TIME).
+		await get_tree().create_timer(_phase_time(BEGIN_SHOOT, begin,
+			_authored_duration(BEGIN_SHOOT), COVER_RAISE_TIME)).timeout
 	await _hold_for_barrel()
 	# FIRE has no cover variant BY DESIGN: the unit has already stepped out, so
 	# it fires exactly as it does in the open.
 	_barrel_frozen = true
-	for _i in rounds:
+	for i in rounds:
 		# Restarted, so every round gets its own kick and its own flash.
 		_play(FIRE_SHOOT, true)
-		if _flash:
-			_flash.fire(BURST_CADENCE)
+		# A gun with several barrels fires them in turn, from the first every
+		# burst, so a client's copy of the burst (`_rpc_play_burst`) matches.
+		# Set before `muzzle`: the tracer that signal draws leaves `barrel_tip`.
+		if not _flashes.is_empty():
+			_barrel = i % _flashes.size()
+			_flashes[_barrel].fire(BURST_CADENCE)
 		muzzle.emit()
 		await get_tree().create_timer(BURST_CADENCE).timeout
 	_barrel_frozen = false
 	_play(END_SHOOT if end != &"" else AIM_HOLD, true)
-	await get_tree().create_timer(
-		_phase_time(END_SHOOT, end, SETTLE_TIME, COVER_SETTLE_TIME)).timeout
+	await get_tree().create_timer(_phase_time(END_SHOOT, end,
+		_authored_duration(END_SHOOT), COVER_SETTLE_TIME)).timeout
 	_action = &""
 	_play(_stance)
 
@@ -1534,16 +1649,21 @@ func _hold_for_barrel() -> void:
 ## for it, the plain length otherwise.
 func _phase_time(base: StringName, resolved: StringName, plain: float,
 		in_cover: float) -> float:
-	return in_cover if resolved != &"" and resolved != base else plain
+	# Judged on the cover suffix, not on `resolved != base`: a weapon-family
+	# pose (`begin_shoot_pistol`) is not a step out of cover.
+	var covered := _cover != &"" and String(resolved).ends_with("_%s" % _cover)
+	return in_cover if covered else plain
 
 
 ## Where a shot is DRAWN leaving the weapon: the muzzle flash's mount on the
-## animated rifle, so a tracer starts at the flash. Falls back to
-## `muzzle_origin` for a model with no muzzle marker. Cosmetic only -- anything
-## that has to agree between peers or with LOS reads `muzzle_origin`.
+## animated rifle, so a tracer starts at the flash -- on a gun with several
+## barrels, the one the last round left from. Falls back to `muzzle_origin` for
+## a model with no muzzle marker. Cosmetic only -- anything that has to agree
+## between peers or with LOS reads `muzzle_origin`.
 func barrel_tip() -> Vector3:
-	if _flash != null and _flash.is_inside_tree():
-		return _flash.global_position
+	var flash := _flashes[_barrel] if _barrel < _flashes.size() else _flash
+	if flash != null and flash.is_inside_tree():
+		return flash.global_position
 	return muzzle_origin()
 
 
@@ -1581,7 +1701,7 @@ func _play(base: StringName, restart: bool = false) -> void:
 	var duration := _authored_duration(pose)
 	# A round's kick restarts from its first frame with no blend — blending into
 	# itself would smear the recoil into nothing.
-	var blend := 0.0 if pose == FIRE_SHOOT else BLEND_TIME
+	var blend := 0.0 if _timing_pose(pose) == FIRE_SHOOT else BLEND_TIME
 	for i in _players.size():
 		var player := _players[i]
 		if not player.has_animation(pose):

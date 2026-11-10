@@ -28,6 +28,17 @@ downloadable assets is the grey area). This repo is public — if that becomes a
 concern, the fix is a ZapSplat Gold subscription, which drops both the
 attribution requirement and the redistribution restriction.
 
+**Kenney — Interface Sounds** — https://kenney.nl/assets/interface-sounds
+
+Licence: CC0 1.0 (public domain). No attribution required, so nothing is added
+to `scripts/credits.gd`; the licence text ships beside the files as
+`assets/audio/sfx/ui/License.txt`. Renamed, otherwise unmodified:
+
+| File | Original filename |
+| --- | --- |
+| `assets/audio/sfx/ui/ui_confirm.ogg` | `Audio/switch_007.ogg` |
+| `assets/audio/sfx/ui/ui_denied.ogg` | `Audio/drop_002.ogg` |
+
 ### Room tiles
 
 **Quaternius — Modular Sci-Fi MegaKit (Standard)** — https://quaternius.com
@@ -84,6 +95,12 @@ courtesy). Licence files ship beside each kit.
 | Quaternius "Scifi Pod", "Toilet", "Scifi Computer"; Dipper98 "Sci Fi Engine", "Sci Fi Wall Power Cell" (Poly Pizza) | CC0 | `assets/room_tiles/polypizza_cc0/*.LICENSE.txt` |
 | ambientCG Tiles107, DiamondPlate003, Carpet012, MetalPlates004 | CC0 | `assets/room_tiles/floors/LICENSE.txt` |
 | Poly Haven: 40 photoscanned props (authors per model in the licence file) | CC0 | `assets/room_tiles/polyhaven/LICENSE.txt` |
+
+### Weapons
+
+| Asset | Licence | Where |
+| --- | --- | --- |
+| "Service Pistol" by Mateusz Sadek (Poly Haven, polyhaven.com/a/service_pistol): the sidearm, refitted by `tools/build_pistol.py` | CC0 | `art_src/guns/pistol.blend`, `assets/models/guns/pistol.glb` |
 
 ## Outstanding
 

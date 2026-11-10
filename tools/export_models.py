@@ -9,6 +9,9 @@
     # A gun, from its own .blend: grip at the origin, barrel +Y, top +Z.
     blender.exe -b art_src/guns/rifle.blend -P tools/export_models.py -- --gun rifle
 
+    # A robot's wrist gun: mount point at the origin, barrels +Y, top +Z.
+    blender.exe -b art_src/wrist_guns/wrist_lmg.blend -P tools/export_models.py -- --wrist-gun wrist_lmg
+
     # Everything, each from its own .blend (spawns one Blender per variant).
     blender.exe -b -P tools/export_models.py -- --all
 
@@ -42,6 +45,11 @@ tools/standardize_gun_mount.py); the gun parented under it in the .blend is a
 preview -- it stays in the scene through the export so the left hand's IK can
 still reach `grip_support`, but is left out of the .glb. The game mounts
 whichever gun the unit carries on `weapon_mount`.
+
+WRIST GUNS are the security robot's version (`assets/models/wrist_guns/`): a
+`wrist_mount` Empty on the forearm (tools/rig_wrist_gun.py), a preview gun under
+it that is left out the same way, and one `muzzle_flash`, `muzzle_flash_2`, ...
+marker per barrel on each gun.
 """
 
 import argparse
@@ -62,6 +70,24 @@ OUT_DIR = os.path.join("assets", "models")
 ## Cover reloads: drawn in merc_anim.blend and resolved by unit_visual.gd's cover
 ## chain, but never on render_sprites.py's list because the sprite set skipped them.
 EXTRA_POSES = ["reload_low", "reload_high"]
+
+## Weapon pose families (unit_visual.gd WEAPON_FAMILIES): the same pose set drawn
+## for a weapon held differently from the rifle. Name the Blender action
+## `<pose>_<family>` (`aim_hold_pistol`, `begin_shoot_pistol_low`); every one is
+## optional and the game falls back to the rifle's pose where it is missing. No
+## timing to set: a family pose plays in its base pose's LOOP_TIME/ONE_SHOT_TIME.
+WEAPON_FAMILIES = ["pistol"]
+EXTRA_POSES += ["%s_%s" % (pose, family)
+                for family in WEAPON_FAMILIES
+                for pose in rs.POSES
+                if not pose.endswith(("_low", "_high"))
+                and pose not in ("dead", "downed", "hit_react", "alert_scream",
+                                 "throw_grenade", "melee")]
+# The cover variants of those, kept to the poses that have rifle cover art.
+EXTRA_POSES += ["%s_%s_%s" % (pose, family, cover)
+                for family in WEAPON_FAMILIES
+                for cover in ("low", "high")
+                for pose in ("idle", "begin_shoot", "end_shoot", "reload")]
 
 ## Which .blend each variant is exported from. Piles are listed separately
 ## because they are not models (see export_pile).
@@ -127,10 +153,20 @@ GUNS = {
     "lmg": "art_src/guns/lmg.blend",
     "smg": "art_src/guns/smg.blend",
     "shotgun": "art_src/guns/shotgun.blend",
+    # The sidearm. Same contract as the long guns; its `grip_support` is where
+    # the support palm wraps the trigger hand, not a foregrip.
+    "pistol": "art_src/guns/pistol.blend",
+}
+## Robot wrist guns (scripts/wrist_gun_presets.gd), each its own .blend written
+## by tools/rig_wrist_gun.py, exported to OUT_DIR/wrist_guns/.
+WRIST_GUNS = {
+    "wrist_lmg": "art_src/wrist_guns/wrist_lmg.blend",
 }
 ## The Empty a gun-carrying character holds its gun by. Its `gun` property
 ## names the gun the .blend previews, and becomes the sidecar's default.
 MOUNT = "weapon_mount"
+## The same for a gun bolted to the forearm. A rig has one or the other.
+WRIST_MOUNT = "wrist_mount"
 
 ## THE FREE-TURN BONE CONTRACT (scripts/aim_modifier.gd PROFILES). The game twists
 ## the spine toward the aim and carries the gun by the trigger hand's motion, so
@@ -278,6 +314,8 @@ def export_model(variant, out_dir):
     rs.unlink_missing_images()
     apply_budget(variant)
     poses = pose_actions(variant, character)
+    if variant == "zombie_2" and "run" in poses:
+        close_run_loop(bpy.data.actions["run"])
     # The rest yaw, set once where the sprite renderer set it before every
     # facing. Only Z: the worm's rig lies ~93 degrees about X and that tilt is
     # the model, not a facing.
@@ -287,8 +325,11 @@ def export_model(variant, out_dir):
 
     # The preview gun is HIDDEN, not deleted: the left hand's IK targets its
     # grip_support, and the export bakes that IK into the arm.
-    mount = bpy.data.objects.get(MOUNT)
-    check_aim_rig(variant, character, mount is not None)
+    hand_mount = bpy.data.objects.get(MOUNT)
+    # A wrist gun rides a forearm the spine twist already carries, so it asks
+    # nothing of the `weapon` bone a hand-held gun needs.
+    check_aim_rig(variant, character, hand_mount is not None)
+    mount = hand_mount or bpy.data.objects.get(WRIST_MOUNT)
     gun = None
     if mount is not None:
         gun = mount.get("gun")
@@ -318,6 +359,38 @@ def export_model(variant, out_dir):
     with open(os.path.join(out_dir, variant + ".json"), "w") as f:
         json.dump(sidecar, f, indent=2)
     print("[export_models] wrote %s (%d poses: %s)" % (glb, len(poses), ", ".join(poses)))
+
+
+def close_run_loop(action):
+    """The zombie's run lacks the duplicate first pose its walk already has.
+
+    Add one closing interval, in memory, so glTF interpolates back to that pose
+    instead of snapping at every wrap. UnitVisual still plays the whole cycle
+    in its configured RUN time, keeping its pairing with SwarmUnit.run_speed.
+    """
+    curves = _fcurves(action)
+    start, end = action.frame_range
+    values = {fc: fc.evaluate(start) for fc in curves}
+    if all(abs(values[fc] - fc.evaluate(end)) < 1e-5 for fc in curves):
+        return
+    # Quaternion signs may differ while representing the same rotation. Choose
+    # the sign nearest the last pose to avoid interpolating the long way round.
+    quaternions = {}
+    for fc in curves:
+        if fc.data_path.endswith("rotation_quaternion"):
+            quaternions.setdefault(fc.data_path, []).append(fc)
+    for group in quaternions.values():
+        if sum(values[fc] * fc.evaluate(end) for fc in group) < 0:
+            for fc in group:
+                values[fc] = -values[fc]
+    for fc in curves:
+        fc.keyframe_points[-1].interpolation = 'LINEAR'
+        key = fc.keyframe_points.insert(end + 1, values[fc])
+        key.interpolation = 'LINEAR'
+        fc.update()
+    action.use_frame_range = True
+    action.frame_start, action.frame_end = start, end + 1
+    print("[export_models] closed run loop on frame %g" % (end + 1))
 
 
 def export_pile(variant, out_dir):
@@ -381,9 +454,10 @@ def export_pile(variant, out_dir):
     print("[export_models] wrote %s (%d instances of %s)" % (path, len(instances), PILE_BASE))
 
 
-def export_gun(gun, out_dir):
+def export_gun(gun, out_dir, subdir="guns"):
     """A gun is one static object: the gun mesh at the origin with its
-    `grip_support` and `muzzle_flash` children. No rig, no animation."""
+    `grip_support` and `muzzle_flash` children (a wrist gun: its barrels'
+    `muzzle_flash`, `muzzle_flash_2`, ...). No rig, no animation."""
     root = bpy.data.objects.get(gun)
     if root is None:
         sys.exit("[export_models] %s has no object named %r" % (bpy.data.filepath, gun))
@@ -393,7 +467,7 @@ def export_gun(gun, out_dir):
         if max(w, h) > MAX_TEXTURE:
             s = MAX_TEXTURE / max(w, h)
             image.scale(max(1, int(w * s)), max(1, int(h * s)))
-    out_dir = os.path.join(out_dir, "guns")
+    out_dir = os.path.join(out_dir, subdir)
     os.makedirs(out_dir, exist_ok=True)
     glb = os.path.join(out_dir, gun + ".glb")
     bpy.ops.export_scene.gltf(
@@ -417,6 +491,7 @@ def export_all():
     me = os.path.abspath(__file__)
     jobs = [(blend, "--variant", v) for v, blend in list(MODELS.items()) + list(PILES.items())]
     jobs += [(blend, "--gun", g) for g, blend in GUNS.items()]
+    jobs += [(blend, "--wrist-gun", g) for g, blend in WRIST_GUNS.items()]
     for blend, flag, name in jobs:
         print("[export_models] --- %s from %s" % (name, blend))
         result = subprocess.run([blender, "-b", blend, "-P", me, "--", flag, name])
@@ -429,6 +504,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--variant")
     parser.add_argument("--gun")
+    parser.add_argument("--wrist-gun")
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--out", default=OUT_DIR)
     args = parser.parse_args(argv)
@@ -436,12 +512,14 @@ def main():
         export_all()
     elif args.gun:
         export_gun(args.gun, os.path.abspath(args.out))
+    elif args.wrist_gun:
+        export_gun(args.wrist_gun, os.path.abspath(args.out), "wrist_guns")
     elif args.variant in PILES:
         export_pile(args.variant, os.path.abspath(args.out))
     elif args.variant:
         export_model(args.variant, os.path.abspath(args.out))
     else:
-        sys.exit("pass --variant <name>, --gun <name> or --all")
+        sys.exit("pass --variant <name>, --gun <name>, --wrist-gun <name> or --all")
 
 
 if __name__ == "__main__":

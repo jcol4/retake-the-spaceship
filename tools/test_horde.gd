@@ -5,8 +5,9 @@ extends SceneTree
 ##   godot --headless --path . --script res://tools/test_horde.gd
 ##
 ## Headless, so the horde's playback is skipped (nothing would be drawn) — what is
-## asserted is the RULES side: who is drawn, who acts in the horde's one draw, and
-## the walk-phase arithmetic the playback runs on (`TickPlayback.horde_starts`).
+## asserted is the RULES side: who is drawn, who acts in the horde's one draw, how
+## the zombie tier squeezes past other aliens, and the corner-cut route the crowd
+## playback steers along (`TickPlayback.crowd_route`).
 ##
 ## Scripts are load()ed and locals stay untyped for the reason test_cerberus.gd
 ## gives: a --script tool is compiled before the class registry and autoloads.
@@ -37,7 +38,10 @@ func _initialize() -> void:
 	await _check_horde_wakes_and_acts_as_one()
 	await _check_the_huddle_all_moves()
 	await _check_label_follows_the_model()
-	_check_walk_starts()
+	await _check_squeezes_down_a_corridor()
+	await _check_pack_wraps_its_prey()
+	await _check_shot_carries_into_a_shared_tile()
+	_check_crowd_route()
 
 	print("")
 	if _failures == 0:
@@ -145,10 +149,10 @@ func _check_the_huddle_all_moves() -> void:
 		tiles[pack[i].grid_pos] = true
 	_check(stuck.is_empty(), "every body in the huddle closes in on its first draw (stuck: %s)" % [stuck])
 	_check(tiles.size() == pack.size(), "and no two end on one tile")
-	var flags_clear := true
+	var held := true
 	for swarm in pack:
-		flags_clear = flags_clear and not swarm.in_horde_turn and not swarm.waiting
-	_check(flags_clear, "and none is left marked as mid-horde-turn or waiting")
+		held = held and _grid.get_tile(swarm.grid_pos).occupant == swarm
+	_check(held, "and every body holds the tile it ended on")
 	_turns.pool.clear()
 	_free(pack + [soldier])
 
@@ -171,31 +175,96 @@ func _check_label_follows_the_model() -> void:
 	_free([swarm])
 
 
-## The walk phase's arithmetic: bodies start at their offsets, a body's next step
-## starts when its last one ends, and a step onto a tile someone is leaving
-## waits for them to be halfway off it.
-func _check_walk_starts() -> void:
-	var EV = load("res://scripts/exploration_rules.gd")
-	var lead = load(SWARM).instantiate()
-	var tail = load(SWARM).instantiate()
-	var a := Vector3i(6, 0, 11)
-	var b := Vector3i(7, 0, 11)
-	var c := Vector3i(8, 0, 11)
-	# The tail is offset EARLIER than the lead, so only the vacate rule holds it back.
-	var events := [
-		{"unit": lead, "kind": EV.EV_STEP, "from": b, "to": c},
-		{"unit": tail, "kind": EV.EV_STEP, "from": a, "to": b},
-		{"unit": lead, "kind": EV.EV_STEP, "from": c, "to": c + Vector3i(1, 0, 0)},
-	]
-	var offsets := {lead: 0.2, tail: 0.0}
-	var starts: Dictionary = _playback_script.horde_starts(events, [0, 1, 2], offsets)
-	var step: float = _grid.grid_to_world(b).distance_to(_grid.grid_to_world(c)) / lead.move_speed
-	_check(is_equal_approx(starts[0], 0.2), "the lead starts at its offset (%.2f)" % starts[0])
-	_check(is_equal_approx(starts[1], 0.2 + step * 0.5),
-		"the tail waits until the lead is halfway off the tile (%.2f)" % starts[1])
-	_check(is_equal_approx(starts[2], 0.2 + step), "the lead's next step follows its last (%.2f)" % starts[2])
-	lead.free()
-	tail.free()
+## A zombie walks THROUGH another alien in a one-wide corridor — here a
+## sleeping mate not in its horde — and ends on a tile of its own beyond it,
+## without taking the tile from the one it passed.
+func _check_squeezes_down_a_corridor() -> void:
+	var soldier = await _spawn(PLAYER, Vector3i(23, 0, 14))
+	var sleeper = await _spawn(SWARM, Vector3i(20, 0, 14), AlienPresets.swarm("Sleeper"))
+	var runner = await _spawn(SWARM, Vector3i(17, 0, 14), AlienPresets.swarm("Runner"))
+	runner.come_under_fire(soldier)
+	runner.begin_activation()
+	await runner.take_turn()
+	_check(runner.grid_pos.x > 20, "the zombie got past the alien in the corridor (at %s)" % [runner.grid_pos])
+	_check(runner.grid_pos != sleeper.grid_pos, "and did not end on its tile")
+	_check(_grid.get_tile(sleeper.grid_pos).occupant == sleeper, "which the one it passed still holds")
+	_check(_grid.get_tile(runner.grid_pos).occupant == runner, "and it holds the tile it ended on")
+	_free([soldier, sleeper, runner])
+
+
+## A pack closing on its prey spreads round it — each body takes a free tile
+## beside the soldier rather than all queueing for the nearest one.
+func _check_pack_wraps_its_prey() -> void:
+	var soldier = await _spawn(PLAYER, Vector3i(5, 0, 10))
+	var pack: Array = []
+	for at in [Vector3i(8, 0, 11), Vector3i(9, 0, 11), Vector3i(10, 0, 11),
+			Vector3i(8, 0, 12), Vector3i(9, 0, 12), Vector3i(10, 0, 12)]:
+		var swarm = load(SWARM).instantiate()
+		swarm.stats = AlienPresets.swarm("Wrap_%d" % pack.size())
+		swarm.horde_id = "wrap"
+		swarm.name = "Wrap_%d" % pack.size()
+		swarm.position = _grid.grid_to_world(at)
+		root.add_child(swarm)
+		pack.append(swarm)
+	await process_frame
+	pack[0].come_under_fire(soldier)
+	_turns.pool.clear()
+	_turns.pool.append_array(pack)
+	_turns.pool.erase(pack[0])
+	var mates: Array = _turns._horde_mates(pack[0])
+	pack[0].begin_activation()
+	await _turns._horde_turn(pack[0], mates)
+	var beside := 0
+	var tiles := {}
+	for swarm in pack:
+		if _grid.is_melee_adjacent(swarm.grid_pos, soldier.grid_pos):
+			beside += 1
+		tiles[swarm.grid_pos] = true
+	_check(beside == pack.size(), "every body of the pack ends beside its prey (%d of %d)" % [beside, pack.size()])
+	_check(tiles.size() == pack.size(), "each on a tile of its own")
+	_turns.pool.clear()
+	_free(pack + [soldier])
+
+
+## A round into a zombie that is squeezing past another alien carries on into
+## that one: it is the first body behind the target (Penetration.trace).
+func _check_shot_carries_into_a_shared_tile() -> void:
+	var soldier = await _spawn(PLAYER, Vector3i(15, 0, 14))
+	var mate = await _spawn(SWARM, Vector3i(19, 0, 14), AlienPresets.swarm("Pressed"))
+	var runner = await _spawn(SWARM, Vector3i(18, 0, 14), AlienPresets.swarm("Squeezer"))
+	runner.grid_pos = mate.grid_pos  # mid-walk, on the tile it is passing through
+	runner.global_position = mate.global_position
+	var line: Array = load("res://scripts/penetration.gd").trace(soldier, runner, true)
+	var order: Array = []
+	for entry in line:
+		if entry.has("unit"):
+			order.append(entry["unit"])
+	var at := order.find(runner)
+	_check(at >= 0 and at + 1 < order.size() and order[at + 1] == mate,
+		"the shot at the squeezer has the alien sharing its tile next behind it")
+	runner.grid_pos = Vector3i(18, 0, 14)
+	_free([soldier, mate, runner])
+
+
+## The crowd playback's route: corners cut across open floor, never across a wall.
+func _check_crowd_route() -> void:
+	var open: Array[Vector3] = []
+	for at in [Vector3i(1, 0, 9), Vector3i(2, 0, 9), Vector3i(3, 0, 9), Vector3i(3, 0, 10), Vector3i(3, 0, 11)]:
+		open.append(_grid.grid_to_world(at))
+	var cut: Array = _playback_script.crowd_route(open)
+	_check(cut.size() < open.size() and cut[0] == open[0] and cut[-1] == open[-1],
+		"across open floor the route cuts its corner (%d points from %d)" % [cut.size(), open.size()])
+	# Down through the doorway at (5, 13) and along the corridor: the wall either
+	# side of the door must not be cut across.
+	var door: Array[Vector3] = []
+	for at in [Vector3i(4, 0, 11), Vector3i(5, 0, 12), Vector3i(5, 0, 13), Vector3i(5, 0, 14),
+			Vector3i(6, 0, 14), Vector3i(7, 0, 14)]:
+		door.append(_grid.grid_to_world(at))
+	var through: Array = _playback_script.crowd_route(door)
+	var clear := true
+	for k in range(1, through.size()):
+		clear = clear and _playback_script._walkable_line(through[k - 1], through[k])
+	_check(clear and through[-1] == door[-1], "through a doorway every leg stays on walkable floor (%d legs)" % (through.size() - 1))
 
 
 func _spawn(scene_path: String, at: Vector3i, stats = null):
