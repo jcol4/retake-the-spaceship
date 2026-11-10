@@ -8,7 +8,8 @@ func _initialize() -> void:
 	cfg.width = 72
 	cfg.depth = 48
 	cfg.profile_primary = RoomTypes.Zone.HABITATION
-	_check(cfg.deck_source == MapGenerator.DeckSource.PLOT, "Plots are the default")
+	_check(cfg.deck_source == MapGenerator.DeckSource.GENERATED, "Procedural maps are the default")
+	cfg.deck_source = MapGenerator.DeckSource.PLOT
 	for seed_value in 20:
 		var data := MapGenerator.generate(seed_value, cfg)
 		_check(data.layout_errors.is_empty(), "Generator integrates authored layout")

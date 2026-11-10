@@ -101,9 +101,15 @@ Set `DECK_EDITOR_SCREENSHOT` to an output PNG path and run the editor test witho
 `tools/create_starter_parcels.gd` rebuilds the examples; it overwrites those three
 resources, so do not run it over teammates' authored edits.
 
-Plots are the default in `MapGenerator.Config`. Missing size/zone content produces
-`MapData.layout_errors` and an error; it never falls back to procedural geometry.
-For procedural development use `-- --deck-source=generated` or the HUD settings
-checkbox **Dev: procedural decks (next mission)**. `--deck-source=plot` overrides
-the stored debug setting. The Small starter can be played with a deployment deck
-size of Small; the default `--seed` path requests Medium, which needs authored content.
+Procedural maps are the default. On the hub's **Contracts** tab, **Map gen** is
+checked for the established procedural generator. Uncheck it to try authored
+plots/parcels. Changing the checkbox refreshes only the contract board and clears
+the selected contract. Authored offers are restricted to available playable plots
+(currently the Small starter). The campaign remembers the checkbox, and each offer
+and deployment stores its map source; co-op uses the host's choice.
+
+The old HUD debug toggle has been replaced by this contract option. For command-line
+development, `-- --seed=7` uses the procedural generator; `--deck-source=plot` opts a
+command-line seed into plots. The default seed dimensions are Medium, which still
+need authored content if you select plot mode. Missing authored content is reported
+as an error and campaign launch refuses an empty map before booking the squad.

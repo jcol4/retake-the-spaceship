@@ -441,6 +441,7 @@ func _build_contracts() -> Control:
 	var list := _list()
 	var s: CampaignState = Campaign.state
 	list.add_child(_dim_label("The objective is optional and pays only if someone extracts with it done. The board is re-rolled after each mission."))
+	_map_gen_option(list)
 	for i in s.contracts.size():
 		var offer: ContractOffer = s.contracts[i]
 		var index := i
@@ -456,6 +457,7 @@ func _build_contracts() -> Control:
 func _build_coop_contracts() -> Control:
 	var list := _list()
 	var host := CoopLobby.is_host()
+	_map_gen_option(list, not host)
 	var scale := CampaignEconomy.squad_scale(CoopLobby.squad_size())
 	list.add_child(_dim_label("The host's contract board. %s The payout is split evenly between every player, and it scales up when the squad is bigger than four." % (
 		"Your party votes; you choose." if host else "Vote for the one you want; the host chooses.")))
@@ -479,6 +481,26 @@ func _build_coop_contracts() -> Control:
 					CoopLobby.vote(index)
 					_after("", "Voted.")))
 	return list
+
+
+func _map_gen_option(list: Control, guest := false) -> void:
+	var check := CheckBox.new()
+	check.name = "MapGen"
+	check.text = "Map gen"
+	check.tooltip_text = "Checked: procedural maps. Unchecked: authored plots and parcels (experimental). Changing this refreshes the contract board."
+	check.button_pressed = Campaign.state.map_gen
+	if guest and not CoopLobby.board.is_empty():
+		check.button_pressed = int(CoopLobby.board[0].get("deck_source", MapGenerator.DeckSource.GENERATED)) == MapGenerator.DeckSource.GENERATED
+	check.disabled = guest or (CoopLobby.in_lobby() and CoopLobby.in_mission())
+	check.toggled.connect(_on_map_gen_toggled)
+	list.add_child(check)
+	list.add_child(_dim_label("Procedural maps" if check.button_pressed else "Authored plots / parcels (experimental; available authored decks only)"))
+
+
+func _on_map_gen_toggled(enabled: bool) -> void:
+	var err := Campaign.set_map_gen(enabled)
+	if err == "": _offer_index = -1
+	_after(err, "Contract board refreshed. Choose a contract.")
 
 
 # --- Deploy -----------------------------------------------------------------------

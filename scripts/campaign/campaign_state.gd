@@ -56,6 +56,8 @@ var medical: int = 0
 ## the start), never on load — they are saved, so quitting to the title cannot
 ## reroll them.
 var contracts: Array[ContractOffer] = []
+## Contract selection: checked Map gen uses the established procedural layout.
+var map_gen := true
 ## [{"record": SoldierRecord, "price": int}]
 var recruits: Array[Dictionary] = []
 var next_id: int = 1
@@ -111,9 +113,14 @@ func refresh_offers() -> void:
 		var unit_class: int = rng.randi_range(0, UnitStats.UnitClass.size() - 1)
 		var rec := SoldierRecord.roll(unit_class as UnitStats.UnitClass, _unique_name(), _new_id(), rng)
 		recruits.append({"record": rec, "price": CampaignEconomy.recruit_price(rec)})
+	refresh_contracts()
+
+
+func refresh_contracts() -> void:
 	contracts.clear()
 	for _i in CampaignEconomy.CONTRACT_OFFERS:
-		contracts.append(ContractOffer.generate(rng))
+		var offer := ContractOffer.generate(rng, MapGenerator.DeckSource.GENERATED if map_gen else MapGenerator.DeckSource.PLOT)
+		if offer != null: contracts.append(offer)
 
 
 func _new_id() -> String:
@@ -820,6 +827,7 @@ func to_dict() -> Dictionary:
 		"next_id": next_id, "missions_played": missions_played,
 		"roster": recs, "attachments": att, "ammo": unlocked_ammo.duplicate(),
 		"contracts": offers, "recruits": cands,
+		"map_gen": map_gen,
 		"in_mission": in_mission.duplicate(true),
 		"away": away.duplicate(true),
 		"pending_reports": pending_reports.duplicate(true),
@@ -830,6 +838,7 @@ func to_dict() -> Dictionary:
 ## The inverse of `to_dict`, for a dict whose version has already been checked.
 static func from_dict(d: Dictionary) -> CampaignState:
 	var s := CampaignState.new()
+	s.map_gen = bool(d.get("map_gen", true))
 	s.credits = int(d.get("credits", 0))
 	s.grenades = int(d.get("grenades", 0))
 	s.medical = int(d.get("medical", 0))
@@ -857,6 +866,10 @@ static func from_dict(d: Dictionary) -> CampaignState:
 	s.pending_reports = _ints(d.get("pending_reports", {}))
 	s.rng.seed = String(d.get("rng_seed", "0")).to_int()
 	s.rng.state = String(d.get("rng_state", "0")).to_int()
+	# Repair empty offers saved by the earlier plot-default build, without
+	# changing the roster, recruits, inventory or mission accounting.
+	if not d.has("map_gen") and s.contracts.any(func(o: ContractOffer) -> bool: return o.room_count <= 0 or o.hangar_count <= 0):
+		s.refresh_contracts()
 	return s
 
 

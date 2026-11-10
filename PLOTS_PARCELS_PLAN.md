@@ -1,5 +1,11 @@
 # Plots & Parcels: Authored Deck Layout Plan
 
+**Status: experimental opt-in.** The user's later request supersedes D2's default:
+procedural generation is the default again. The Contracts screen's **Map gen**
+checkbox chooses procedural maps when checked and authored plots/parcels when
+unchecked. Authored contracts use available playable plots. See
+`PLOTS_PARCELS_PROGRESS.md` for the implemented behavior and validation.
+
 Written 2026-11-09 on branch `3d-models`. **Audience: whoever implements this (an agent or a
 developer), and the teammate who will author content with the editor.** It replaces procedural
 deck layout with an XCOM 2-style system: hand-authored **plots** (deck shells) with **slots**

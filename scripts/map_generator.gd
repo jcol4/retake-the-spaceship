@@ -20,7 +20,7 @@ extends RefCounted
 enum DeckSource { PLOT, GENERATED }
 
 class Config:
-	var deck_source: int = DeckSource.PLOT
+	var deck_source: int = DeckSource.GENERATED
 	var enemy_faction: StringName = &"aliens"
 	# 84x56: the Medium contract (CampaignEconomy.DECK_DIMENSIONS), one step up
 	# from 72x48 when rooms got types (ROOM_THEMES_PLAN.md B.2) — a themed deck

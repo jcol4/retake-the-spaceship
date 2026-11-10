@@ -68,7 +68,6 @@ class NoiseSpy:
 
 func _initialize() -> void:
 	await process_frame
-	root.get_node("GameSettings").generated_decks = true # Explicit legacy generator coverage.
 	_grid = root.get_node_or_null("GridManager")
 	_em = root.get_node_or_null("ExtractionManager")
 	_om = root.get_node_or_null("ObjectiveManager")

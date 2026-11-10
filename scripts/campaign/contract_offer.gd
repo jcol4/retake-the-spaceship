@@ -34,12 +34,15 @@ var room_count: int = 0
 ## -1 preserves seed-rolled profiles for offers saved before themed rooms.
 var primary: int = -1
 var secondary: int = -1
+## Stored on the offer and deployment, so local preferences cannot change its map.
+var deck_source: int = MapGenerator.DeckSource.GENERATED
 
 
 ## A fresh offer off the campaign's RNG. Seeds are 31-bit so they survive JSON
 ## (a double holds them exactly) and an int RPC argument unchanged.
-static func generate(rng: RandomNumberGenerator) -> ContractOffer:
+static func generate(rng: RandomNumberGenerator, source: int = MapGenerator.DeckSource.GENERATED) -> ContractOffer:
 	var o := ContractOffer.new()
+	o.deck_source = source
 	o.type = OFFERED_TYPES[rng.randi_range(0, OFFERED_TYPES.size() - 1)]
 	o.size = _weighted(CampaignEconomy.DECK_SIZE_WEIGHTS, rng)
 	if o.size != CampaignEconomy.DeckSize.SMALL:
@@ -60,9 +63,29 @@ static func generate(rng: RandomNumberGenerator) -> ContractOffer:
 				break
 		var options: Array = DeckLayout.SECONDARY_OPTIONS[o.primary]
 		o.secondary = options[rng.randi_range(0, options.size() - 1)]
+	if source == MapGenerator.DeckSource.PLOT:
+		# Experimental offers use available authored content instead of rolling an
+		# unsupported size/zone and deploying an empty deck.
+		var plots := PlotAssembler.resources("res://maps/plots")
+		var parcels := PlotAssembler.resources("res://maps/parcels")
+		var available: Array[PlotData] = []
+		for plot: PlotData in plots:
+			if DeckValidator.plot(plot, parcels).all(func(i: Dictionary) -> bool: return not i.hard):
+				available.append(plot)
+		if available.is_empty(): return null
+		var plot := available[rng.randi_range(0, available.size() - 1)]
+		o.size = plot.deck_size
+		o.primary = -1
+		o.secondary = -1
+		for slot in plot.slots:
+			if slot.zone != ParcelData.ZONE_HANGAR:
+				o.primary = slot.zone
+				break
+	var valid := false
 	for _attempt in SEED_ATTEMPTS:
 		o.map_seed = rng.randi() & 0x7fffffff
-		var data := MapGenerator.generate(o.map_seed, config_for(o.size, o.primary, o.secondary, o.type))
+		var data := MapGenerator.generate(o.map_seed, config_for(o.size, o.primary, o.secondary, o.type, source))
+		if not data.layout_errors.is_empty(): continue
 		var types := Contract.supported_types(data)
 		if types.is_empty():
 			continue
@@ -70,21 +93,17 @@ static func generate(rng: RandomNumberGenerator) -> ContractOffer:
 			o.type = types[0]
 		o.hangar_count = data.hangars.size()
 		o.room_count = data.rooms.size() - data.corridors.size()
+		valid = true
 		break
+	if not valid: return null
 	o.contract_seed = rng.randi() & 0x7fffffff
 	o.payout = CampaignEconomy.payout_for(o.type, o.size)
 	return o
 
 
-static func config_for(p_size: int, p_primary: int = -1, p_secondary: int = -1, p_objective: int = -1) -> MapGenerator.Config:
+static func config_for(p_size: int, p_primary: int = -1, p_secondary: int = -1, p_objective: int = -1, p_source: int = MapGenerator.DeckSource.GENERATED) -> MapGenerator.Config:
 	var cfg := MapGenerator.Config.new()
-	var tree := Engine.get_main_loop() as SceneTree
-	var settings := tree.root.get_node_or_null("GameSettings") if tree != null else null
-	if OS.is_debug_build() and settings != null and settings.get("generated_decks"):
-		cfg.deck_source = MapGenerator.DeckSource.GENERATED
-	for arg in OS.get_cmdline_user_args():
-		if arg == "--deck-source=generated": cfg.deck_source = MapGenerator.DeckSource.GENERATED
-		elif arg == "--deck-source=plot": cfg.deck_source = MapGenerator.DeckSource.PLOT
+	cfg.deck_source = p_source
 	var dims: Vector2i = CampaignEconomy.DECK_DIMENSIONS.get(p_size, CampaignEconomy.DECK_DIMENSIONS[CampaignEconomy.DeckSize.MEDIUM])
 	cfg.width = dims.x
 	cfg.depth = dims.y
@@ -143,7 +162,7 @@ func profile_name() -> String:
 ## The deck as a deployment names it (see Campaign / TestMap): generated from a
 ## seed at a size.
 func deck() -> Dictionary:
-	return {"kind": "generated", "seed": map_seed, "size": size, "primary": primary, "secondary": secondary, "objective": type}
+	return {"kind": "generated", "seed": map_seed, "size": size, "primary": primary, "secondary": secondary, "objective": type, "deck_source": deck_source}
 
 
 func to_dict() -> Dictionary:
@@ -151,6 +170,7 @@ func to_dict() -> Dictionary:
 		"type": type, "size": size, "map_seed": map_seed, "contract_seed": contract_seed,
 		"payout": payout, "hangars": hangar_count, "rooms": room_count,
 		"primary": primary, "secondary": secondary,
+		"deck_source": deck_source,
 	}
 
 
@@ -165,6 +185,7 @@ static func from_dict(d: Dictionary) -> ContractOffer:
 	o.room_count = int(d.get("rooms", 0))
 	o.primary = int(d.get("primary", -1))
 	o.secondary = int(d.get("secondary", -1))
+	o.deck_source = int(d.get("deck_source", MapGenerator.DeckSource.GENERATED))
 	return o
 
 

@@ -45,7 +45,6 @@ var _rules
 
 func _initialize() -> void:
 	await process_frame
-	root.get_node("GameSettings").generated_decks = true # Explicit legacy generator coverage.
 	_state = load("res://scripts/campaign/campaign_state.gd")
 	_record = load("res://scripts/campaign/soldier_record.gd")
 	_econ = load("res://scripts/campaign/campaign_economy.gd")

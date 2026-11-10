@@ -1358,13 +1358,6 @@ func _on_settings_pressed() -> void:
 ## Fullscreen and Close. "Interface" is the press clunk (Sfx.ui, on the UI bus).
 func _build_volume_sliders() -> void:
 	var vbox := settings_close.get_parent()
-	if OS.is_debug_build():
-		var generated := CheckBox.new()
-		generated.text = "Dev: procedural decks (next mission)"
-		generated.button_pressed = GameSettings.generated_decks
-		generated.toggled.connect(GameSettings.set_generated_decks)
-		vbox.add_child(generated)
-		vbox.move_child(generated, settings_close.get_index())
 	for spec: Array in [
 			["Sound effects", "sfx_volume", GameSettings.set_sfx_volume],
 			["Music", "music_volume", GameSettings.set_music_volume],

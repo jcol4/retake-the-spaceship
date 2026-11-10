@@ -123,6 +123,25 @@ func save() -> void:
 		push_error("Campaign: could not save to %s (%s)" % [save_path, error_string(err)])
 
 
+func set_map_gen(enabled: bool) -> String:
+	if state == null: return "No campaign loaded"
+	if CoopLobby.in_lobby() and not CoopLobby.is_host(): return "The host chooses the map method"
+	if CoopLobby.in_mission(): return "Finish the current mission before changing maps"
+	if state.map_gen == enabled: return ""
+	var previous := state.contracts.duplicate()
+	var previous_rng := state.rng.state
+	state.map_gen = enabled
+	state.refresh_contracts()
+	if state.contracts.is_empty():
+		state.map_gen = not enabled
+		state.contracts = previous
+		state.rng.state = previous_rng
+		return "No playable authored plots are available. Keep Map gen checked."
+	save()
+	CoopLobby.publish_board()
+	return ""
+
+
 ## Deletes the slot (game over, A8: one slot and no way back).
 func wipe() -> void:
 	if persistent and save_path != "":
@@ -197,6 +216,10 @@ func launch(record_ids: Array, offer_index: int, grenade_counts: Array = []) -> 
 		return err
 	deployment = state.make_deployment(record_ids, offer_index, grenade_counts, randi() & 0x7fffffff)
 	_apply_cmdline_deck()
+	var map_error := _deck_problem(deployment.get("deck", {}))
+	if map_error != "":
+		deployment = {}
+		return map_error
 	state.begin_mission(deployment)
 	save()
 	deployment_fresh = true
@@ -229,11 +252,27 @@ func _apply_cmdline_deck() -> void:
 		if arg.begins_with("--seed="):
 			deployment["deck"] = {"kind": "generated", "seed": int(arg.trim_prefix("--seed=")),
 				"size": CampaignEconomy.DeckSize.MEDIUM}
+			for source_arg in OS.get_cmdline_user_args():
+				if source_arg == "--deck-source=plot": deployment.deck["deck_source"] = MapGenerator.DeckSource.PLOT
+				elif source_arg == "--deck-source=generated": deployment.deck["deck_source"] = MapGenerator.DeckSource.GENERATED
 			return
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--map="):
 			deployment["deck"] = {"kind": "layout", "path": "res://maps/%s.txt" % arg.trim_prefix("--map=")}
 			return
+
+
+## Refuse before booking soldiers/grenades if authored content has been removed
+## or changed since the board was dealt. Never send an empty deck into a mission.
+func _deck_problem(deck: Dictionary) -> String:
+	if deck.get("kind", "") != "generated": return ""
+	var cfg := ContractOffer.config_for(int(deck.get("size", CampaignEconomy.DeckSize.MEDIUM)),
+		int(deck.get("primary", -1)), int(deck.get("secondary", -1)), int(deck.get("objective", -1)),
+		int(deck.get("deck_source", MapGenerator.DeckSource.GENERATED)))
+	var data := MapGenerator.generate(int(deck.get("seed", 0)), cfg)
+	if not data.layout_errors.is_empty(): return "Cannot deploy: " + "; ".join(data.layout_errors)
+	if data.cells.is_empty() or data.spawns(MapData.Spawn.PLAYER).is_empty(): return "Cannot deploy: the map has no playable insertion"
+	return ""
 
 
 ## The deployment's contract offer, or null.
@@ -338,6 +377,10 @@ func launch_coop(order: Array, members: Dictionary, offer_index: int) -> String:
 	deployment = CoopRules.merge_deployment(order, members, state.contracts[offer_index].to_dict(),
 		randi() & 0x7fffffff, CoopRules.new_mission_id())
 	_apply_cmdline_deck()
+	var map_error := _deck_problem(deployment.get("deck", {}))
+	if map_error != "":
+		deployment = {}
+		return map_error
 	state.begin_coop(deployment, my_key(), true)
 	save()
 	write_checkpoint({})

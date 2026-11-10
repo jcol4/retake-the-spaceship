@@ -61,7 +61,8 @@ func build_deck(deck: Dictionary) -> bool:
 		"generated":
 			build_generated(int(deck.get("seed", 0)), ContractOffer.config_for(
 				int(deck.get("size", CampaignEconomy.DeckSize.MEDIUM)),
-				int(deck.get("primary", -1)), int(deck.get("secondary", -1)), int(deck.get("objective", -1))))
+				int(deck.get("primary", -1)), int(deck.get("secondary", -1)), int(deck.get("objective", -1)),
+				int(deck.get("deck_source", MapGenerator.DeckSource.GENERATED))))
 			return true
 		"layout":
 			build_layout(String(deck.get("path", layout_path)))
@@ -97,12 +98,11 @@ func generated_seed() -> Variant:
 
 
 func build_generated(map_seed: int, cfg: MapGenerator.Config = null) -> void:
-	if cfg == null: cfg = MapGenerator.Config.new()
-	if OS.is_debug_build() and GameSettings.generated_decks:
-		cfg.deck_source = MapGenerator.DeckSource.GENERATED
-	for arg in OS.get_cmdline_user_args():
-		if arg == "--deck-source=generated": cfg.deck_source = MapGenerator.DeckSource.GENERATED
-		elif arg == "--deck-source=plot": cfg.deck_source = MapGenerator.DeckSource.PLOT
+	if cfg == null:
+		cfg = MapGenerator.Config.new()
+		for arg in OS.get_cmdline_user_args():
+			if arg == "--deck-source=generated": cfg.deck_source = MapGenerator.DeckSource.GENERATED
+			elif arg == "--deck-source=plot": cfg.deck_source = MapGenerator.DeckSource.PLOT
 	build(MapGenerator.generate(map_seed, cfg))
 
 

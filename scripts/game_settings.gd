@@ -21,12 +21,6 @@ var ui_volume: float = 1.0
 ## The co-op colour this player last picked, as an index into
 ## CoopPlayers.PALETTE. -1: never picked, so take the default for their slot.
 var preferred_color: int = -1
-## Development option; applies to the next deck built, never changes a live map.
-var generated_decks := false
-
-func set_generated_decks(value: bool) -> void:
-	generated_decks = value
-	_save()
 
 
 func _ready() -> void:
@@ -104,7 +98,6 @@ func _load() -> void:
 	music_volume = cfg.get_value("audio", "music", 0.7)
 	ui_volume = cfg.get_value("audio", "ui", 1.0)
 	preferred_color = cfg.get_value("coop", "color", -1)
-	generated_decks = cfg.get_value("debug", "generated_decks", false)
 
 
 func _save() -> void:
@@ -114,5 +107,4 @@ func _save() -> void:
 	cfg.set_value("audio", "music", music_volume)
 	cfg.set_value("audio", "ui", ui_volume)
 	cfg.set_value("coop", "color", preferred_color)
-	cfg.set_value("debug", "generated_decks", generated_decks)
 	cfg.save(SAVE_PATH)
