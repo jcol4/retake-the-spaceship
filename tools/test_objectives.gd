@@ -67,6 +67,8 @@ class NoiseSpy:
 
 
 func _initialize() -> void:
+	await process_frame
+	root.get_node("GameSettings").generated_decks = true # Explicit legacy generator coverage.
 	_grid = root.get_node_or_null("GridManager")
 	_em = root.get_node_or_null("ExtractionManager")
 	_om = root.get_node_or_null("ObjectiveManager")
@@ -402,7 +404,7 @@ func _check_placement() -> void:
 	var far_ok := true
 	var vip_ok := true
 	for s in range(1, DECKS + 1):
-		var data = gen.generate(s)
+		var data = gen.generate(s, load("res://tools/generated_test_config.gd").make())
 		var types: Array = _contract.supported_types(data)
 		if types.has(_contract.Type.HOLD):
 			hold_ok += 1
@@ -437,11 +439,11 @@ func _check_placement() -> void:
 	_check(far_ok, "in the farthest third of eligible terminal rooms by path distance")
 	_check(vip_ok, "the VIP lies on reachable floor outside every hangar, named")
 	seed(77)
-	var a = _contract.choose(gen.generate(12))
+	var a = _contract.choose(gen.generate(12, load("res://tools/generated_test_config.gd").make()))
 	seed(77)
-	var b = _contract.choose(gen.generate(12))
+	var b = _contract.choose(gen.generate(12, load("res://tools/generated_test_config.gd").make()))
 	_check(a.to_dict() == b.to_dict(), "the same seed chooses the same contract (co-op), Hold/Recover included")
-	var wire = _contract.from_dict(bytes_to_var(var_to_bytes(_contract.make(_contract.Type.RECOVER, gen.generate(3)).to_dict())))
+	var wire = _contract.from_dict(bytes_to_var(var_to_bytes(_contract.make(_contract.Type.RECOVER, gen.generate(3, load("res://tools/generated_test_config.gd").make())).to_dict())))
 	_check(wire.vip_name != "" and wire.type == _contract.Type.RECOVER, "the VIP's name rides the contract's wire form")
 	var offer_script = load("res://scripts/campaign/contract_offer.gd")
 	_check(offer_script.OFFERED_TYPES.has(_contract.Type.HOLD) and offer_script.OFFERED_TYPES.has(_contract.Type.RECOVER),

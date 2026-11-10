@@ -42,7 +42,7 @@ func _ready() -> void:
 		return
 	var seed_arg: Variant = _cmdline_seed()
 	if seed_arg != null:
-		build(MapGenerator.generate(seed_arg))
+		build_generated(seed_arg)
 		# The same deck a deployment's command-line override names
 		# (Campaign._apply_cmdline_deck), so main.gd need not build it twice.
 		built_deck = {"kind": "generated", "seed": seed_arg, "size": CampaignEconomy.DeckSize.MEDIUM}
@@ -97,6 +97,12 @@ func generated_seed() -> Variant:
 
 
 func build_generated(map_seed: int, cfg: MapGenerator.Config = null) -> void:
+	if cfg == null: cfg = MapGenerator.Config.new()
+	if OS.is_debug_build() and GameSettings.generated_decks:
+		cfg.deck_source = MapGenerator.DeckSource.GENERATED
+	for arg in OS.get_cmdline_user_args():
+		if arg == "--deck-source=generated": cfg.deck_source = MapGenerator.DeckSource.GENERATED
+		elif arg == "--deck-source=plot": cfg.deck_source = MapGenerator.DeckSource.PLOT
 	build(MapGenerator.generate(map_seed, cfg))
 
 

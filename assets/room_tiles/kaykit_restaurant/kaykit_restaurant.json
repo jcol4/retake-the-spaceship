@@ -26,7 +26,7 @@
 		{"id": "kr_chair_b", "file": "gltf/chair_B.gltf", "socket": "furniture_chair", "tier": "dressing", "footprint": [1, 1], "scale": [0.75, 0.75, 0.75], "offset": [0, 0, 0.017], "weight": 2},
 		{"id": "kr_stool", "file": "gltf/chair_stool.gltf", "socket": "furniture_chair", "tier": "dressing", "footprint": [1, 1], "scale": [0.75, 0.75, 0.75], "offset": [0, 0, 0], "weight": 1},
 
-		{"id": "kr_dishrack", "file": "gltf/dishrack_plates.gltf", "socket": "dressing_floor", "tier": "dressing", "footprint": [1, 1], "scale": [0.75, 0.75, 0.75], "offset": [0, 0, 0], "rooms": ["galley", "mess"]},
+		{"id": "kr_dishrack", "file": "gltf/dishrack_plates.gltf", "socket": "dressing_floor", "gameplay": false, "tier": "dressing", "footprint": [1, 1], "scale": [0.75, 0.75, 0.75], "offset": [0, 0, 0], "rooms": ["galley", "mess"]},
 
 		{"id": "kr_crate", "file": "gltf/crate.gltf", "socket": "furniture_crate", "tier": "light", "footprint": [1, 1], "scale": [0.7, 0.7, 0.7], "offset": [0, 0, 0], "weight": 1},
 		{"id": "kr_crate_potatoes", "file": "gltf/crate_potatoes.gltf", "socket": "furniture_crate", "tier": "light", "footprint": [1, 1], "scale": [0.7, 0.7, 0.7], "offset": [0, 0, 0], "weight": 1, "rooms": ["galley", "cold_store"]}

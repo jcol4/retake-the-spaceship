@@ -48,6 +48,20 @@ static func roll_conditions(data: MapData, rng: RandomNumberGenerator) -> void:
 			data.zone_power[band[0]] = rng.randi_range(0, 2) != 0
 
 
+static func seed_overrun(data: MapData, rng: RandomNumberGenerator) -> void:
+	for room in data.rooms.size():
+		if data.room_condition(room) != RoomTypes.Condition.OVERRUN or room in data.corridors:
+			continue
+		var seeded := false
+		for pos: Vector3i in data.room_of:
+			if data.room_of[pos] != room or not data.is_passable(pos): continue
+			var cell := data.get_cell(pos)
+			if cell.spawn == MapData.Spawn.NONE and (not seeded or rng.randf() < 0.04):
+				cell.spawn = MapData.Spawn.WORM
+				data.worm_counts[pos] = rng.randi_range(2, 5)
+				seeded = true
+
+
 static func place(data: MapData, room: int, rng: RandomNumberGenerator, budget: int) -> bool:
 	if budget <= 0:
 		return true

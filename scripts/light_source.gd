@@ -28,6 +28,7 @@ extends Node3D
 ## SpotLight3D.spot_attenuation: higher fades the beam out sooner with distance.
 @export var beam_falloff: float = 3.0
 @export var casts_shadows: bool = true
+@export var use_room_color := true
 
 var grid_pos: Vector3i
 var _current_intensity: float
@@ -50,7 +51,7 @@ func register_with_grid() -> void:
 	if map != null and map.get("data") != null:
 		if room_index < 0:
 			room_index = map.data.room_index_at(grid_pos)
-		if map.data.room_type(room_index) not in [RoomTypes.GENERIC, RoomTypes.CORRIDOR, RoomTypes.HANGAR]:
+		if use_room_color and map.data.room_type(room_index) not in [RoomTypes.GENERIC, RoomTypes.CORRIDOR, RoomTypes.HANGAR]:
 			light_color = RoomTypes.light_of(map.data.room_type(room_index))
 	normal_color = light_color
 	_current_intensity = intensity

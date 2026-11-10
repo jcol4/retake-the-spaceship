@@ -13,9 +13,9 @@
 		{"id": "kst_computer_wide", "file": "glb/computer-wide.glb", "socket": "furniture_console", "tier": "light", "footprint": [1, 1], "scale": [1.75, 1.75, 1.75], "offset": [0, 0, -0.052], "weight": 1},
 		{"id": "kst_computer_system", "file": "glb/computer-system.glb", "socket": "furniture_console", "tier": "light", "footprint": [1, 1], "scale": [1.5556, 1.5556, 1.5556], "offset": [0, 0, 0.039], "weight": 1},
 
-		{"id": "kst_display_wall", "file": "glb/display-wall.glb", "socket": "furniture_monitor", "tier": "wall", "footprint": [1, 1], "scale": [1.9528, 1.9528, 1.9528], "offset": [0, 1, 0.28], "weight": 1},
-		{"id": "kst_display_wall_wide", "file": "glb/display-wall-wide.glb", "socket": "furniture_monitor", "tier": "wall", "footprint": [1, 1], "scale": [1.9528, 1.9528, 1.9528], "offset": [0, 1, 0.28], "weight": 1},
+		{"id": "kst_display_wall", "file": "glb/display-wall.glb", "socket": "furniture_monitor", "mount": "wall", "tier": "wall", "footprint": [1, 1], "scale": [1.9528, 1.9528, 1.9528], "offset": [0, 1, 0.28], "weight": 1},
+		{"id": "kst_display_wall_wide", "file": "glb/display-wall-wide.glb", "socket": "furniture_monitor", "mount": "wall", "tier": "wall", "footprint": [1, 1], "scale": [1.9528, 1.9528, 1.9528], "offset": [0, 1, 0.28], "weight": 1},
 
-		{"id": "kst_wall_switch", "file": "glb/wall-switch.glb", "socket": "power_switch", "tier": "wall", "footprint": [1, 1], "scale": [3, 3, 3], "offset": [0, 1, 0.038], "weight": 1}
+		{"id": "kst_wall_switch", "file": "glb/wall-switch.glb", "socket": "power_switch", "mount": "wall", "tier": "wall", "footprint": [1, 1], "scale": [3, 3, 3], "offset": [0, 1, 0.038], "weight": 1}
 	]
 }

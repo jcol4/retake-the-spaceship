@@ -17,7 +17,11 @@ extends RefCounted
 ## Everything here is deterministic in `map_seed` and touches no scene tree,
 ## so a few hundred decks can be generated and checked per second.
 
+enum DeckSource { PLOT, GENERATED }
+
 class Config:
+	var deck_source: int = DeckSource.PLOT
+	var enemy_faction: StringName = &"aliens"
 	# 84x56: the Medium contract (CampaignEconomy.DECK_DIMENSIONS), one step up
 	# from 72x48 when rooms got types (ROOM_THEMES_PLAN.md B.2) — a themed deck
 	# lays its hangars along both flanks and two passageways the length of the
@@ -164,6 +168,8 @@ static func generate(map_seed: int, cfg: Config = null) -> MapData:
 		gen._rng.seed = map_seed if attempt == 0 else hash([map_seed, attempt])
 		data = gen._run(map_seed)
 		data.generation_attempt = attempt
+		if config.deck_source == DeckSource.PLOT:
+			return data # Authored errors are content gaps, never procedural rerolls.
 		# A deck that rolled hangars must also have FIT them: big bays on a crowded
 		# deck can leave fewer than the minimum, and "3–4 per deck" (GDD §7.2) is a
 		# promise, so that is a reroll like an unreachable one.
@@ -177,6 +183,8 @@ static func generate(map_seed: int, cfg: Config = null) -> MapData:
 
 
 func _run(map_seed: int) -> MapData:
+	if _cfg.deck_source == DeckSource.PLOT:
+		return _run_plot(map_seed)
 	var data := MapData.new()
 	data.seed = map_seed
 	_fill_hull(data)
@@ -236,6 +244,62 @@ func _run(map_seed: int) -> MapData:
 	# After the loot, for the same reason the loot comes last: every draw before
 	# this one is unchanged, so a seed gives the same deck it always did, plus
 	# (sometimes) a merc crew.
+	_place_mercs(data)
+	data.resolve_stairs()
+	return data
+
+
+func _run_plot(map_seed: int) -> MapData:
+	var assembler := PlotAssembler.new()
+	var plot := assembler.choose(Vector2i(_cfg.width, _cfg.depth), _cfg.profile_primary, _rng)
+	if plot == null:
+		var failed := MapData.new()
+		failed.seed = map_seed
+		failed.layout_errors = assembler.errors.duplicate()
+		push_error("; ".join(failed.layout_errors))
+		return failed
+	var data := assembler.assemble(plot, _rng, [], -1, _cfg.enemy_faction)
+	data.seed = map_seed
+	data.deck_primary = _cfg.profile_primary
+	if data.deck_primary < 0:
+		for slot in plot.slots:
+			if slot.zone != ParcelData.ZONE_HANGAR:
+				data.deck_primary = slot.zone
+				break
+	data.deck_secondary = _cfg.profile_secondary
+	data.deck_mixed = _cfg.mixed_profile
+	data.layout_errors = assembler.errors.duplicate()
+	if not data.layout_errors.is_empty():
+		push_error("; ".join(data.layout_errors))
+		return data
+	_rooms = data.rooms.duplicate()
+	_room_types = data.room_types.duplicate()
+	_room_is_corridor.clear()
+	for i in _rooms.size():
+		_room_is_corridor.append(i in data.corridors)
+		if data.room_type(i) == RoomTypes.HANGAR:
+			_hangar_rooms.append(i)
+			for h in data.hangars:
+				if h.room_index == i:
+					_hangar_pads.append([h.pad_center, h.ramp_side])
+	_insertion = 0
+	if _cfg.objective_kind >= 0:
+		_choose_objective_insertion(data)
+		for i in data.hangars.size(): data.hangars[i].is_insertion = i == _insertion
+	var insertion := data.insertion_hangar()
+	if insertion != null:
+		for i in mini(_cfg.player_spawn_count, insertion.square.size()):
+			data.get_cell(insertion.square[i]).spawn = MapData.Spawn.PLAYER
+	# Preserve procedural overrun worms, without adding furniture or jitter.
+	RoomDressing.seed_overrun(data, _rng)
+	if insertion != null:
+		var safe := _rooms_near_insertion(data, insertion)
+		for pos: Vector3i in data.cells:
+			if safe.has(data.room_index_at(pos)) and data.cells[pos].spawn != MapData.Spawn.PLAYER:
+				data.cells[pos].spawn = MapData.Spawn.NONE
+				data.worm_counts.erase(pos)
+	_place_loot(data)
+	_place_room_keys(data)
 	_place_mercs(data)
 	data.resolve_stairs()
 	return data

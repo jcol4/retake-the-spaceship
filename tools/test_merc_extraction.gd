@@ -256,7 +256,7 @@ func _check_generator() -> void:
 	var nondeterministic := 0
 	var decks := 120
 	for s in range(1, decks + 1):
-		var data = Gen.generate(s)
+		var data = Gen.generate(s, load("res://tools/generated_test_config.gd").make())
 		var mercs: Array = data.spawns(MD.Spawn.MERC)
 		if not mercs.is_empty():
 			with_mercs += 1
@@ -282,11 +282,12 @@ func _check_generator() -> void:
 					one_room = false
 			if near_insertion or in_hangar or with_aliens or not one_room or data.corridors.has(room):
 				bad_place += 1
-		var again = Gen.generate(s)
+		var again = Gen.generate(s, load("res://tools/generated_test_config.gd").make())
 		if again.spawns(MD.Spawn.MERC) != mercs:
 			nondeterministic += 1
 		if s <= 30:
 			var cfg = Gen.Config.new()
+			cfg.deck_source = 1 # MapGenerator.DeckSource.GENERATED: procedural regression
 			cfg.merc_squad_chance = 0.0
 			var plain = Gen.generate(s, cfg)
 			if not plain.spawns(MD.Spawn.MERC).is_empty() \

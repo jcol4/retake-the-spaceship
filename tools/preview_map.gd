@@ -14,6 +14,7 @@ extends SceneTree
 
 func _initialize() -> void:
 	var cfg := MapGenerator.Config.new()
+	cfg.deck_source = 1 # MapGenerator.DeckSource.GENERATED: procedural regression
 	if OS.has_environment("MAP_THEMED"):
 		cfg.themed_rooms = OS.get_environment("MAP_THEMED") != "0"
 	if OS.has_environment("MAP_MIXED"):

@@ -92,6 +92,7 @@ func _check_gating() -> void:
 func _check_generated_corridors() -> void:
 	var gen = load("res://scripts/map_generator.gd")
 	var cfg = load("res://scripts/campaign/contract_offer.gd").config_for(0)
+	cfg.deck_source = gen.DeckSource.GENERATED
 	# This reproduces an MST corridor crossing from before themed layouts.
 	# Preserve its dimensions and hangar odds as well as its placement path.
 	cfg.themed_rooms = false

@@ -34,11 +34,11 @@
 
 		{"id": "kk_chair", "file": "gltf/chair_A.gltf", "socket": "furniture_chair", "tier": "dressing", "footprint": [1, 1], "scale": [0.75, 0.75, 0.75], "offset": [0, 0, 0.036], "weight": 1},
 
-		{"id": "kk_lamp_standing", "file": "gltf/lamp_standing.gltf", "socket": "dressing_floor", "tier": "dressing", "footprint": [1, 1], "scale": [0.6746, 0.6746, 0.6746], "offset": [0, 0, 0], "rooms": ["lounge", "cabin", "captains_quarters"]},
+		{"id": "kk_lamp_standing", "file": "gltf/lamp_standing.gltf", "socket": "dressing_floor", "gameplay": false, "tier": "dressing", "footprint": [1, 1], "scale": [0.6746, 0.6746, 0.6746], "offset": [0, 0, 0], "rooms": ["lounge", "cabin", "captains_quarters"]},
 
-		{"id": "kk_shelf_a", "file": "gltf/shelf_A_big.gltf", "socket": "dressing_wall", "tier": "wall", "footprint": [1, 1], "scale": [0.6, 0.6, 0.6], "offset": [0, 1.58, 0], "rooms": ["cabin", "captains_quarters", "lounge", "bunk_room"]},
-		{"id": "kk_shelf_b", "file": "gltf/shelf_B_large.gltf", "socket": "dressing_wall", "tier": "wall", "footprint": [1, 1], "scale": [0.6, 0.6, 0.6], "offset": [0, 1.46, 0], "rooms": ["cabin", "captains_quarters", "lounge", "storage"]},
+		{"id": "kk_shelf_a", "file": "gltf/shelf_A_big.gltf", "socket": "dressing_wall", "gameplay": false, "mount": "wall", "tier": "wall", "footprint": [1, 1], "scale": [0.6, 0.6, 0.6], "offset": [0, 1.58, 0], "rooms": ["cabin", "captains_quarters", "lounge", "bunk_room"]},
+		{"id": "kk_shelf_b", "file": "gltf/shelf_B_large.gltf", "socket": "dressing_wall", "gameplay": false, "mount": "wall", "tier": "wall", "footprint": [1, 1], "scale": [0.6, 0.6, 0.6], "offset": [0, 1.46, 0], "rooms": ["cabin", "captains_quarters", "lounge", "storage"]},
 
-		{"id": "kk_rug", "file": "gltf/rug_rectangle_A.gltf", "socket": "dressing_clutter", "tier": "clutter", "footprint": [2, 1], "scale": [0.7, 0.7, 0.7], "offset": [0, 0, 0], "rooms": ["lounge", "cabin", "captains_quarters"]}
+		{"id": "kk_rug", "file": "gltf/rug_rectangle_A.gltf", "socket": "dressing_clutter", "gameplay": false, "tier": "clutter", "footprint": [2, 1], "scale": [0.7, 0.7, 0.7], "offset": [0, 0, 0], "rooms": ["lounge", "cabin", "captains_quarters"]}
 	]
 }

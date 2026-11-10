@@ -1,0 +1,81 @@
+[gd_resource type="Resource" script_class="ParcelData" format=4]
+
+[ext_resource type="Script" path="res://scripts/deck/deck_light.gd" id="1_0usjl"]
+[ext_resource type="Script" path="res://scripts/deck/deck_marker.gd" id="2_m4bga"]
+[ext_resource type="Script" path="res://scripts/deck/deck_piece.gd" id="3_pb026"]
+[ext_resource type="Script" path="res://scripts/deck/parcel_data.gd" id="4_jo0xl"]
+
+[sub_resource type="Resource" id="Resource_kbjg8"]
+script = ExtResource("1_0usjl")
+cell = Vector2i(3, 3)
+chance = PackedFloat32Array(1, 1, 1, 1)
+
+[sub_resource type="Resource" id="Resource_2ej61"]
+script = ExtResource("1_0usjl")
+cell = Vector2i(13, 3)
+chance = PackedFloat32Array(1, 1, 1, 1)
+
+[sub_resource type="Resource" id="Resource_kntgc"]
+script = ExtResource("1_0usjl")
+cell = Vector2i(3, 11)
+chance = PackedFloat32Array(1, 1, 1, 1)
+
+[sub_resource type="Resource" id="Resource_cqe31"]
+script = ExtResource("1_0usjl")
+cell = Vector2i(13, 11)
+chance = PackedFloat32Array(1, 1, 1, 1)
+
+[sub_resource type="Resource" id="Resource_d6opf"]
+script = ExtResource("2_m4bga")
+kind = 5
+cell = Vector2i(7, 5)
+ramp_side = 1
+chance = PackedFloat32Array(1, 1, 1, 1)
+
+[sub_resource type="Resource" id="Resource_5t3b1"]
+script = ExtResource("3_pb026")
+piece_id = &"hangar_wreck_a"
+cell = Vector2i(12, 1)
+chance = PackedFloat32Array(1, 1, 1, 1)
+
+[sub_resource type="Resource" id="Resource_2uk2h"]
+script = ExtResource("3_pb026")
+piece_id = &"hangar_wreck_b"
+cell = Vector2i(1, 1)
+chance = PackedFloat32Array(0.2, 0.5, 0.9, 0.8)
+
+[sub_resource type="Resource" id="Resource_mj41g"]
+script = ExtResource("3_pb026")
+piece_id = &"hangar_wreck_c"
+cell = Vector2i(12, 10)
+chance = PackedFloat32Array(0.1, 0.7, 0.2, 1)
+
+[sub_resource type="Resource" id="Resource_5emch"]
+script = ExtResource("3_pb026")
+piece_id = &"qe_crate_light"
+cell = Vector2i(2, 6)
+chance = PackedFloat32Array(1, 1, 1, 1)
+
+[sub_resource type="Resource" id="Resource_p7paf"]
+script = ExtResource("3_pb026")
+piece_id = &"qe_crate_light"
+cell = Vector2i(14, 5)
+chance = PackedFloat32Array(1, 1, 1, 1)
+
+[sub_resource type="Resource" id="Resource_02lim"]
+script = ExtResource("3_pb026")
+piece_id = &"qe_crate_light"
+cell = Vector2i(14, 9)
+chance = PackedFloat32Array(0.3, 0.7, 1, 0.5)
+
+[resource]
+script = ExtResource("4_jo0xl")
+display_name = "Standard hangar"
+zone = 7
+room_type = &"hangar"
+size = Vector2i(18, 14)
+terrain = PackedByteArray("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB")
+sockets_ok = Array[Vector3i]([Vector3i(0, 6, 2)])
+pieces = Array[ExtResource("3_pb026")]([SubResource("Resource_5t3b1"), SubResource("Resource_2uk2h"), SubResource("Resource_mj41g"), SubResource("Resource_5emch"), SubResource("Resource_p7paf"), SubResource("Resource_02lim")])
+lights = Array[ExtResource("1_0usjl")]([SubResource("Resource_kbjg8"), SubResource("Resource_2ej61"), SubResource("Resource_kntgc"), SubResource("Resource_cqe31")])
+markers = Array[ExtResource("2_m4bga")]([SubResource("Resource_d6opf")])

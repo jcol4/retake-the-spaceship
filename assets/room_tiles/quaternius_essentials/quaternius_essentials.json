@@ -50,13 +50,13 @@
 
 		{"id": "qe_gas_barrel", "file": "glTF/Prop_Barrel2_Closed.gltf", "socket": "hazard_gas", "tier": "light", "footprint": [1, 1], "scale": [1.0442, 1.0442, 1.0442], "offset": [-0.25, 0, -0.15], "parts": [{"file": "glTF/Prop_Barrel2_Closed.gltf", "scale": [0.8, 0.8, 0.8], "offset": [0.4, 0, 0.3]}], "weight": 1},
 
-		{"id": "qe_medkit_wall", "file": "glTF/Prop_HealthPack.gltf", "socket": "dressing_wall", "tier": "wall", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 1.357, 0.087], "rooms": ["medbay", "icu", "surgery", "security_station"]},
+		{"id": "qe_medkit_wall", "file": "glTF/Prop_HealthPack.gltf", "socket": "dressing_wall", "gameplay": false, "mount": "wall", "tier": "wall", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 1.357, 0.087], "rooms": ["medbay", "icu", "surgery", "security_station"]},
 
-		{"id": "qe_ammo_open", "file": "glTF/Prop_Ammo.gltf", "socket": "dressing_floor", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, -0.008, 0], "rooms": ["armory", "security_station", "brig"]},
-		{"id": "qe_ammo_closed", "file": "glTF/Prop_Ammo_Closed.gltf", "socket": "dressing_floor", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, -0.008, 0], "rooms": ["armory", "security_station", "cargo"]},
+		{"id": "qe_ammo_open", "file": "glTF/Prop_Ammo.gltf", "socket": "dressing_floor", "gameplay": false, "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, -0.008, 0], "rooms": ["armory", "security_station", "brig"]},
+		{"id": "qe_ammo_closed", "file": "glTF/Prop_Ammo_Closed.gltf", "socket": "dressing_floor", "gameplay": false, "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, -0.008, 0], "rooms": ["armory", "security_station", "cargo"]},
 
-		{"id": "qe_rifle", "file": "glTF/Gun_Rifle.gltf", "socket": "dressing_weapon", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "pitch": 90, "offset": [0.222, 0.043, -0.094], "rooms": ["armory"], "note": "Lies flat; for tables and racks."},
-		{"id": "qe_pistol", "file": "glTF/Gun_Pistol.gltf", "socket": "dressing_weapon", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "pitch": 90, "offset": [0.15, 0.034, -0.043], "rooms": ["armory", "security_station"], "note": "Lies flat; for tables and racks."},
-		{"id": "qe_weapon_holder", "file": "res://assets/room_tiles/quaternius_scifi/glTF/Props/Prop_ItemHolder.gltf", "socket": "dressing_weapon", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0.004, 0.054], "parts": [{"file": "glTF/Gun_Rifle.gltf", "scale": [1, 1, 1], "offset": [0.222, 0.479, -0.094], "pitch": 90}], "weight": 1, "rooms": ["armory", "security_station"], "note": "The MegaKit item holder with a rifle on it."}
+		{"id": "qe_rifle", "file": "glTF/Gun_Rifle.gltf", "socket": "dressing_weapon", "gameplay": false, "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "pitch": 90, "offset": [0.222, 0.043, -0.094], "rooms": ["armory"], "note": "Lies flat; for tables and racks."},
+		{"id": "qe_pistol", "file": "glTF/Gun_Pistol.gltf", "socket": "dressing_weapon", "gameplay": false, "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "pitch": 90, "offset": [0.15, 0.034, -0.043], "rooms": ["armory", "security_station"], "note": "Lies flat; for tables and racks."},
+		{"id": "qe_weapon_holder", "file": "res://assets/room_tiles/quaternius_scifi/glTF/Props/Prop_ItemHolder.gltf", "socket": "dressing_weapon", "gameplay": false, "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0.004, 0.054], "parts": [{"file": "glTF/Gun_Rifle.gltf", "scale": [1, 1, 1], "offset": [0.222, 0.479, -0.094], "pitch": 90}], "weight": 1, "rooms": ["armory", "security_station"], "note": "The MegaKit item holder with a rifle on it."}
 	]
 }

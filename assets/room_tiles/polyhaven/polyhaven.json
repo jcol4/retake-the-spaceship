@@ -41,7 +41,7 @@
 		{"id": "ph_utility_box", "file": "utility_box_01/utility_box_01_1k.gltf", "socket": "hazard_panel", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.006], "weight": 4},
 		{"id": "ph_utility_box_wide", "file": "utility_box_02/utility_box_02_1k.gltf", "socket": "hazard_panel", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.006], "weight": 3},
 
-		{"id": "ph_fuse_box", "file": "power_box_01/power_box_01_1k.gltf", "socket": "power_switch", "tier": "wall", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0.056, 1.252, 0.047], "weight": 4},
+		{"id": "ph_fuse_box", "file": "power_box_01/power_box_01_1k.gltf", "socket": "power_switch", "mount": "wall", "tier": "wall", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0.056, 1.252, 0.047], "weight": 4},
 
 		{"id": "ph_rack_ammo", "file": "worn_metal_rack/worn_metal_rack_1k.gltf", "socket": "furniture_weapon_rack", "tier": "heavy", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0.002, 0, 0], "parts": [{"file": "ammo_box/ammo_box_1k.gltf", "scale": [1, 1, 1], "offset": [-0.25, 0.1, 0], "yaw": 90}, {"file": "ammo_box/ammo_box_1k.gltf", "scale": [1, 1, 1], "offset": [0.05, 0.1, 0], "yaw": 90}], "weight": 3},
 		{"id": "ph_steel_shelves", "file": "steel_frame_shelves_03/steel_frame_shelves_03_1k.gltf", "socket": "furniture_weapon_rack", "tier": "heavy", "footprint": [2, 1], "scale": [1, 1, 1], "offset": [-0.131, 0, -0.002], "weight": 2},
@@ -60,15 +60,15 @@
 
 		{"id": "ph_armchair", "file": "modern_arm_chair_01/modern_arm_chair_01_1k.gltf", "socket": "furniture_couch", "tier": "light", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [-0.003, 0, 0.082], "weight": 4},
 
-		{"id": "ph_medical_box", "file": "medical_box/medical_box_1k.gltf", "socket": "dressing_clutter", "tier": "clutter", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.003], "rooms": ["medbay", "icu", "surgery", "security_station"]},
-		{"id": "ph_cardboard_box", "file": "cardboard_box_01/cardboard_box_01_1k.gltf", "socket": "dressing_clutter", "tier": "clutter", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [-0.001, 0.007, -0.033], "rooms": ["storage", "cargo", "cabin", "bunk_room"]},
-		{"id": "ph_ammo_cans", "file": "ammo_box/ammo_box_1k.gltf", "socket": "dressing_clutter", "tier": "clutter", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [-0.1, 0, -0.05], "parts": [{"file": "ammo_box/ammo_box_1k.gltf", "scale": [1, 1, 1], "offset": [0.15, 0, 0.05]}, {"file": "ammo_box/ammo_box_1k.gltf", "scale": [1, 1, 1], "offset": [0.05, 0, 0.3], "yaw": 80}], "rooms": ["armory", "security_station", "brig"]},
+		{"id": "ph_medical_box", "file": "medical_box/medical_box_1k.gltf", "socket": "dressing_clutter", "gameplay": false, "tier": "clutter", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.003], "rooms": ["medbay", "icu", "surgery", "security_station"]},
+		{"id": "ph_cardboard_box", "file": "cardboard_box_01/cardboard_box_01_1k.gltf", "socket": "dressing_clutter", "gameplay": false, "tier": "clutter", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [-0.001, 0.007, -0.033], "rooms": ["storage", "cargo", "cabin", "bunk_room"]},
+		{"id": "ph_ammo_cans", "file": "ammo_box/ammo_box_1k.gltf", "socket": "dressing_clutter", "gameplay": false, "tier": "clutter", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [-0.1, 0, -0.05], "parts": [{"file": "ammo_box/ammo_box_1k.gltf", "scale": [1, 1, 1], "offset": [0.15, 0, 0.05]}, {"file": "ammo_box/ammo_box_1k.gltf", "scale": [1, 1, 1], "offset": [0.05, 0, 0.3], "yaw": 80}], "rooms": ["armory", "security_station", "brig"]},
 
-		{"id": "ph_tool_chest", "file": "metal_tool_chest/metal_tool_chest_1k.gltf", "socket": "dressing_floor", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0.027, -0.001, -0.006], "rooms": ["fabrication", "engine_room", "engineering_control", "hangar"]},
-		{"id": "ph_extinguisher", "file": "korean_fire_extinguisher_01/korean_fire_extinguisher_01_1k.gltf", "socket": "dressing_floor", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.06], "rooms": ["corridor", "engine_room", "galley", "hangar", "fuel_storage"]},
-		{"id": "ph_trash_cans", "file": "metal_trash_can/metal_trash_can_1k.gltf", "socket": "dressing_floor", "tier": "dressing", "footprint": [2, 1], "scale": [1, 1, 1], "offset": [0.064, 0, 0], "rooms": ["galley", "mess", "corridor", "hangar"]},
-		{"id": "ph_hand_truck", "file": "hand_truck/hand_truck_1k.gltf", "socket": "dressing_floor", "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.251], "rooms": ["cargo", "hangar", "storage"]},
+		{"id": "ph_tool_chest", "file": "metal_tool_chest/metal_tool_chest_1k.gltf", "socket": "dressing_floor", "gameplay": false, "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0.027, -0.001, -0.006], "rooms": ["fabrication", "engine_room", "engineering_control", "hangar"]},
+		{"id": "ph_extinguisher", "file": "korean_fire_extinguisher_01/korean_fire_extinguisher_01_1k.gltf", "socket": "dressing_floor", "gameplay": false, "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.06], "rooms": ["corridor", "engine_room", "galley", "hangar", "fuel_storage"]},
+		{"id": "ph_trash_cans", "file": "metal_trash_can/metal_trash_can_1k.gltf", "socket": "dressing_floor", "gameplay": false, "tier": "dressing", "footprint": [2, 1], "scale": [1, 1, 1], "offset": [0.064, 0, 0], "rooms": ["galley", "mess", "corridor", "hangar"]},
+		{"id": "ph_hand_truck", "file": "hand_truck/hand_truck_1k.gltf", "socket": "dressing_floor", "gameplay": false, "tier": "dressing", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 0, -0.251], "rooms": ["cargo", "hangar", "storage"]},
 
-		{"id": "ph_security_camera", "file": "security_camera_01/security_camera_01_1k.gltf", "socket": "dressing_wall", "tier": "wall", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 2.325, 0.303], "rooms": ["security_station", "armory", "bridge", "brig", "corridor"]}
+		{"id": "ph_security_camera", "file": "security_camera_01/security_camera_01_1k.gltf", "socket": "dressing_wall", "gameplay": false, "mount": "wall", "tier": "wall", "footprint": [1, 1], "scale": [1, 1, 1], "offset": [0, 2.325, 0.303], "rooms": ["security_station", "armory", "bridge", "brig", "corridor"]}
 	]
 }

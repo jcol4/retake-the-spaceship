@@ -35,8 +35,8 @@
 	"pieces": [
 		{"id": "wall_band", "file": "glTF/Walls/WallBand_Straight.gltf", "socket": "wall_face", "tiles": 2, "yaw": -90, "offset": [0, 0, 1.5], "weight": 5, "squash": true},
 
-		{"id": "wall_lamp_small", "file": "glTF/Props/Prop_Light_Small.gltf", "socket": "wall_light", "scale": [1.0, 1.0, 1.0], "pitch": -90, "offset": [0.43, 0, 0.04], "width": 0.861, "weight": 2},
-		{"id": "wall_lamp_wide", "file": "glTF/Props/Prop_Light_Wide.gltf", "socket": "wall_light", "scale": [1.0, 1.0, 1.0], "pitch": -90, "offset": [0.66, 0, 0.04], "width": 1.32, "weight": 1},
+		{"id": "wall_lamp_small", "file": "glTF/Props/Prop_Light_Small.gltf", "socket": "wall_light", "mount": "wall", "scale": [1.0, 1.0, 1.0], "pitch": -90, "offset": [0.43, 0, 0.04], "width": 0.861, "weight": 2},
+		{"id": "wall_lamp_wide", "file": "glTF/Props/Prop_Light_Wide.gltf", "socket": "wall_light", "mount": "wall", "scale": [1.0, 1.0, 1.0], "pitch": -90, "offset": [0.66, 0, 0.04], "width": 1.32, "weight": 1},
 
 		{"id": "floor_metal", "file": "glTF/Platforms/Platform_Metal.gltf", "socket": "floor", "scale": [0.375, 0.375, 0.375], "weight": 6},
 		{"id": "floor_stair", "file": "glTF/Platforms/Platform_DarkPlates.gltf", "socket": "stair_floor", "scale": [0.375, 0.375, 0.375], "weight": 1},
@@ -53,11 +53,11 @@
 
 		{"id": "mk_console", "file": "glTF/Props/Prop_Computer.gltf", "socket": "furniture_console", "tier": "light", "footprint": [1, 1], "scale": [0.69, 0.69, 0.69], "offset": [0, 0.001, -0.045], "weight": 3},
 
-		{"id": "mk_monitor", "file": "glTF/Props/Prop_Computer.gltf", "socket": "furniture_monitor", "tier": "dressing", "footprint": [1, 1], "scale": [0.69, 0.69, 0.69], "offset": [0, 0.001, -0.045], "weight": 3},
+		{"id": "mk_monitor", "file": "glTF/Props/Prop_Computer.gltf", "socket": "furniture_monitor", "mount": "wall", "tier": "dressing", "footprint": [1, 1], "scale": [0.69, 0.69, 0.69], "offset": [0, 0.001, -0.045], "weight": 3},
 
-		{"id": "mk_terminal_wall", "file": "glTF/Props/Prop_AccessPoint.gltf", "socket": "terminal_wall", "tier": "wall", "footprint": [1, 1], "scale": [1, 1, 1], "yaw": -90, "offset": [-0.009, -0.012, 0.221], "weight": 1},
+		{"id": "mk_terminal_wall", "file": "glTF/Props/Prop_AccessPoint.gltf", "socket": "terminal_wall", "mount": "wall", "tier": "wall", "footprint": [1, 1], "scale": [1, 1, 1], "yaw": -90, "offset": [-0.009, -0.012, 0.221], "weight": 1},
 
-		{"id": "mk_power_switch", "file": "glTF/Props/Prop_AccessPoint.gltf", "socket": "power_switch", "tier": "wall", "footprint": [1, 1], "scale": [1, 1, 1], "yaw": -90, "offset": [-0.009, -0.012, 0.221], "weight": 2},
+		{"id": "mk_power_switch", "file": "glTF/Props/Prop_AccessPoint.gltf", "socket": "power_switch", "mount": "wall", "tier": "wall", "footprint": [1, 1], "scale": [1, 1, 1], "yaw": -90, "offset": [-0.009, -0.012, 0.221], "weight": 2},
 
 		{"id": "mk_pipe_column", "file": "glTF/Columns/Column_Pipes.gltf", "socket": "furniture_machinery", "tier": "heavy", "footprint": [1, 1], "scale": [0.75, 0.6, 0.75], "offset": [0, 0, 0], "weight": 2},
 		{"id": "mk_pipe_rack", "file": "glTF/Props/Prop_PipeHolder.gltf", "socket": "furniture_machinery", "tier": "light", "footprint": [2, 1], "scale": [0.7044, 0.7044, 0.7044], "offset": [0.004, -0.005, 0], "weight": 1},
@@ -82,9 +82,9 @@
 
 		{"id": "mk_elevator_door", "file": "glTF/Platforms/Door_Frame_SquareTall.gltf", "socket": "elevator_door", "tier": "door", "footprint": [2, 1], "scale": [0.6, 0.6, 0.75], "offset": [0, 0.008, 0], "parts": [{"file": "glTF/Platforms/Door_DarkMetal.gltf", "scale": [0.6, 0.6, 0.75], "offset": [0.002, 0, 0]}, {"file": "glTF/Platforms/Door_DarkMetal.gltf", "scale": [0.6, 0.6, 0.75], "offset": [-0.002, 0, 0], "yaw": 180}], "weight": 1},
 
-		{"id": "mk_vent_small", "file": "glTF/Props/Prop_Vent_Small.gltf", "socket": "dressing_clutter", "tier": "clutter", "footprint": [1, 1], "scale": [0.9, 0.9, 0.9], "offset": [0, 0, 0], "rooms": ["engine_room", "life_support", "corridor", "storage"]},
-		{"id": "mk_vent_big", "file": "glTF/Props/Prop_Vent_Big.gltf", "socket": "dressing_clutter", "tier": "clutter", "footprint": [1, 1], "scale": [0.6999, 0.6999, 0.6999], "offset": [0, 0.048, 0.005], "rooms": ["engine_room", "life_support", "corridor"]},
-		{"id": "mk_cable", "file": "glTF/Props/Prop_Cable_1.gltf", "socket": "dressing_clutter", "tier": "clutter", "footprint": [1, 1], "scale": [0.8, 0.8, 0.8], "offset": [-0.016, 0.015, -0.199], "rooms": ["engine_room", "engineering_control", "server_room", "fabrication"]},
-		{"id": "mk_cable_long", "file": "glTF/Props/Prop_Cable_3.gltf", "socket": "dressing_clutter", "tier": "clutter", "footprint": [3, 1], "scale": [0.75, 0.75, 0.75], "yaw": 90, "offset": [-0.03, 0.01, 0.471], "rooms": ["engine_room", "server_room", "corridor"]}
+		{"id": "mk_vent_small", "file": "glTF/Props/Prop_Vent_Small.gltf", "socket": "dressing_clutter", "gameplay": false, "tier": "clutter", "footprint": [1, 1], "scale": [0.9, 0.9, 0.9], "offset": [0, 0, 0], "rooms": ["engine_room", "life_support", "corridor", "storage"]},
+		{"id": "mk_vent_big", "file": "glTF/Props/Prop_Vent_Big.gltf", "socket": "dressing_clutter", "gameplay": false, "tier": "clutter", "footprint": [1, 1], "scale": [0.6999, 0.6999, 0.6999], "offset": [0, 0.048, 0.005], "rooms": ["engine_room", "life_support", "corridor"]},
+		{"id": "mk_cable", "file": "glTF/Props/Prop_Cable_1.gltf", "socket": "dressing_clutter", "gameplay": false, "tier": "clutter", "footprint": [1, 1], "scale": [0.8, 0.8, 0.8], "offset": [-0.016, 0.015, -0.199], "rooms": ["engine_room", "engineering_control", "server_room", "fabrication"]},
+		{"id": "mk_cable_long", "file": "glTF/Props/Prop_Cable_3.gltf", "socket": "dressing_clutter", "gameplay": false, "tier": "clutter", "footprint": [3, 1], "scale": [0.75, 0.75, 0.75], "yaw": 90, "offset": [-0.03, 0.01, 0.471], "rooms": ["engine_room", "server_room", "corridor"]}
 	]
 }

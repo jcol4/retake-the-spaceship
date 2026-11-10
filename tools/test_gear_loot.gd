@@ -175,7 +175,7 @@ func _check_decks() -> void:
 	var parse_ok := true
 	const DECKS := 60
 	for s in range(1, DECKS + 1):
-		var data = gen.generate(s)
+		var data = gen.generate(s, load("res://tools/generated_test_config.gd").make())
 		var here := 0
 		for spot in data.containers:
 			for code in spot.items:
@@ -190,8 +190,8 @@ func _check_decks() -> void:
 	_check(parse_ok, "every crate code on %d decks parses" % DECKS)
 	_check(decks_with_gear >= DECKS * 3 / 4,
 		"most decks carry gear (%d/%d, %.1f pieces per deck)" % [decks_with_gear, DECKS, float(gear) / DECKS])
-	var x = gen.generate(17)
-	var y = gen.generate(17)
+	var x = gen.generate(17, load("res://tools/generated_test_config.gd").make())
+	var y = gen.generate(17, load("res://tools/generated_test_config.gd").make())
 	var same: bool = x.containers.size() == y.containers.size()
 	for i in mini(x.containers.size(), y.containers.size()):
 		same = same and x.containers[i].pos == y.containers[i].pos and x.containers[i].items == y.containers[i].items

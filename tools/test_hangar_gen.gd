@@ -32,7 +32,7 @@ func _initialize() -> void:
 	var counts := {}
 	var started := Time.get_ticks_msec()
 	for s in range(FIRST_SEED, FIRST_SEED + SEEDS):
-		var data = gen.generate(s)
+		var data = gen.generate(s, load("res://tools/generated_test_config.gd").make())
 		if data.generation_attempt > 0:
 			rerolled += 1
 		var n: int = data.hangars.size()
@@ -80,6 +80,7 @@ func _initialize() -> void:
 	# A deck generated before hangars existed must still be expressible: zero
 	# hangars gives back a clear-out deck with the old spawn rule.
 	var cfg = gen.Config.new()
+	cfg.deck_source = 1 # MapGenerator.DeckSource.GENERATED: procedural regression
 	cfg.hangar_count_min = 0
 	cfg.hangar_count_max = 0
 	var legacy = gen.generate(7, cfg)
@@ -95,8 +96,8 @@ func _initialize() -> void:
 		"the reroll check rejects a deck with a sealed-off hangar")
 	_check(gen.new()._hangars_reachable(joined), "and accepts the same deck with a door in the bulkhead")
 	# Determinism, rerolls included — co-op sends only the seed.
-	var a = gen.generate(42)
-	var b = gen.generate(42)
+	var a = gen.generate(42, load("res://tools/generated_test_config.gd").make())
+	var b = gen.generate(42, load("res://tools/generated_test_config.gd").make())
 	var ascii = load("res://scripts/map_ascii.gd")
 	_check(ascii.to_text(a) == ascii.to_text(b), "the same seed generates the same deck, hangars included")
 
@@ -246,6 +247,7 @@ func _check_bay(s: int, data, h, MD, gen) -> void:
 		if rect.encloses(entry[0]):
 			blocks += 1
 	var cfg = gen.Config.new()
+	cfg.deck_source = 1 # MapGenerator.DeckSource.GENERATED: procedural regression
 	_expect(s, wrecks >= cfg.hangar_wrecks_min, "every bay has a wreck")
 	_expect(s, blocks >= cfg.hangar_cover_min - 1, "every bay has its cover (at most one piece short)")
 	_bay_totals[0] += wrecks

@@ -68,11 +68,11 @@ func _initialize() -> void:
 			await process_frame
 			_check_deck(file)
 	for s in range(1, SEEDS + 1):
-		_map.build_generated(s)
+		_map.build_generated(s, load("res://tools/generated_test_config.gd").make())
 		await process_frame
 		var first: PackedStringArray = _map.piece_log.duplicate()
 		_check_deck("seed %d" % s)
-		_map.build_generated(s)
+		_map.build_generated(s, load("res://tools/generated_test_config.gd").make())
 		await process_frame
 		_check(_map.piece_log == first, "seed %d: the same piece choices on a second build (%d)" % [s, first.size()])
 

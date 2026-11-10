@@ -316,7 +316,7 @@ func _check_contract_placement() -> void:
 	var destroy_ok := true
 	const DECKS := 40
 	for s in range(1, DECKS + 1):
-		var data = gen.generate(s)
+		var data = gen.generate(s, load("res://tools/generated_test_config.gd").make())
 		var types: Array = _contract.supported_types(data)
 		if types.has(_contract.Type.RETRIEVE) and types.has(_contract.Type.DESTROY):
 			both += 1
@@ -347,13 +347,13 @@ func _check_contract_placement() -> void:
 	_check(outside_ok, "Retrieve plants in a crate in an ordinary room")
 	_check(far_ok, "in a room from the farthest third by path distance")
 	_check(destroy_ok, "Destroy places a nest on reachable floor outside every hangar")
-	var a = _contract.choose(gen.generate(9))
-	var b = _contract.choose(gen.generate(9))
-	_check(a != null and b != null and a.type in _contract.supported_types(gen.generate(9)), "choose returns a contract of a supported type")
+	var a = _contract.choose(gen.generate(9, load("res://tools/generated_test_config.gd").make()))
+	var b = _contract.choose(gen.generate(9, load("res://tools/generated_test_config.gd").make()))
+	_check(a != null and b != null and a.type in _contract.supported_types(gen.generate(9, load("res://tools/generated_test_config.gd").make())), "choose returns a contract of a supported type")
 	seed(5)
-	var c1 = _contract.choose(gen.generate(9))
+	var c1 = _contract.choose(gen.generate(9, load("res://tools/generated_test_config.gd").make()))
 	seed(5)
-	var c2 = _contract.choose(gen.generate(9))
+	var c2 = _contract.choose(gen.generate(9, load("res://tools/generated_test_config.gd").make()))
 	_check(c1.to_dict() == c2.to_dict(), "and the same seed chooses the same contract (co-op)")
 	var test_deck = load("res://scripts/map_ascii.gd").load_file(DECK)
 	var r2 = _contract.make(_contract.Type.RETRIEVE, test_deck)

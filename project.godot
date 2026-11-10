@@ -36,6 +36,10 @@ LootManager="*res://scripts/loot_manager.gd"
 ObjectiveManager="*res://scripts/objective_manager.gd"
 Campaign="*res://scripts/campaign/campaign.gd"
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/deck_editor/plugin.cfg")
+
 [filesystem]
 
 import/blender/enabled=false

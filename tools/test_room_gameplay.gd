@@ -20,6 +20,7 @@ func _initialize() -> void:
 	root.add_child(_map)
 	await process_frame
 	var cfg := MapGenerator.Config.new()
+	cfg.deck_source = 1 # MapGenerator.DeckSource.GENERATED: procedural regression
 	cfg.width = 72
 	cfg.depth = 48
 	cfg.mixed_profile = true
@@ -53,6 +54,7 @@ func _check_generated() -> void:
 	var rng := RandomNumberGenerator.new()
 	for seed_value in range(1, 41):
 		var cfg := MapGenerator.Config.new()
+		cfg.deck_source = 1 # MapGenerator.DeckSource.GENERATED: procedural regression
 		cfg.profile_primary = seed_value % 4
 		cfg.objective_kind = seed_value % 4
 		var data := MapGenerator.generate(seed_value, cfg)

@@ -78,6 +78,13 @@ static func generate(rng: RandomNumberGenerator) -> ContractOffer:
 
 static func config_for(p_size: int, p_primary: int = -1, p_secondary: int = -1, p_objective: int = -1) -> MapGenerator.Config:
 	var cfg := MapGenerator.Config.new()
+	var tree := Engine.get_main_loop() as SceneTree
+	var settings := tree.root.get_node_or_null("GameSettings") if tree != null else null
+	if OS.is_debug_build() and settings != null and settings.get("generated_decks"):
+		cfg.deck_source = MapGenerator.DeckSource.GENERATED
+	for arg in OS.get_cmdline_user_args():
+		if arg == "--deck-source=generated": cfg.deck_source = MapGenerator.DeckSource.GENERATED
+		elif arg == "--deck-source=plot": cfg.deck_source = MapGenerator.DeckSource.PLOT
 	var dims: Vector2i = CampaignEconomy.DECK_DIMENSIONS.get(p_size, CampaignEconomy.DECK_DIMENSIONS[CampaignEconomy.DeckSize.MEDIUM])
 	cfg.width = dims.x
 	cfg.depth = dims.y

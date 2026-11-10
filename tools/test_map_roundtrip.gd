@@ -353,7 +353,7 @@ func _check_room_types(test_deck: MapData) -> void:
 		"a wall cell, an unknown type, an unknown condition and a bad coordinate are all rejected")
 
 	# A generated deck types its bays and corridors and leaves the rest GENERIC.
-	var gen := MapGenerator.generate(7)
+	var gen := MapGenerator.generate(7, load("res://tools/generated_test_config.gd").make())
 	var gen_ok := gen.room_types.size() == gen.rooms.size()
 	for i in gen.rooms.size():
 		if i in gen.corridors:

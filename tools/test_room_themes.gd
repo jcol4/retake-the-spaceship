@@ -24,6 +24,7 @@ func _initialize() -> void:
 			if OS.has_environment("ROOM_THEME_PROFILE") and OS.get_environment("ROOM_THEME_PROFILE") != "%d,%d" % profile:
 				continue
 			var cfg := MapGenerator.Config.new()
+			cfg.deck_source = 1 # MapGenerator.DeckSource.GENERATED: procedural regression
 			cfg.width = size.x
 			cfg.depth = size.y
 			cfg.mixed_profile = size.x == 72

@@ -76,6 +76,10 @@ func piece(id: String) -> Dictionary:
 	return _by_id.get(id, {})
 
 
+func all_pieces() -> Array:
+	return _by_id.values()
+
+
 ## A weighted pick among `socket`'s pieces that pass `accept` (all of them
 ## when it is not given), or an empty Dictionary when none does — the caller
 ## then draws its placeholder.
@@ -104,6 +108,10 @@ func pick(socket: String, h: int, accept: Callable = Callable()) -> Dictionary:
 func instance(p: Dictionary) -> Node3D:
 	var wrapper := Node3D.new()
 	wrapper.name = p.id
+	if p.has("fit_size"):
+		var fitted := ShipModel.fitted(p.path, _vec(p.fit_size))
+		if fitted != null: wrapper.add_child(fitted)
+		return wrapper
 	var pivot := Node3D.new()
 	pivot.name = "Pivot"
 	pivot.transform = p.transform
@@ -160,6 +168,8 @@ func _load_manifests() -> void:
 			_materials["%s/%s" % [kit, name]] = _build_material(name, json.materials[name], tex_dir)
 		for entry: Dictionary in json.get("pieces", []):
 			var p := entry.duplicate()
+			p.mount = entry.get("mount", "wall" if entry.socket in ["terminal_wall", "dressing_wall", "wall_light", "power_switch", "furniture_monitor"] else "floor")
+			p.gameplay = entry.get("gameplay", not (String(entry.socket).begins_with("dressing_") or String(entry.socket).ends_with("_clutter")))
 			p.kit = kit
 			p.path = _file(kit_dir, String(entry.file))
 			# Materials come from the kit the file lives in, which for a res://

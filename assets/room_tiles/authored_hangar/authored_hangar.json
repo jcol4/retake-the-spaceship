@@ -1,0 +1,9 @@
+{
+  "kit": "authored_hangar",
+  "source": "Existing original ship wrecks, fitted by ShipModel to authored footprints.",
+  "pieces": [
+    {"id": "hangar_wreck_a", "file": "res://assets/models/ships/wreck_a.glb", "socket": "hangar_wreck", "footprint": [3, 3], "tier": "heavy", "fit_size": [4.2, 3, 4.2]},
+    {"id": "hangar_wreck_b", "file": "res://assets/models/ships/wreck_b.glb", "socket": "hangar_wreck", "footprint": [3, 3], "tier": "heavy", "fit_size": [4.2, 3, 4.2]},
+    {"id": "hangar_wreck_c", "file": "res://assets/models/ships/wreck_c.glb", "socket": "hangar_wreck", "footprint": [3, 3], "tier": "heavy", "fit_size": [4.2, 3, 4.2]}
+  ]
+}

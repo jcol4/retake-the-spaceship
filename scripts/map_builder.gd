@@ -266,14 +266,26 @@ func build(map_data: MapData) -> void:
 	_build_door_frames()
 	for pos: Vector3i in data.cells:
 		_build_cell(pos, data.get_cell(pos))
-	if data.seed != 0:
+	if data.seed != 0 and not data.authored_layout:
 		_build_wall_lamps()
 	# After every cell, because an edge prop registers itself against the tiles on
 	# BOTH sides and those tiles have to exist first.
 	for entry: Array in data.cover_edge_list():
 		_add_cover_edge(entry[0], entry[1], entry[2])
 	for entry: Array in data.obstacles:
-		_add_cover_block(entry[0], entry[1], StringName(entry[2]) if entry.size() > 2 else &"crate", float(entry[3]) if entry.size() > 3 else 1.0)
+		_add_cover_block(entry[0], entry[1], StringName(entry[2]) if entry.size() > 2 else &"crate", float(entry[3]) if entry.size() > 3 else 1.0, String(entry[4]) if entry.size() > 4 else "", int(entry[5]) if entry.size() > 5 else 0)
+	for entry: Array in data.dressing:
+		var p := _catalog.piece(String(entry[0]))
+		if p.is_empty(): continue
+		var node := _catalog.instance(p)
+		add_child(node)
+		node.transform = entry[1]
+	for entry: Array in data.wall_pieces:
+		var p := _catalog.piece(String(entry[0]))
+		if p.is_empty(): continue
+		var node := _catalog.instance(p)
+		add_child(node)
+		node.transform = ParcelTransform.wall_transform(Vector2i(entry[1].x, entry[1].z), entry[2], entry[3] if entry.size() > 3 else Vector3.ZERO)
 	for footprint: Rect2i in data.wrecks:
 		_add_wreck(footprint)
 	for link: Array in data.stair_links:
@@ -341,6 +353,7 @@ func _build_cell(pos: Vector3i, cell: MapData.Cell) -> void:
 		var t: GridTileData = GridManager.get_tile(pos)
 		if t:
 			t.alarm = true
+		if data.light_specs.has(pos): _add_light(pos, cell.fixture)
 	elif cell.fixture != MapData.Fixture.NONE:
 		_add_light(pos, cell.fixture)
 
@@ -829,7 +842,7 @@ func _add_cover_edge(pos: Vector3i, side: int, cover_type: int) -> void:
 ## footprint, not one independent pool per edge. Collision is layer 4, same as
 ## ordinary edge cover: neither tier blocks line of sight (Sec 6.1), only
 ## movement, so this is not built like a wall.
-func _add_cover_block(footprint: Rect2i, tier: int, kind: StringName = &"crate", hp_scale := 1.0) -> void:
+func _add_cover_block(footprint: Rect2i, tier: int, kind: StringName = &"crate", hp_scale := 1.0, piece_id := "", rot := 0) -> void:
 	var first := cell_to_world(Vector3i(footprint.position.x, 0, footprint.position.y))
 	var last := cell_to_world(Vector3i(footprint.position.x + footprint.size.x - 1, 0, footprint.position.y + footprint.size.y - 1))
 	var center := (first + last) / 2.0
@@ -845,7 +858,7 @@ func _add_cover_block(footprint: Rect2i, tier: int, kind: StringName = &"crate",
 	# No floor material: _build_floors already drew floor under the footprint,
 	# so a destroyed block has nothing to lay down.
 	body.call("setup", footprint, 0, tier, null, GridManager.TILE_SIZE, GridManager.FLOOR_HEIGHT)
-	_dress_cover_block(body, footprint, tier, kind)
+	_dress_cover_block(body, footprint, tier, kind, piece_id, rot)
 	var edge := GridManager.register_cover_block(footprint, 0, tier, body)
 	edge.hp = 8 if kind in [&"fuel_tank", &"gas", &"panel"] else maxi(1, roundi(edge.hp * hp_scale))
 
@@ -855,7 +868,19 @@ func _add_cover_block(footprint: Rect2i, tier: int, kind: StringName = &"crate",
 ## turn by hash so a row of crates doesn't repeat exactly. The body and its
 ## BoxShape3D stay exactly as they were — only the "Mesh" child goes — and the
 ## art is parented to the body, so CoverBlock.on_destroyed frees it with the rest.
-func _dress_cover_block(body: StaticBody3D, footprint: Rect2i, tier: int, kind: StringName = &"crate") -> void:
+func _dress_cover_block(body: StaticBody3D, footprint: Rect2i, tier: int, kind: StringName = &"crate", piece_id := "", rot := 0) -> void:
+	if piece_id != "":
+		var exact := _catalog.piece(piece_id)
+		if exact.is_empty():
+			push_error("Unknown authored piece: " + piece_id)
+			return
+		body.get_node("Mesh").queue_free()
+		var node := _catalog.instance(exact)
+		body.add_child(node)
+		node.position = Vector3(0, -CoverObject.TIER_HEIGHT[tier] / 2.0, 0)
+		node.rotation.y = -rot * PI / 2.0
+		piece_log.append("authored:%s@%s" % [piece_id, footprint])
+		return
 	var furniture_socket := ("hazard_" if kind in [&"fuel_tank", &"gas", &"panel"] else "furniture_") + String(kind)
 	var furniture := _catalog.pick(furniture_socket, _socket_hash([kind, footprint]), func(p: Dictionary) -> bool:
 		var a: Array = p.get("footprint", [1, 1])
@@ -927,6 +952,19 @@ func _add_wreck(footprint: Rect2i) -> void:
 
 
 func _dress_wreck(body: StaticBody3D, size: Vector3, footprint: Rect2i) -> void:
+	if data.wreck_specs.has(footprint):
+		var spec: Array = data.wreck_specs[footprint]
+		var piece := _catalog.piece(String(spec[0]))
+		if not piece.is_empty():
+			var mesh := body.get_node("Mesh")
+			body.remove_child(mesh)
+			mesh.free()
+			var node := _catalog.instance(piece)
+			body.add_child(node)
+			node.position.y = -size.y / 2
+			node.rotation.y = -int(spec[1]) * PI / 2
+			piece_log.append("authored_wreck:%s@%s" % [spec[0], footprint])
+		return
 	var h := _socket_hash(["wreck", footprint])
 	var path: String = ShipModel.WRECKS[posmod(h, ShipModel.WRECKS.size())]
 	var room := size - Vector3(WRECK_MARGIN * 2.0, 0.0, WRECK_MARGIN * 2.0)
@@ -1006,6 +1044,25 @@ func pad_world_position(h: MapData.Hangar) -> Vector3:
 ## has no wall face, keep the old mount in mid-air above the cell.
 func _add_light(pos: Vector3i, fixture: int) -> void:
 	var source := LightSource.new()
+	if data.light_specs.has(pos):
+		var spec: Dictionary = data.light_specs[pos]
+		source.intensity = 45.0 if spec.preset == DeckLight.Preset.MONITOR else 90.0
+		source.light_range = 2.5 if spec.preset == DeckLight.Preset.MONITOR else 6.0
+		source.flickers = spec.preset == DeckLight.Preset.FLICKER
+		source.use_room_color = false
+		for property: Dictionary in source.get_property_list():
+			if property.usage & PROPERTY_USAGE_EDITOR and spec.overrides.has(property.name):
+				source.set(property.name, spec.overrides[property.name])
+		add_child(source)
+		if spec.wall_side >= 0:
+			source.transform = ParcelTransform.wall_transform(Vector2i(pos.x, pos.z), spec.wall_side)
+			# Source -Z points into the room for the tilted spotlight.
+			source.rotate_y(PI)
+			source.position.y = WALL_LAMP_HEIGHT
+		else:
+			source.position = cell_to_world(pos) + Vector3(0, 2, 0)
+		source.register_with_grid()
+		return
 	match fixture:
 		MapData.Fixture.OVERHEAD:  # bright, wide, always on
 			source.light_range = 6.0

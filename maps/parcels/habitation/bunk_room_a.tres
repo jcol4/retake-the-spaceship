@@ -1,0 +1,103 @@
+[gd_resource type="Resource" script_class="ParcelData" format=4]
+
+[ext_resource type="Script" path="res://scripts/deck/deck_light.gd" id="1_784mo"]
+[ext_resource type="Script" path="res://scripts/deck/deck_marker.gd" id="2_nw55b"]
+[ext_resource type="Script" path="res://scripts/deck/deck_piece.gd" id="3_y1k6n"]
+[ext_resource type="Script" path="res://scripts/deck/parcel_data.gd" id="4_f7eqd"]
+
+[sub_resource type="Resource" id="Resource_141mt"]
+script = ExtResource("1_784mo")
+cell = Vector2i(4, 2)
+chance = PackedFloat32Array(1, 1, 1, 1)
+
+[sub_resource type="Resource" id="Resource_pbqhi"]
+script = ExtResource("1_784mo")
+cell = Vector2i(4, 7)
+chance = PackedFloat32Array(1, 1, 1, 1)
+
+[sub_resource type="Resource" id="Resource_aqtwk"]
+script = ExtResource("1_784mo")
+preset = 2
+cell = Vector2i(1, 4)
+chance = PackedFloat32Array(1, 1, 1, 1)
+
+[sub_resource type="Resource" id="Resource_menvg"]
+script = ExtResource("2_nw55b")
+kind = 3
+cell = Vector2i(1, 4)
+chance = PackedFloat32Array(1, 1, 1, 1)
+
+[sub_resource type="Resource" id="Resource_uwsht"]
+script = ExtResource("2_nw55b")
+cell = Vector2i(6, 4)
+chance = PackedFloat32Array(1, 1, 1, 1)
+
+[sub_resource type="Resource" id="Resource_k7w6b"]
+script = ExtResource("3_y1k6n")
+piece_id = &"ship_bunk"
+cell = Vector2i(0, 2)
+chance = PackedFloat32Array(1, 0.65, 1, 0.4)
+
+[sub_resource type="Resource" id="Resource_qfi5a"]
+script = ExtResource("3_y1k6n")
+piece_id = &"ship_bunk"
+cell = Vector2i(6, 2)
+chance = PackedFloat32Array(1, 0.65, 1, 0.4)
+
+[sub_resource type="Resource" id="Resource_2q6g2"]
+script = ExtResource("3_y1k6n")
+piece_id = &"ship_bunk"
+cell = Vector2i(0, 6)
+chance = PackedFloat32Array(1, 0.65, 1, 0.4)
+
+[sub_resource type="Resource" id="Resource_xaqij"]
+script = ExtResource("3_y1k6n")
+piece_id = &"ship_bunk"
+cell = Vector2i(6, 6)
+chance = PackedFloat32Array(1, 0.65, 1, 0.4)
+
+[sub_resource type="Resource" id="Resource_ns54l"]
+script = ExtResource("3_y1k6n")
+piece_id = &"mk_terminal_wall"
+cell = Vector2i(7, 4)
+wall_side = 0
+offset = Vector3(0, 1.2, 0)
+chance = PackedFloat32Array(1, 1, 1, 1)
+
+[sub_resource type="Resource" id="Resource_ya5p5"]
+script = ExtResource("3_y1k6n")
+piece_id = &"kk_cabinet_stack"
+cell = Vector2i(0, 3)
+rot = 3
+chance = PackedFloat32Array(1, 1, 1, 1)
+
+[sub_resource type="Resource" id="Resource_ox5rs"]
+script = ExtResource("3_y1k6n")
+piece_id = &"kk_cabinet_stack"
+cell = Vector2i(0, 7)
+rot = 3
+chance = PackedFloat32Array(1, 1, 1, 1)
+
+[sub_resource type="Resource" id="Resource_1qdcs"]
+script = ExtResource("3_y1k6n")
+piece_id = &"qe_crate_light"
+cell = Vector2i(1, 8)
+chance = PackedFloat32Array(0, 0.1, 1, 0.2)
+group = &"barricade"
+
+[sub_resource type="Resource" id="Resource_p4w1o"]
+script = ExtResource("3_y1k6n")
+piece_id = &"qe_crate_light"
+cell = Vector2i(6, 8)
+chance = PackedFloat32Array(0, 0.1, 1, 0.2)
+group = &"barricade"
+
+[resource]
+script = ExtResource("4_f7eqd")
+display_name = "Bunk room A"
+room_type = &"bunk_room"
+terrain = PackedByteArray("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=")
+sockets_ok = Array[Vector3i]([Vector3i(3, 3, 2), Vector3i(1, 3, 2)])
+pieces = Array[ExtResource("3_y1k6n")]([SubResource("Resource_k7w6b"), SubResource("Resource_qfi5a"), SubResource("Resource_2q6g2"), SubResource("Resource_xaqij"), SubResource("Resource_ns54l"), SubResource("Resource_ya5p5"), SubResource("Resource_ox5rs"), SubResource("Resource_1qdcs"), SubResource("Resource_p4w1o")])
+lights = Array[ExtResource("1_784mo")]([SubResource("Resource_141mt"), SubResource("Resource_pbqhi"), SubResource("Resource_aqtwk")])
+markers = Array[ExtResource("2_nw55b")]([SubResource("Resource_menvg"), SubResource("Resource_uwsht")])

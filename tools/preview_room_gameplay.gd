@@ -19,6 +19,7 @@ func _initialize() -> void:
 	root.add_child(map)
 	await process_frame
 	var cfg := MapGenerator.Config.new()
+	cfg.deck_source = 1 # MapGenerator.DeckSource.GENERATED: procedural regression
 	cfg.profile_primary = RoomTypes.Zone.ENGINEERING
 	cfg.profile_secondary = RoomTypes.Zone.COMMAND
 	map.build_generated(7, cfg)

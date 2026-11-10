@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="ParcelData" format=4 uid="uid://behiyleitc770"]
+
+[ext_resource type="Script" uid="uid://bfjwui3nkcx25" path="res://scripts/deck/deck_light.gd" id="1_27xn3"]
+[ext_resource type="Script" uid="uid://3c8hbln0ut1m" path="res://scripts/deck/deck_marker.gd" id="2_8w8o6"]
+[ext_resource type="Script" uid="uid://fegk8ud5o8wr" path="res://scripts/deck/deck_piece.gd" id="3_uxc8n"]
+[ext_resource type="Script" uid="uid://byjy24bvo3s4u" path="res://scripts/deck/parcel_data.gd" id="4_n32we"]
+
+[resource]
+script = ExtResource("4_n32we")
+display_name = "test"
+room_type = &"generic"
+size = Vector2i(10, 14)
+terrain = PackedByteArray("AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=")

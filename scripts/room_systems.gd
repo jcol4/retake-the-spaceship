@@ -52,7 +52,7 @@ func setup(builder: Node3D) -> void:
 			var catalog := ModuleCatalog.shared()
 			# Room services use the solid furniture already generated in that
 			# room; only wall-mounted controls need an additional visual prop.
-			var piece := catalog.pick(socket, ModuleCatalog.hash_of([room, tile, socket])) if type not in SERVICE_TYPES else {}
+			var piece := catalog.pick(socket, ModuleCatalog.hash_of([room, tile, socket])) if type not in SERVICE_TYPES and not data.authored_layout else {}
 			if not piece.is_empty():
 				var model := catalog.instance(piece)
 				add_child(model)
@@ -101,6 +101,11 @@ func setup(builder: Node3D) -> void:
 
 
 func _station_tile(room: int) -> Vector3i:
+	if data.authored_layout:
+		for entry: Array in data.wall_pieces:
+			var piece := ModuleCatalog.shared().piece(String(entry[0]))
+			if data.room_index_at(entry[1]) == room and piece.get("socket", "") in ["terminal_wall", "power_switch"]:
+				return entry[1]
 	var choices: Array[Vector3i] = []
 	for pos: Vector3i in data.room_of:
 		if data.room_of[pos] == room and data.is_passable(pos) and data.get_cell(pos).spawn == MapData.Spawn.NONE:

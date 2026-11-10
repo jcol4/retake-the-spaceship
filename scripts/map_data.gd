@@ -81,6 +81,12 @@ class Cell:
 
 var size := Vector2i.ZERO  # width (x) by depth (z), in tiles
 var seed: int = 0  # 0 for hand-authored maps
+var authored_layout := false
+var layout_errors: PackedStringArray = []
+var dressing: Array = [] # [exact catalog id, Transform3D]
+var wall_pieces: Array = [] # [exact catalog id, cell, wall side, optional offset]
+var light_specs: Dictionary = {} # cell -> authored preset/overrides/wall_side
+var wreck_specs: Dictionary = {} # Rect2i -> [exact piece id, rotation]
 ## Which of MapGenerator's rerolls produced this deck (0 = the seed itself). See
 ## MapGenerator.generate. Always 0 for a hand-authored deck.
 var generation_attempt: int = 0
