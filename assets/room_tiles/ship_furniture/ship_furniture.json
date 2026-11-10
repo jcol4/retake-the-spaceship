@@ -1,0 +1,67 @@
+{
+  "kit": "ship_furniture",
+  "source": "Original procedural models authored for this project; tools/make_room_furniture.py.",
+  "scale": [
+    1,
+    1,
+    1
+  ],
+  "materials": {},
+  "pieces": [
+    {
+      "id": "ship_bunk",
+      "file": "bunk.glb",
+      "socket": "furniture_bunk",
+      "footprint": [
+        2,
+        1
+      ],
+      "tier": "light",
+      "weight": 8
+    },
+    {
+      "id": "ship_mess_table",
+      "file": "mess_table.glb",
+      "socket": "furniture_mess_table",
+      "footprint": [
+        3,
+        1
+      ],
+      "tier": "light",
+      "weight": 8
+    },
+    {
+      "id": "ship_lab_bench",
+      "file": "lab_bench.glb",
+      "socket": "furniture_lab_bench",
+      "footprint": [
+        2,
+        1
+      ],
+      "tier": "light",
+      "weight": 8
+    },
+    {
+      "id": "ship_server_rack",
+      "file": "server_rack.glb",
+      "socket": "furniture_server_rack",
+      "footprint": [
+        2,
+        1
+      ],
+      "tier": "heavy",
+      "weight": 8
+    },
+    {
+      "id": "ship_machinery",
+      "file": "machinery.glb",
+      "socket": "furniture_machinery",
+      "footprint": [
+        3,
+        2
+      ],
+      "tier": "heavy",
+      "weight": 8
+    }
+  ]
+}

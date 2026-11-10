@@ -889,6 +889,8 @@ func _best_take() -> Dictionary:
 		var items: Array = source.loot_items()
 		for i in items.size():
 			var item: ItemData = items[i]
+			if item.slots() > free_slots():
+				continue
 			var value := item.value
 			if item.is_objective():
 				if not contest or item.code != ObjectiveManager.contract.item_code:

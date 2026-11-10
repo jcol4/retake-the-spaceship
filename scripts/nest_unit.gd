@@ -59,10 +59,19 @@ var activations := 0
 ## How many it has produced, for naming the spawn (node names must agree across
 ## peers — see `_spawn_at`).
 var spawned := 0
+var reactor := false
 
 
 func _ready() -> void:
 	super()
+	if reactor:
+		visual.hide()
+		var catalog := ModuleCatalog.shared()
+		var piece := catalog.pick("furniture_machinery", ModuleCatalog.hash_of(["reactor", grid_pos]))
+		if not piece.is_empty():
+			var model := catalog.instance(piece)
+			model.scale = Vector3.ONE * 0.45
+			add_child(model)
 	# Sec 6 trigger 1 of the escalation design: destroying a nest stops the
 	# bleeding but risks waking the deck. `died` is host-side (only the host runs
 	# `die`), so this escalates once, where the AI lives.
@@ -78,6 +87,8 @@ func _ready() -> void:
 ## a squad it stops reading as scenery and starts reading as a monster that
 ## forgot to attack.
 func take_turn() -> void:
+	if reactor:
+		return
 	activations += 1
 	if activations % SPAWN_INTERVAL != 0:
 		return

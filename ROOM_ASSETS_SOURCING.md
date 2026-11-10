@@ -198,9 +198,14 @@ licence file, so a bad pack can be reverted alone.
 Done 2026-11-09 on `3d-models`. Every kind in the mapping table has at least one piece; 162
 placeholder pieces in 37 sockets, 43 of them photoscanned Poly Haven props (a second pass for a
 grittier, more realistic set; they outweigh the stylised kits in every socket they share).
-D.1 is **not** built, so `MapBuilder` still draws only the cover
-sockets: the four Sci-Fi Essentials crates added to `cover_light`/`cover_heavy` are the only change
-visible in a deck today. Everything else waits for D.1/D.6.
+**D.1/D.6 are implemented:** themed room layouts now draw furniture and hazards from these
+sockets, filtered by kind, footprint and cover tier. Older generic cover keeps its fallback path.
+
+Phase G also adds five original models in `assets/room_tiles/ship_furniture/`: bunk, mess table,
+lab bench, server rack and machinery/engine block. Their manifest gives these industrial models
+higher selection weight within matching sockets. `tools/make_room_furniture.py` is the reproducible
+Blender source; no third-party assets or licence obligations were added for this kit.
+`tools/test_kit_coverage.gd` validates the original models alongside the imported placeholders.
 
 | Pack | Downloaded | Imported | Manifest | Credits needed | Notes |
 |---|---|---|---|---|---|

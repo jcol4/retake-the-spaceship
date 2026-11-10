@@ -128,6 +128,8 @@ func is_owned_by_local_player() -> bool:
 
 var grid_pos: Vector3i
 var current_hp: int
+const ROOM_WALK_NOISE := 4.0
+var armour_bonus := 0
 var ap: int = 0
 var ammo: int:
 	set(value):
@@ -655,7 +657,7 @@ func _ready() -> void:
 ## The streamed property set (see `_setup_replication`). Also what a mission
 ## snapshot carries per unit (MissionSnapshot, MULTIPLAYER_PLAN.md §2.5), so a
 ## rejoining client or a resumed host lands on exactly what a client sees.
-const REPLICATED: Array[String] = ["global_position", "rotation:y", "current_hp", "ap", "life_state",
+const REPLICATED: Array[String] = ["global_position", "rotation:y", "current_hp", "ap", "life_state", "armour_bonus",
 	"ammo", "reserve", "reserve_mags", "hunkered", "on_overwatch", "flashlight_on",
 	"downed_hp", "down_count", "carrying_path", "carried_by_path",
 	"stowed_ammo", "stowed_reserve", "stowed_reserve_mags",
@@ -992,6 +994,11 @@ func move_along(path: Array[Vector3i]) -> void:
 		# a carrier dropped mid-walk drops it exactly where they fell.
 		_carry_follow()
 		stepped.emit(self)
+		if is_player_controlled and (not multiplayer.has_multiplayer_peer() or multiplayer.is_server()):
+			var deck := GridManager.world_node
+			if deck != null and deck.get("data") != null and deck.data.explicit_doorways:
+				var factor: float = deck.data.movement_noise_at(grid_pos)
+				SecurityNetwork.report_noise(grid_pos, self, maxi(1, roundi(ROOM_WALK_NOISE * factor)))
 		if is_downed:
 			# Downed while stepping (a concurrent shot in exploration): a body
 			# holds no tile, including the one it was claiming.
@@ -1307,7 +1314,7 @@ func face_toward(world_pos: Vector3, quick := false) -> void:
 ## applies to every damage source rather than only to gunfire, and so the
 ## unarmored default costs one function call and no branching.
 func damage_taken(amount: int) -> int:
-	return amount
+	return maxi(0, amount - armour_bonus)
 
 
 ## Whether the light on this unit's tile is a term in accuracy rolls it takes
@@ -2129,19 +2136,26 @@ func leaves_body() -> bool:
 # --- Inventory and looting (GDD §7.5, extraction plan 3.1–3.2) -------------------
 
 
+func inventory_slots_used() -> int:
+	var used := 0
+	for item: ItemData in inventory:
+		used += item.slots()
+	return used
+
+
 func free_slots() -> int:
-	return maxi(0, INVENTORY_SLOTS - inventory.size())
+	return maxi(0, INVENTORY_SLOTS - inventory_slots_used())
 
 
 func has_free_slot() -> bool:
-	return inventory.size() < INVENTORY_SLOTS
+	return free_slots() > 0
 
 
 ## Puts `item` in this unit's pack. Host-side. Refused (false) when the pack is
 ## full, unless `ignore_cap` — which only the corpse conversion and a spawner
 ## seeding a pack use; nothing a player does can overfill a living soldier.
 func add_item(item: ItemData, ignore_cap := false) -> bool:
-	if item == null or (not ignore_cap and not has_free_slot()):
+	if item == null or (not ignore_cap and free_slots() < item.slots()):
 		return false
 	inventory.append(item)
 	_inventory_changed()

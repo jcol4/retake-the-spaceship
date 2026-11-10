@@ -32,12 +32,31 @@ extends Node3D
 var grid_pos: Vector3i
 var _current_intensity: float
 var _visual: SpotLight3D = null
+var room_index := -1
+var normal_color := Color.WHITE
+
+
+func set_powered(powered: bool) -> void:
+	_current_intensity = intensity if powered else intensity * 0.15
+	light_color = normal_color if powered else Color(1.0, 0.12, 0.08)
+	if _visual:
+		_visual.light_color = light_color
+		_visual.light_energy = _energy_for(_current_intensity)
 
 
 func register_with_grid() -> void:
 	grid_pos = GridManager.world_to_grid(global_position)
+	var map := GridManager.world_node
+	if map != null and map.get("data") != null:
+		if room_index < 0:
+			room_index = map.data.room_index_at(grid_pos)
+		if map.data.room_type(room_index) not in [RoomTypes.GENERIC, RoomTypes.CORRIDOR, RoomTypes.HANGAR]:
+			light_color = RoomTypes.light_of(map.data.room_type(room_index))
+	normal_color = light_color
 	_current_intensity = intensity
 	_visual = _make_visual()
+	if map != null and map.get("data") != null:
+		set_powered(not (map.data.room_is_dark(room_index) or map.data.is_dark_at(grid_pos)))
 	LightingManager.register_source(self)
 
 

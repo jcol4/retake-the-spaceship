@@ -75,6 +75,7 @@ static func capture(main: Node) -> Dictionary:
 		"units": units,
 		"hangars": ExtractionManager.capture() if ExtractionManager.is_active() else {},
 		"loot": _capture_loot(),
+		"rooms": RoomSystems.current().capture() if RoomSystems.current() != null else {},
 		"objective": {
 			"terminal": ObjectiveManager.terminal_rules.snapshot() if ObjectiveManager.terminal_rules != null else [],
 			"carried_off": ObjectiveManager.carried_off,
@@ -144,6 +145,8 @@ static func apply(main: Node, snap: Dictionary, as_host: bool) -> void:
 		return
 	journal = (snap.get("journal", []) as Array).duplicate(true)
 	_replay_journal(main, journal)
+	if RoomSystems.current() != null:
+		RoomSystems.current().restore(snap.get("rooms", {}))
 	var dev := main.get_node_or_null("DevSpawn")
 	if dev != null:
 		dev.set("_counter", int(snap.get("dev_counter", 0)))

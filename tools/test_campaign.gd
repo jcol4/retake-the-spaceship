@@ -496,9 +496,9 @@ func _check_contract_offers() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 2024
 	var o = _offer.generate(rng)
-	var data = load("res://scripts/map_generator.gd").generate(o.map_seed, _offer.config_for(o.size, o.primary, o.secondary))
+	var data = load("res://scripts/map_generator.gd").generate(o.map_seed, _offer.config_for(o.size, o.primary, o.secondary, o.type))
 	var c1 = o.build_contract(data)
-	var data2 = load("res://scripts/map_generator.gd").generate(o.map_seed, _offer.config_for(o.size, o.primary, o.secondary))
+	var data2 = load("res://scripts/map_generator.gd").generate(o.map_seed, _offer.config_for(o.size, o.primary, o.secondary, o.type))
 	var c2 = o.build_contract(data2)
 	_check(c1 != null and c1.type == o.type and c1.payout == o.payout, "an offer builds its own contract at its price")
 	_check(c2 != null and c1.target_tile == c2.target_tile and c1.item_code == c2.item_code,
@@ -518,7 +518,7 @@ func _check_contract_offers() -> void:
 		var saved = _offer.from_dict(JSON.parse_string(JSON.stringify(offered.to_dict())))
 		var deployment: Dictionary = saved.deck()
 		var rebuilt = load("res://scripts/map_generator.gd").generate(int(deployment.seed),
-			_offer.config_for(int(deployment.size), int(deployment.primary), int(deployment.secondary)))
+			_offer.config_for(int(deployment.size), int(deployment.primary), int(deployment.secondary), int(deployment.get("objective", -1))))
 		profiles_match = profiles_match and rebuilt.profile_name() == offered.profile_name()
 		supported = supported and saved.build_contract(rebuilt) != null
 	_check(profiles_match and supported, "32 saved offers deploy their advertised profile with a supported objective")

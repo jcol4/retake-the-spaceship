@@ -879,11 +879,12 @@ and the HUD stay on the root camera.
 - Per-tile data: passability, cover, occupant, light value, door reference.
 - Owned by the `GridManager` autoload, which does BFS range queries and LOS.
 
-### 10.4 Deck Generation **[built: themed layouts]**
+### 10.4 Deck Generation **[built: themed rooms and gameplay]**
 
 - Contracts roll a primary profile (Habitation 35%, Medical 25%, Engineering 25%,
   Command 15%) and a compatible secondary wing. Small decks mix all four zones.
-  The profile is displayed on the contract board, saved with the offer and sent to every peer.
+  Objective zones receive three times their base weight (Retrieve favours either Medical or
+  Command). The profile is displayed on the contract board, saved with the offer and sent to every peer.
 - Zone bands run bow to stern with width jitter and occasional neighbouring swaps.
   Two passageways, two tiles wide, run the length of the deck; cross-corridors connect
   them at every band boundary. Small decks keep the spines straight for room clearance.
@@ -897,15 +898,27 @@ and the HUD stay on the root camera.
 - Layout, cover and encounter generation are deterministic in the seed, including rerolls.
 - Room types and conditions are stored in ASCII `[rooms]`; themed exports mark explicit
   door topology so loading does not merge suites or split their interiors on unrelated walls.
-- **Next phases [design]:** arranged furniture, conditions and lighting; zone power,
-  locked doors and terminals; faction home rooms, themed loot, services and objectives.
+- Furniture follows room-specific layouts with walking lanes, matching floor materials and lights.
+  Conditions roll intact 20%, ransacked 50%, barricaded 15%, overrun 15%. Overrun rooms have
+  damaged cover, worms and permanent emergency lights. Heavy furniture blocks sight; low-HP
+  fuel/gas/panel hazards explode in a two-tile radius and can chain.
+- About 60% of faction placements favour eligible home rooms. Themed loot supplies 75% of
+  container rolls, with generic loot supplying the rest. Research specimens take two pack slots.
+- Once per room, a full-turn service heals/revives in medbay, refills ammo plus a grenade in
+  armory, or swaps an attachment from the owning squad's available stash in fabrication.
+  The HUD's `Room / items` menu presents service, supply and room interactions with AP costs.
+- Explored rooms have hangar-style name labels; the selected soldier's room and power appear
+  in the HUD. Hovering an explored room shows its name. J cycles world name tags.
+- Each zone has a one-in-three chance of losing power: red emergency lighting and six-tile
+  sight cap. Engineering control restores one dark zone per use. Overrun rooms stay dark.
+- Movement noise multipliers: Engineering/Cargo 1.5, Habitation/Command 0.75, Medical 1.0.
 - Hand-authored decks are ASCII (`maps/*.txt`, `MapAscii`).
 - **Rooms → compartments → room graph** (`MapData.compute_rooms`) drives occlusion, alert scoping
   and robot zones.
 - **[built] for extraction:** hangar set pieces (3–4, spread apart, one insertion),
   objective and loot placement, and a connectivity check guaranteeing every hangar
-  is reachable. Objective placement and loot still use generic room rules until
-  the themed gameplay phase.
+  is reachable. Objectives prefer engine reactors, bridge/server data, lab specimens and
+  quarters/brig VIPs. Insertion is sampled from the farthest half of hangars by walked distance.
 - **Bigger decks [design] (§7.7):** 3× or more per side, about 30,000 tiles for a Medium deck. Several
   things that are fine today won't scale and need performance work before decks grow:
   - flashlight lighting rescans every tile on every step;
@@ -922,7 +935,13 @@ and the HUD stay on the root camera.
 
 ### 10.5 Doors **[built]**
 
-Free to toggle (0 AP). Closed doors block LOS, light and sound.
+Armory, brig, server room, bridge and captain's quarters have locked physical doors.
+A matching card carried by the actor or an adjacent active squadmate unlocks free. A breaching
+charge costs 1 AP; manual breaching takes two full AP pools and alerts the zone. Required cards
+are generated in reachable unlocked rooms. Bridge and security terminals can unlock all doors
+for a full turn, reveal the room map for 1 AP, or toggle security robots for 1 AP. Openings on
+legacy decks retain their existing behaviour. Door, power, terminal and service state is
+replicated by the host and included in checkpoints.
 
 ### 10.6 Line of Sight & Visibility **[built]**
 

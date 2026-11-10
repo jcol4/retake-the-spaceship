@@ -8,6 +8,10 @@ locations and gotchas found along the way. Read the plan first, then this.
 The user asked for the whole room plan to be implemented. Work goes phase by phase in the
 plan's order, each phase tested and committed (local commits only; nothing pushed).
 
+**Current status:** A–F implemented; G's five original models, rendered review and automated
+playtest are complete. The final difficulty and human mission-length assessment remain playtest
+judgements. Room names are visible in world labels, the selected-soldier HUD and hover text.
+
 ---
 
 ## Environment and tooling (read before running anything)
@@ -42,8 +46,8 @@ piece has a `footprint` (tiles) and a `tier` (light/heavy/dressing/clutter/wall/
 furniture convention: origin at the footprint centre on the floor, long side along X, front +Z.
 `ModuleCatalog` supports `parts`, `tint`/`paint`, `emission`, and `res://` file paths into
 other kits. `tools/test_kit_coverage.gd` checks every piece (1,414 checks pass) and
-`tools/room_kit_gallery.gd` renders them. **None of the furniture sockets is drawn yet**: that
-is plan D.6, below. Floor materials for D.5: `assets/room_tiles/floors/floor_{medical,engineering,quarters,command}.tres`.
+`tools/room_kit_gallery.gd` renders them. **Furniture sockets are now drawn on themed decks**, selected by kind, footprint and tier.
+Five original industrial models supplement the imported placeholders (Phase G below). Floor materials for D.5: `assets/room_tiles/floors/floor_{medical,engineering,quarters,command}.tres`.
 
 ### Phase A, commit `6ac46391` (all tests pass)
 
@@ -182,56 +186,94 @@ above; filtering by size and pairing allows independent concurrent runs.
 
 ---
 
-## Not started: Phases D, E, F, G
+## Phases D–F implemented; Phase G art and automated checks complete
 
-Where each hooks in, from what I read:
+The remaining implementation is in `scripts/room_dressing.gd`, `scripts/room_systems.gd`
+and their generator, map, unit, HUD, item, contract and checkpoint integrations.
 
-- **D.1 obstacle kind:** `data.obstacles` entries `[Rect2i, tier]` → `[Rect2i, tier, kind]`.
-  Writers: `MapGenerator._place_piece` / `_place_one_cover_block`, `MapAscii._parse_obstacles` /
-  `encode_obstacles` (old files default to `&"crate"`; keep byte-identical round-trips for files
-  without a kind). Readers: `MapBuilder` (around line 275, `for entry: Array in data.obstacles`),
-  `GridManager`.
-- **D.2 layouts:** replace `_place_room_cover` for typed rooms with an arrangement per
-  `RoomTypes.layout_of(type)`. Keep a tile of clearance to walls and between pieces. Map layout
-  to obstacle kind to the furniture socket names in `ROOM_ASSETS_SOURCING.md`'s mapping table
-  (e.g. mess → `mess_table` 1x3 light; bunks → `bunk` 1x2 light; server rows → `server_rack`
-  heavy; machinery → `machinery` 2x2/3x2 heavy).
-- **D.3 tiers:** light is low and destructible, heavy is tall and blocks sight; same rules as
-  today's cover blocks.
-- **D.4 conditions:** roll per room (intact 20 / ransacked 50 / barricaded 15 / overrun 15)
-  into `data.room_conditions`. `[rooms]` already stores them. Overrun means worm mass
-  (`data.worm_counts`) and damaged cover; barricaded means cover at doors plus a loot bonus.
-- **D.5 lighting:** `MapBuilder` lights come from fixtures (`Fixture.OVERHEAD` etc.) and
-  `LightingManager`. Tint by `RoomTypes.light_of(type)`. Floors: `MapBuilder._build_floors`
-  (around line 467, MultiMesh per kit floor piece). Per-room floor material from
-  `RoomTypes.floor_of` → `assets/room_tiles/floors/floor_*.tres`.
-- **D.6:** `MapBuilder._dress_cover_block` (around line 848) picks
-  `_catalog.pick("cover_heavy"/"cover_light", hash)`. Make it pick from `furniture_<kind>`
-  first, filtered by the piece's `footprint`/`tier` (an `accept` callable on
-  `ModuleCatalog.pick`), then the cover sockets, then the box. Furniture pieces are one wrapper
-  per footprint (origin at its centre); cover pieces are one per cell.
-- **D.7 hazards:** an exploding low-HP cover block (radius 2, about a frag grenade's damage,
-  chains, enemy-triggerable). See `cover_block.gd`, `GridManager.register_cover_block`, and the
-  grenade damage code in `combat.gd`.
-- **D.8 noise:** multiply movement noise by zone (`data.zone_at`) where noise reaches
-  `SecurityNetwork.report_noise` and alien `hear_noise`.
-- **D.9:** room name in the hover tooltip once the room has been seen (`hud.gd`,
-  `_room_under_cursor`).
-- **E (power, locked doors, terminals):** doors today are plain openings (`Terrain.DOOR`, no
-  door entity), so locked rooms need a door object. There is no keycard item.
-  `terminal_prop.gd` and Contract HOLD terminals exist. `security_network.gd` handles robots.
-  Dark zones need sight at about 60% and red emergency lighting.
-- **F (spawns, loot, services, objectives):**
-  - Spawns: `MapGenerator._place_spawns` (alien ENEMY glyph; `AlienPresets.FODDER_ONLY`
-    turns these into hordes in `main.gd` `_spawn_hordes`), `_place_mercs`, and robot spawns.
-  - Loot: `ItemPresets.roll_container(rng)`. **Missing items:** medkits, stims, keycards,
-    research data, specimens, scrap, armour patches. Only valuables, gear, objective items and
-    salvage exist (see `item_presets.gd` header).
-  - Objectives: `Contract.make` (`_retrieve_candidates`, `_nest_candidates`,
-    `_terminal_candidates`).
-  - Insertion: `gen._insertion`, picked at random today.
-  - Contract screen: `ContractOffer.describe()`, `hub_menu.gd`.
-- **G:** playtesting and art; mostly for the designer.
+### D: Dressing, conditions and identification
+
+- Seeded layouts place furniture by room type, footprint and cover tier, keeping walking lanes.
+  Kind and damaged HP scale round-trip in ASCII; legacy obstacle records still load unchanged.
+- Rooms roll intact/ransacked/barricaded/overrun at 20/50/15/15. Barricades add cover and loot;
+  overrun rooms have damaged furniture, worm masses and permanent emergency lighting.
+- Room floor materials and fixture colours follow the room catalog. Heavy furniture blocks
+  movement and sight. Fuel tanks, gas cylinders and panels explode and chain when destroyed,
+  including from grenade cover damage. Only the host applies explosion damage.
+- Movement noise is multiplied by zone: Engineering/Cargo 1.5, Habitation/Command 0.75,
+  Medical 1.0. Legacy decks retain their existing noise rules.
+- Hangar-style world labels identify explored rooms. Current/hovered rooms show condition,
+  power and locked/used state; smaller neighbour labels avoid crowding. J cycles name tags.
+  The HUD shows the selected soldier's room and power; hovering explored rooms shows their name.
+
+### E: Power, locks and terminals
+
+- Each zone rolls 1/3 unpowered. Emergency lights are red and dim; dark sight is capped at
+  six tiles. Engineering control restores one zone per use; overrun rooms stay dark.
+- Locked armory/brig/bridge/server/captain rooms have physical door collision. Adjacent squad
+  cards unlock free, charges cost 1 AP, manual breach costs two full AP pools and alerts the
+  zone. Bridge/security terminals reveal rooms, toggle robots, or unlock doors for a full turn.
+- Required cards are placed in reachable unlocked rooms, including related security/comms
+  rooms when present. Captain's quarters can contain extra bridge/server cards.
+- Commands use the host's validated player command path. Room state is replicated and saved
+  in mission snapshots; opened doors restore before actors are placed back on the grid.
+
+### F: Encounters, loot, services and contracts
+
+- Faction placement favours eligible home rooms about 60% of the time. Overrun worms are real
+  worm units even in fodder-only mode; robot rooms get security units.
+- Themed tables supply 75% of container rolls. New loot includes medkits, stims, armour patches,
+  charges, keycards, research data, two-slot specimens and scrap. Inventory capacity counts slots.
+- `Room / items` offers nearby services, terminal/door interactions, supplies and hazard shots,
+  with AP costs. Medbay heals/revives, armory replenishes ammo/grenade, fabrication exchanges
+  one compatible stash attachment. Each service is usable once per room.
+- Objectives prefer engine reactors, command data, research specimens and quarters/brig VIPs.
+  Offers bias profiles toward objective zones and advertise the profile. Actual contract placement
+  selects insertion from the farthest half of hangars by walked distance and clears nearby spawns.
+- Fabrication uses each owner's available deployment stash minus current fittings; checkpoints
+  retain exchanged loadouts and room-use state without duplicating spare attachments.
+
+### G: Original models, tuning evidence and review limits
+
+- Added `assets/room_tiles/ship_furniture/`: bunk, mess table, lab bench, server rack and
+  machinery/engine block. All five are original bevelled industrial meshes with baked materials.
+  Rebuild with Blender using `tools/make_room_furniture.py`; no external downloads required.
+- `tools/preview_room_gameplay.gd` renders an actual generated room, actor, cutaway, labels and
+  HUD. Inspected the engine-room render; compact labels and floor-height placement are corrected.
+- `tools/test_room_gameplay.gd` checks 40 themed seeds, accessible keys with all locks blocked,
+  insertion distances, objective rooms, loot codecs, actual AP costs, two-turn breaching,
+  services, nonduplicating attachment exchanges, hazards, sight and power restoration.
+- Snapshot regression now mutates room power, locks, terminals and used services, then checks
+  exact restoration for a resuming host and rejoining client.
+- Final geometry sweep: 20 seeds for each of 17 size/profile cases (340 dressed decks).
+  Earlier layout-only sweep measured 8,500 seeds; reroll figures above remain the larger sample.
+- Kit regression checks all imported and original pieces and builds 50 generated decks twice.
+  Other regressions cover objectives, campaign offers, extraction, exploration, co-op, cover,
+  loot, lighting and legacy ASCII. See the final verification results below.
+- An end-to-end throwaway campaign reached debrief without script errors: Large Engineering/
+  Cargo Retrieve, squad wiped in round 15. This is automated integration evidence, not a claim
+  that the intended 20–40-minute human mission length or final difficulty is established.
+  Room-scale feel and difficulty remain designer playtest judgements; no implementation phase
+  is waiting on additional art or code.
+
+### Reproduce the new checks
+
+```
+godot --headless --path . --editor --import --quit
+godot --headless --path . --script res://tools/test_room_gameplay.gd
+godot --headless --path . --script res://tools/test_mission_snapshot.gd
+godot --path . --script res://tools/preview_room_gameplay.gd -- --room=engine_room --out=C:/tmp/rooms.png
+godot --headless --path . res://scenes/main.tscn -- --auto-campaign=1
+```
+
+The auto campaign uses `user://auto_campaign_test.json`, never the player's campaign slot.
+Temporary final logs use `test_<name>_final.log`, `room_gameplay_hud.log` and
+`rooms_auto_final.log` in the user's temp directory.
+
+Final verification passed: room gameplay, objectives, campaign, mission snapshot (host and
+rejoining client), co-op campaign, exploration, room visibility, legacy map round-trip, gear/loot,
+merc extraction, hangar generation, kit coverage, edge cover, cover blocks and ammunition/lights.
+Final follow-up logs use `test_<name>_release.log` and `test_room_gameplay_complete.log`.
 
 ---
 
@@ -244,6 +286,6 @@ Where each hooks in, from what I read:
 - Suites are runs of rooms sharing one-tile walls along a spine. A suite's ONE-door member
   (cold store) uses only its internal door. Other ONE-door members (laundry, captain's quarters)
   use an internal door when part of a suite, or a spine door when placed alone.
-  Phase E must place their keycards outside the rooms they unlock.
+  Required keycards are placed outside locked rooms; captain loot can supply additional cards.
 - Internal and loop doors are corridor regions of their own, matching `compute_rooms`.
 - On themed decks, spawn safety is the rooms within 14 walked tiles of the insertion square.

@@ -19,6 +19,35 @@ var tier: int = MapData.Cover.NONE
 var _floor_mat: StandardMaterial3D
 var _tile_size: float
 var _floor_height: float
+var kind: StringName = &"crate"
+var exploded := false
+
+
+func explode() -> void:
+	if exploded or kind not in [&"fuel_tank", &"gas", &"panel"]:
+		return
+	exploded = true
+	var center := Vector3i(footprint.get_center().x, deck, footprint.get_center().y)
+	SecurityNetwork.report_noise(center, null, 12)
+	for unit in get_tree().get_nodes_in_group("units"):
+		if unit.life_state == Unit.LifeState.DEAD or GridManager.chebyshev_dist(center, unit.grid_pos) > 2:
+			continue
+		if GridManager.has_clear_line(self, GridManager.grid_to_world(center) + Vector3.UP, unit.global_position + Vector3.UP, [get_rid()]):
+			unit.take_damage(8)
+	var hit := {}
+	for z in range(center.z - 2, center.z + 3):
+		for x in range(center.x - 2, center.x + 3):
+			var pos := Vector3i(x, deck, z)
+			for side in 4:
+				var edge := GridManager.cover_edge(pos, side)
+				if edge != null and not hit.has(edge) and edge.is_intact():
+					hit[edge] = true
+					var excluded: Array[RID] = [get_rid()]
+					if edge.node is CollisionObject3D:
+						excluded.append(edge.node.get_rid())
+					if edge.node != null and not GridManager.has_clear_line(self, GridManager.grid_to_world(center) + Vector3.UP, edge.node.global_position + Vector3(0, 0.5, 0), excluded):
+						continue
+					GridManager.damage_cover_edge(pos, side, 8)
 
 
 ## `floor_mat`/`tile_size`/`floor_height` are handed in at construction rather

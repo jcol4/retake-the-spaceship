@@ -1,7 +1,7 @@
 class_name ItemData
 extends Resource
-## One inventory item (GDD §7.5, extraction plan 3.1). Every item takes exactly one
-## of a soldier's Unit.INVENTORY_SLOTS, whatever it is.
+## One inventory item (GDD §7.5, extraction plan 3.1). Most items take one pack
+## slot; heavy research specimens take two, as specified by payload.slots.
 ##
 ## Built only by `ItemPresets` (the roster) — never by hand — so that `code`, the
 ## wire form, always describes the item completely: an item crosses the network,
@@ -19,7 +19,11 @@ extends Resource
 ##            contract's payout is the reward, and only if it extracts.
 ##
 ## APPEND-ONLY: Phase 4 saves will hold these.
-enum Kind { VALUABLE, GEAR, OBJECTIVE }
+enum Kind { VALUABLE, GEAR, OBJECTIVE, CONSUMABLE, KEYCARD }
+
+
+func slots() -> int:
+	return int(payload.get("slots", 1))
 
 ## The preset key: "scrap_electronics", "salvage", "weapon", "grenade",
 ## "data_core"... Several items can share an id and differ in `payload` (two

@@ -185,6 +185,29 @@ static func parse(rows: PackedStringArray, deck: int = 0) -> MapData:
 	# Derived here rather than by the caller so every route into a MapData —
 	# file, string, or test fixture — arrives with the same graph populated.
 	data.compute_rooms()
+	var layout_section := ""
+	for raw: String in rows:
+		var line := raw.strip_edges()
+		if line.begins_with("["):
+			layout_section = line
+		elif layout_section in ["[zones]", "[profile]"] and not line.is_empty():
+			var parts := line.split(" ", false)
+			if parts.size() == 3 and parts[0].is_valid_int() and parts[1].is_valid_int() and parts[2].is_valid_int():
+				if layout_section == "[zones]":
+					data.zone_bands.append([int(parts[0]), int(parts[1]), int(parts[2])])
+				else:
+					data.deck_primary = int(parts[0])
+					data.deck_secondary = int(parts[1])
+					data.deck_mixed = int(parts[2]) != 0
+	var inside_power := false
+	for raw: String in rows:
+		var line := raw.strip_edges()
+		if line.begins_with("["):
+			inside_power = line == "[power]"
+		elif inside_power and not line.is_empty():
+			var parts := line.split(" ", false)
+			if parts.size() == 2 and parts[0].is_valid_int() and parts[1] in ["on", "off"]:
+				data.zone_power[int(parts[0])] = parts[1] == "on"
 	# After the room graph, not before: a hangar's bay IS a compartment of it.
 	_parse_hangars(data, rows, deck)
 	# After the hangars, so a `[rooms]` line naming a bay is caught as one.
@@ -240,8 +263,8 @@ static func _parse_obstacles(data: MapData, rows: PackedStringArray, deck: int) 
 		if not inside or line.is_empty():
 			continue
 		var parts := line.split(" ", false)
-		var coords := parts[0].split(",") if parts.size() == 3 else PackedStringArray()
-		var size := parts[1].split(",") if parts.size() == 3 else PackedStringArray()
+		var coords := parts[0].split(",") if parts.size() in [3, 4, 5] else PackedStringArray()
+		var size := parts[1].split(",") if parts.size() in [3, 4, 5] else PackedStringArray()
 		if coords.size() != 2 or size.size() != 2 or not COVER_NAMES.has(parts[2]):
 			push_error("MapAscii: bad [obstacles] line '%s' (want 'x,z w,h light|heavy')" % line)
 			continue
@@ -250,7 +273,12 @@ static func _parse_obstacles(data: MapData, rows: PackedStringArray, deck: int) 
 		for z in range(footprint.position.y, footprint.position.y + footprint.size.y):
 			for x in range(footprint.position.x, footprint.position.x + footprint.size.x):
 				data.get_cell(Vector3i(x, deck, z)).terrain = MapData.Terrain.OBSTACLE
-		data.obstacles.append([footprint, tier])
+		var entry: Array = [footprint, tier]
+		if parts.size() >= 4:
+			entry.append(StringName(parts[3]))
+		if parts.size() >= 5:
+			entry.append(clampf(float(parts[4]), 0.05, 1.0))
+		data.obstacles.append(entry)
 
 
 ## `[worms]` names a COUNT for a tile the grid has already marked 'W'. Each line
@@ -501,6 +529,10 @@ static func encode_obstacles(data: MapData, deck: int = 0) -> PackedStringArray:
 			footprint.size.x, footprint.size.y,
 			COVER_WORD[tier],
 		])
+		if entry.size() >= 3:
+			rows[-1] += " " + String(entry[2])
+		if entry.size() >= 4:
+			rows[-1] += " " + str(entry[3])
 	return rows
 
 
@@ -628,4 +660,16 @@ static func to_text(data: MapData, deck: int = 0) -> String:
 	rows.append_array(encode_hangars(data, deck))
 	rows.append_array(encode_rooms(data, deck))
 	rows.append_array(encode_loot(data, deck))
+	if data.deck_primary >= 0 or data.deck_mixed:
+		rows.append_array(PackedStringArray(["", "[profile]", "%d %d %d" % [data.deck_primary, data.deck_secondary, int(data.deck_mixed)]]))
+	if not data.zone_bands.is_empty():
+		rows.append_array(PackedStringArray(["", "[zones]"]))
+		for band: Array in data.zone_bands:
+			rows.append("%d %d %d" % band)
+	if not data.zone_power.is_empty():
+		rows.append_array(PackedStringArray(["", "[power]"]))
+		var zones: Array = data.zone_power.keys()
+		zones.sort()
+		for zone in zones:
+			rows.append("%d %s" % [zone, "on" if data.zone_power[zone] else "off"])
 	return "\n".join(rows)

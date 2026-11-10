@@ -574,6 +574,13 @@ func _resolve_emp_throw(target: Vector3i) -> void:
 ## melee range with an ally standing in it catches them too.
 func _resolve_frag_throw(target: Vector3i) -> void:
 	action_logged.emit("%s throws a frag grenade at %s" % [stats.display_name, target])
+	var covers_hit := {}
+	for tile: Vector3i in _blast_tiles(target):
+		for side in 4:
+			var edge := GridManager.cover_edge(tile, side)
+			if edge != null and edge.is_intact() and not covers_hit.has(edge):
+				covers_hit[edge] = true
+				GridManager.damage_cover_edge(tile, side, FRAG_DAMAGE)
 	var caught := 0
 	var downed_by_blast: Array[Unit] = []
 	for tile in _blast_tiles(target):
@@ -591,7 +598,7 @@ func _resolve_frag_throw(target: Vector3i) -> void:
 		# tile faces the explosion is the side that eats the cover-breaker bonus.
 		var defence := Combat.defending_cover(target, victim.grid_pos)
 		# Except corner cover (defence[2]): a wall takes no damage.
-		if defence[0] != MapData.Cover.NONE and not defence[2]:
+		if defence[0] != MapData.Cover.NONE and not defence[2] and not covers_hit.has(GridManager.cover_edge(victim.grid_pos, defence[1])):
 			GridManager.damage_cover_edge(victim.grid_pos, defence[1], FRAG_DAMAGE)
 		caught += 1
 		if victim.is_downed:
@@ -701,6 +708,7 @@ const _COMMANDS := [
 	"try_revive", "try_pick_up", "try_drop",
 	"try_loot", "try_drop_item",
 	"try_operate_terminal",
+	"try_room_action",
 	"try_wait",
 ]
 
@@ -1368,8 +1376,8 @@ func take_blocker(source: Object, index: int = 0) -> String:
 	var items: Array = source.loot_items()
 	if index < 0 or index >= items.size():
 		return "nothing there"
-	if not has_free_slot():
-		return "pack full (%d/%d)" % [inventory.size(), INVENTORY_SLOTS]
+	if free_slots() < (items[index] as ItemData).slots():
+		return "pack full (%d/%d)" % [inventory_slots_used(), INVENTORY_SLOTS]
 	return ""
 
 
@@ -1397,7 +1405,7 @@ func try_loot(source: Object, index: int, expect_code: String = "") -> void:
 	add_item(item)
 	action_logged.emit("%s takes %s from %s (%d AP) — pack %d/%d" % [
 		stats.display_name, item.display_name, source.loot_name(), cost,
-		inventory.size(), INVENTORY_SLOTS])
+		inventory_slots_used(), INVENTORY_SLOTS])
 	await _check_activation_end()
 
 
@@ -1434,6 +1442,17 @@ func try_operate_terminal() -> void:
 	await _interact_at(ObjectiveManager.terminal().tile)
 	ObjectiveManager.operate_terminal(self)
 	await _check_activation_end()
+
+
+func try_room_action(action: String, room: int, extra: int = -1, expected_code: String = "") -> void:
+	var systems := RoomSystems.current()
+	if systems == null or is_busy or is_downed:
+		return
+	if action == "item" and (extra < 0 or extra >= inventory.size() or inventory[extra].code != expected_code):
+		return
+	if systems.act(self, action, room, extra):
+		set_mode(Mode.NONE)
+		await _check_activation_end()
 
 
 ## The end of a command. In turn mode it closes the activation on the last AP. Out

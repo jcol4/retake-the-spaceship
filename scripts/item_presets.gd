@@ -34,6 +34,9 @@ const TIER_RARE := 3
 ## (Contract.PLACEHOLDER_PAYOUT is 500–600) — so loot is worth a detour but never
 ## worth more than the objective. Phase 4 tunes these against real prices.
 const VALUABLES := {
+	"research_data": {"display_name": "Research Data", "tier": TIER_UNCOMMON, "value": 110},
+	"specimen": {"display_name": "Contained Specimen (2 slots)", "tier": TIER_RARE, "value": 220},
+	"scrap": {"display_name": "Machine Scrap", "tier": TIER_COMMON, "value": 20},
 	# Tier 1 — common, 15–25 cr.
 	"sealed_rations": {"display_name": "Sealed Rations", "tier": TIER_COMMON, "value": 15},
 	"scrap_electronics": {"display_name": "Scrap Electronics", "tier": TIER_COMMON, "value": 20},
@@ -122,6 +125,17 @@ const AMMO_TIER := {
 ## them and has to restock (CampaignEconomy.GRENADE_PRICE).
 const GRENADE_TIER := TIER_COMMON
 const GRENADE_WEIGHT := 3
+const SUPPLIES := {"medkit": ["Medkit", 35], "stim": ["Combat Stim", 25], "armour_patch": ["Armour Patch", 25], "breaching_charge": ["Breaching Charge", 30]}
+const ROOM_TABLES := {
+	&"quarters": ["crew_tags", "gold_chronometer", "sealed_rations"],
+	&"captain": ["crew_tags", "gold_chronometer", "keycard:bridge", "keycard:server_room"],
+	&"medical": ["medkit", "medkit", "stim"],
+	&"research": ["research_data", "specimen"],
+	&"engineering": ["scrap", "grenade", "armour_patch", "breaching_charge"],
+	&"command": ["ammo:0", "weapon:0:-:-1", "attachment:0"],
+	&"security": ["ammo:0", "weapon:0:-:-1", "attachment:0"],
+	&"mess": ["sealed_rations", "sealed_rations", "crew_tags"],
+}
 ## What gear is WORTH, by tier (index = tier): about a third of the shop price —
 ## what a fence would give. Gear is not sold at the debrief (an attachment goes to
 ## the stash, an unlock unlocks), so this is the loot panel's signal and the
@@ -148,9 +162,11 @@ const MERC_TIER_WEIGHTS: Array[int] = [75, 20, 5]
 
 
 static func make(id: String) -> ItemData:
+	if SUPPLIES.has(id):
+		return _item(id, SUPPLIES[id][0], ItemData.Kind.CONSUMABLE, SUPPLIES[id][1], {}, id)
 	if VALUABLES.has(id):
 		var v: Dictionary = VALUABLES[id]
-		return _item(id, v["display_name"], ItemData.Kind.VALUABLE, v["value"], {}, id, v["tier"])
+		return _item(id, v["display_name"], ItemData.Kind.VALUABLE, v["value"], {"slots": 2} if id == "specimen" else {}, id, v["tier"])
 	if OBJECTIVES.has(id):
 		return _item(id, OBJECTIVES[id]["display_name"], ItemData.Kind.OBJECTIVE, 0, {}, id)
 	if id == GRENADE_ID:
@@ -242,6 +258,13 @@ static func weapon_from_item(item: ItemData) -> WeaponData:
 
 ## The item a code names, or null if it names nothing (see the header).
 static func from_code(code: String) -> ItemData:
+	if SUPPLIES.has(code):
+		return make(code)
+	if code.begins_with("keycard:"):
+		var room := StringName(code.trim_prefix("keycard:"))
+		if RoomTypes.is_locked(room):
+			return _item("keycard", "%s Keycard" % RoomTypes.display_name(room), ItemData.Kind.KEYCARD, 0, {"room": String(room)}, code)
+		return null
 	if VALUABLES.has(code) or OBJECTIVES.has(code) or code == GRENADE_ID:
 		return make(code)
 	var parts := code.split(":")
@@ -319,10 +342,14 @@ static func roll_valuable(rng: RandomNumberGenerator = null, tier_weights: Array
 ## A container's contents as codes (what MapData stores): CONTAINER_ITEM_COUNTS
 ## items, each one gear with CONTAINER_GEAR_PERCENT chance (`roll_gear`), else a
 ## valuable.
-static func roll_container(rng: RandomNumberGenerator = null) -> PackedStringArray:
+static func roll_container(rng: RandomNumberGenerator = null, table: StringName = &"") -> PackedStringArray:
 	var out := PackedStringArray()
 	var count: int = CONTAINER_ITEM_COUNTS[_rand_int(CONTAINER_ITEM_COUNTS.size(), rng)]
 	for _i in count:
+		if ROOM_TABLES.has(table) and _rand_int(4, rng) != 0:
+			var codes: Array = ROOM_TABLES[table]
+			out.append(codes[_rand_int(codes.size(), rng)])
+			continue
 		if _rand_int(100, rng) < CONTAINER_GEAR_PERCENT:
 			out.append(roll_gear(rng, CONTAINER_TIER_WEIGHTS).code)
 		else:

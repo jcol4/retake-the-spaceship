@@ -754,6 +754,14 @@ func _bank_items(codes: Array, summary: Dictionary) -> void:
 			(summary["notes"] as Array).append("Unrecognised item '%s' — discarded" % code)
 			continue
 		match item.kind:
+			ItemData.Kind.CONSUMABLE:
+				if item.id == "medkit":
+					medical += 1
+					(summary["gear"] as Array).append("Medkit added to stores")
+				else:
+					_sell(item.display_name, item.value, summary)
+			ItemData.Kind.KEYCARD:
+				pass
 			ItemData.Kind.VALUABLE:
 				_sell(item.display_name, item.value, summary)
 			ItemData.Kind.OBJECTIVE:

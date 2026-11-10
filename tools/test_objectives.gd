@@ -418,7 +418,8 @@ func _check_placement() -> void:
 			wall_ok = wall_ok and walled and data.hangar_index_at(pos) < 0
 			# Blocking the console must leave every other reachable tile reachable.
 			var before: Dictionary = _contract.path_distances(data)
-			far_ok = far_ok and _in_far_third(data, pos, _contract._terminal_candidates(data, before), before)
+			var eligible: Array = _contract._themed_candidates(data, _contract._terminal_candidates(data, before), _contract.Type.HOLD)
+			far_ok = far_ok and _in_far_third(data, pos, eligible, before)
 			data.add_container(pos, PackedStringArray())  # stands in for the console
 			var after: Dictionary = _contract.path_distances(data)
 			if after.size() != before.size() - 1:
@@ -433,7 +434,7 @@ func _check_placement() -> void:
 	_check(recover_ok == DECKS, "every generated deck supports Recover (%d/%d)" % [recover_ok, DECKS])
 	_check(wall_ok, "the console stands against a wall, outside every hangar")
 	_check(reach_ok, "and never cuts any tile off from the insertion square")
-	_check(far_ok, "in a room from the farthest third by path distance")
+	_check(far_ok, "in the farthest third of eligible terminal rooms by path distance")
 	_check(vip_ok, "the VIP lies on reachable floor outside every hangar, named")
 	seed(77)
 	var a = _contract.choose(gen.generate(12))

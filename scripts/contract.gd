@@ -58,6 +58,7 @@ var place_nest := false
 ## RECOVER: who the VIP is (VIP_NAMES), drawn with the placement so every
 ## peer names them the same.
 var vip_name := ""
+var target_name := "Nest"
 
 
 func title() -> String:
@@ -66,7 +67,7 @@ func title() -> String:
 			var item := ItemPresets.from_code(item_code)
 			return "Retrieve: %s" % (item.display_name if item else item_code)
 		Type.DESTROY:
-			return "Destroy: Nest"
+			return "Destroy: %s" % target_name
 		Type.HOLD:
 			return "Hold: Terminal"
 		Type.RECOVER:
@@ -79,6 +80,7 @@ func to_dict() -> Dictionary:
 	return {
 		"type": int(type), "target": target_tile, "item": item_code,
 		"payout": payout, "place_nest": place_nest, "vip": vip_name,
+		"target_name": target_name,
 	}
 
 
@@ -90,6 +92,7 @@ static func from_dict(d: Dictionary) -> Contract:
 	c.payout = d.get("payout", 0)
 	c.place_nest = d.get("place_nest", false)
 	c.vip_name = d.get("vip", "")
+	c.target_name = String(d.get("target_name", "Nest"))
 	return c
 
 
@@ -134,12 +137,16 @@ static func make(type: Type, data: MapData, rng: RandomNumberGenerator = null) -
 	c.payout = PLACEHOLDER_PAYOUT[type]
 	match type:
 		Type.RETRIEVE:
-			var spots := _retrieve_candidates(data, dist)
+			var spots := _themed_candidates(data, _retrieve_candidates(data, dist), type)
 			if spots.is_empty():
 				return null
 			c.target_tile = _pick_far(data, spots, dist, rng)
 			var ids := ItemPresets.objective_ids()
 			c.item_code = ids[_pick(ids.size(), rng)]
+			if data.room_type_at(c.target_tile) in [&"lab", &"specimen_hold"]:
+				c.item_code = "sample_case"
+			elif data.room_type_at(c.target_tile) in [&"bridge", &"server_room", &"data_storage"]:
+				c.item_code = "data_core"
 		Type.DESTROY:
 			var nests := data.spawns(MapData.Spawn.NEST)
 			if not nests.is_empty():
@@ -148,13 +155,15 @@ static func make(type: Type, data: MapData, rng: RandomNumberGenerator = null) -
 					return _tile_dist(data, a, dist) > _tile_dist(data, b, dist))
 				c.target_tile = nests[0]
 			else:
-				var cells := _nest_candidates(data, dist)
+				var cells := _themed_candidates(data, _nest_candidates(data, dist), type)
 				if cells.is_empty():
 					return null
 				c.target_tile = _pick_far(data, cells, dist, rng)
 				c.place_nest = true
+			if data.room_type_at(c.target_tile) == &"engine_room":
+				c.target_name = "Reactor"
 		Type.HOLD:
-			var spots := _terminal_candidates(data, dist)
+			var spots := _themed_candidates(data, _terminal_candidates(data, dist), type)
 			if spots.is_empty():
 				return null
 			c.target_tile = _pick_far(data, spots, dist, rng)
@@ -162,12 +171,27 @@ static func make(type: Type, data: MapData, rng: RandomNumberGenerator = null) -
 			# "A VIP spawned DOWNED in a far room" (plan Phase 6). The nest's
 			# floor rules suit a body too: open floor in a room, nothing spawning
 			# on or beside it, off every pad and square, room to stand around it.
-			var cells := _nest_candidates(data, dist)
+			var cells := _themed_candidates(data, _nest_candidates(data, dist), type)
 			if cells.is_empty():
 				return null
 			c.target_tile = _pick_far(data, cells, dist, rng)
 			c.vip_name = VIP_NAMES[_pick(VIP_NAMES.size(), rng)]
 	return c
+
+
+static func _themed_candidates(data: MapData, candidates: Array[Vector3i], kind: int) -> Array[Vector3i]:
+	if data.objective_room_hint >= 0:
+		var hinted: Array[Vector3i] = []
+		for pos in candidates:
+			if data.room_index_at(pos) == data.objective_room_hint:
+				hinted.append(pos)
+		if not hinted.is_empty():
+			return hinted
+	var themed: Array[Vector3i] = []
+	for pos in candidates:
+		if data.room_type_at(pos) in RoomTypes.OBJECTIVE_ROOMS.get(kind, []):
+			themed.append(pos)
+	return themed if not themed.is_empty() else candidates
 
 
 ## Path distance (steps) from the insertion square — or the squad's spawns on a

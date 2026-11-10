@@ -160,6 +160,7 @@ func _ready() -> void:
 	_build_terminal_button()
 	_build_wait_button()
 	_build_mode_label()
+	_build_room_controls()
 	_build_portrait_bar()
 	_build_target_bar()
 	TurnManager.unit_selected.connect(_on_unit_activated)
@@ -245,7 +246,7 @@ func _refresh(unit: Unit) -> void:
 			injury_line += "\nDowns %s" % _down_pips(player)
 		# GDD §7.5: the four slots, and what fills them — loot only counts if it
 		# extracts, so what this soldier is holding is worth seeing every turn.
-		injury_line += "\nPack %d/%d%s" % [player.inventory.size(), Unit.INVENTORY_SLOTS,
+		injury_line += "\nPack %d/%d%s" % [player.inventory_slots_used(), Unit.INVENTORY_SLOTS,
 			(": " + ", ".join(PackedStringArray(player.inventory.map(func(i: ItemData) -> String: return i.display_name)))) \
 				if not player.inventory.is_empty() else ""]
 		var reserve_text := "∞" if player.reserve < 0 else str(player.reserve)
@@ -519,6 +520,7 @@ func _cycle_name_tags() -> void:
 	get_tree().call_group("units", "_sync_label")
 	get_tree().call_group(NameTags.PROP_GROUP, "apply_name_tag_mode")
 	_refresh_body_labels()
+	_refresh_room_controls()
 	_refresh_hangar_markers()
 	_show_radio_banner("Labels: %s" % NameTags.mode_name())
 
@@ -969,10 +971,10 @@ func _refresh_loot_panel() -> void:
 			var item: ItemData = items[i]
 			var take := Button.new()
 			take.text = "Take (%d AP)" % cost
-			take.disabled = not can_take
+			take.disabled = not can_take or player.free_slots() < item.slots()
 			take.pressed.connect(_on_take.bind(source, i, item.code))
 			_loot_rows.add_child(_loot_row(item, take))
-	_loot_rows.add_child(_loot_heading("Pack %d/%d" % [player.inventory.size(), Unit.INVENTORY_SLOTS]))
+	_loot_rows.add_child(_loot_heading("Pack %d/%d" % [player.inventory_slots_used(), Unit.INVENTORY_SLOTS]))
 	for i in player.inventory.size():
 		var drop := Button.new()
 		drop.text = "Drop (0)"
@@ -996,6 +998,8 @@ func _loot_row(item: ItemData, button: Button) -> HBoxContainer:
 	var label := Label.new()
 	var kind := "OBJECTIVE" if item.is_objective() else ("gear" if item.is_gear() else "%d cr" % item.value)
 	label.text = "%s  [%s]" % [item.display_name, kind]
+	if item.slots() > 1:
+		label.text += " · %d slots" % item.slots()
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	label.clip_text = true
 	row.add_child(label)
@@ -1046,6 +1050,7 @@ func _door_gun_line() -> String:
 
 
 func _process(delta: float) -> void:
+	_refresh_room_hover()
 	_target_bar_clock -= delta
 	if _target_bar_clock <= 0.0:
 		_target_bar_clock = TARGET_BAR_REFRESH
@@ -1054,6 +1059,7 @@ func _process(delta: float) -> void:
 	if _body_label_clock > 0.0:
 		return
 	_body_label_clock = BODY_LABEL_REFRESH
+	_refresh_room_controls()
 	_refresh_body_labels()
 	_refresh_portraits()
 	_refresh_exploration_selection()
@@ -1446,3 +1452,74 @@ func _roll_call(units: Array[Unit], result: MissionResult) -> String:
 			tag = " (downed)"
 		names.append(unit.stats.display_name + tag)
 	return ", ".join(names) if not names.is_empty() else "nobody"
+
+
+var _room_menu: PopupMenu
+var _room_choices: Array = []
+var _room_location: Label
+var _room_hover: Label
+
+
+func _build_room_controls() -> void:
+	var button := Button.new()
+	button.text = "Room / items"
+	button.visible = false
+	$Actions.add_child(button)
+	buttons["room"] = button
+	_room_menu = PopupMenu.new()
+	add_child(_room_menu)
+	button.pressed.connect(func() -> void:
+		var player := _active_player()
+		var systems := RoomSystems.current()
+		if player == null or systems == null:
+			return
+		_room_choices = systems.options(player)
+		_room_menu.clear()
+		for option: Dictionary in _room_choices:
+			_room_menu.add_item("%s — %d AP" % [option.label, option.cost])
+			_room_menu.set_item_disabled(_room_menu.item_count - 1, not player.can_afford(option.cost))
+		_room_menu.position = Vector2i(get_viewport().get_mouse_position())
+		_room_menu.popup())
+	_room_menu.id_pressed.connect(func(index: int) -> void:
+		var player := _active_player()
+		if player == null or index < 0 or index >= _room_choices.size():
+			return
+		var option: Dictionary = _room_choices[index]
+		var expected: String = option.get("expected", "")
+		await player._issue(&"try_room_action", [option.action, option.room, option.extra, expected])
+		_refresh_room_controls())
+	_room_location = Label.new()
+	_room_location.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_room_location.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	get_node("TopCenterStack").add_child(_room_location)
+	_room_hover = Label.new()
+	_room_hover.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_room_hover.add_theme_color_override("font_shadow_color", Color.BLACK)
+	_room_hover.add_theme_constant_override("shadow_offset_x", 2)
+	_room_hover.add_theme_constant_override("shadow_offset_y", 2)
+	add_child(_room_hover)
+	_room_hover.hide()
+
+
+func _refresh_room_controls() -> void:
+	if _room_location == null:
+		return
+	var systems := RoomSystems.current()
+	var player := _active_player()
+	buttons["room"].visible = systems != null and player != null and not systems.options(player).is_empty()
+	_room_location.text = systems.room_text(player.grid_pos) if systems != null and player != null else ""
+
+
+func _refresh_room_hover() -> void:
+	if _room_hover == null:
+		return
+	_room_hover.hide()
+	var systems := RoomSystems.current()
+	if systems == null or get_viewport().gui_get_hovered_control() != null:
+		return
+	var room: int = systems.map._hover_room
+	if room < 0 or not (systems.revealed or systems.map._explored.has(room)):
+		return
+	_room_hover.text = RoomTypes.display_name(systems.data.room_type(room))
+	_room_hover.position = get_viewport().get_mouse_position() + Vector2(18, 20)
+	_room_hover.show()

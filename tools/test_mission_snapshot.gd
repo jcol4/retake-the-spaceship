@@ -104,6 +104,17 @@ func _units(main: Node) -> Array:
 
 
 func _play_changes(main: Node) -> void:
+	var systems = main.get_node("TestMap/RoomSystems")
+	var rooms: Dictionary = systems.capture()
+	rooms.revealed = true
+	rooms.robots = false
+	for zone in rooms.power:
+		rooms.power[zone] = true
+	for room in rooms.doors:
+		rooms.doors[room].open = true
+		rooms.doors[room].breach = 1
+	rooms.used[0] = true
+	systems.restore(rooms)
 	var grid := root.get_node("GridManager")
 	var loot := root.get_node("LootManager")
 	var players: Array = _units(main).filter(func(u: Node) -> bool: return u.get("record_id") != null and u.record_id != "")
@@ -183,6 +194,7 @@ func _compare(a: Dictionary, b: Dictionary) -> void:
 	_check(a["turn"] == b["turn"], "the round")
 	_check(a["loot"] == b["loot"], "every container's contents (%d)" % (a["loot"] as Array).size())
 	_check(a["hangars"] == b["hangars"], "hangars")
+	_check(a["rooms"] == b["rooms"], "room power, locks, services, terminals and fabrication stock")
 	_check(a["objective"] == b["objective"] and a["world"] == b["world"], "objective and world")
 	var by_name := {}
 	for u: Dictionary in b["units"]:

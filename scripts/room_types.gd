@@ -17,6 +17,13 @@ extends RefCounted
 ## (Phase B.6 / C.8).
 
 enum Zone { HABITATION, MEDICAL, ENGINEERING, COMMAND, CARGO, UTILITY, NONE }
+## Contract.Type ids, kept engine-free for MapGenerator's standalone tools.
+const OBJECTIVE_ROOMS := {
+	0: [&"server_room", &"bridge", &"lab", &"data_storage"],
+	1: [&"engine_room"],
+	2: [&"bridge", &"security_station"],
+	3: [&"cabin", &"captains_quarters", &"brig", &"bunk_room"],
+}
 
 const ZONE_NAME := {
 	Zone.HABITATION: "Habitation", Zone.MEDICAL: "Medical", Zone.ENGINEERING: "Engineering",

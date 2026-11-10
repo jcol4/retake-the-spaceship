@@ -273,7 +273,7 @@ func build(map_data: MapData) -> void:
 	for entry: Array in data.cover_edge_list():
 		_add_cover_edge(entry[0], entry[1], entry[2])
 	for entry: Array in data.obstacles:
-		_add_cover_block(entry[0], entry[1])
+		_add_cover_block(entry[0], entry[1], StringName(entry[2]) if entry.size() > 2 else &"crate", float(entry[3]) if entry.size() > 3 else 1.0)
 	for footprint: Rect2i in data.wrecks:
 		_add_wreck(footprint)
 	for link: Array in data.stair_links:
@@ -298,6 +298,10 @@ func build(map_data: MapData) -> void:
 		cerberus_spawns[kind] = data.spawns(kind)
 	build_ground_collision()
 	_assign_fog()
+	var systems := RoomSystems.new()
+	systems.name = "RoomSystems"
+	add_child(systems)
+	systems.setup(self)
 	# The squad watches its own landing: the insertion bay is known ground.
 	var insertion := data.insertion_hangar()
 	if insertion != null and data.room_index_at(insertion.pad_center) >= 0:
@@ -448,7 +452,7 @@ func _place_piece(p: Dictionary, where: String) -> Node3D:
 ## One MultiMeshInstance3D per mesh in `parts` ([Mesh, Transform3D] pairs, as
 ## ModuleCatalog.mesh_parts gives them), drawn once per transform in `xforms`.
 ## `regions` is what the fog draws them with: a batch never spans two keys.
-func _add_multimesh(parts: Array, xforms: Array, shadows: bool, regions: Array) -> void:
+func _add_multimesh(parts: Array, xforms: Array, shadows: bool, regions: Array, material: Material = null) -> void:
 	for part: Array in parts:
 		var mm := MultiMesh.new()
 		mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -458,6 +462,7 @@ func _add_multimesh(parts: Array, xforms: Array, shadows: bool, regions: Array) 
 			mm.set_instance_transform(i, xforms[i] * part[1])
 		var mmi := MultiMeshInstance3D.new()
 		mmi.multimesh = mm
+		mmi.material_override = material
 		if not shadows:
 			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(mmi)
@@ -484,12 +489,15 @@ func _build_floors() -> void:
 			_add_floor_quad(world, _stair_mat if cell.stair else _floor_mat)
 			continue
 		piece_log.append("%s:%s@%s" % [socket, p.id, pos])
-		var key := [p.id, _cell_regions.get(pos, [])]
+		var key := [p.id, _cell_regions.get(pos, []), RoomTypes.floor_of(data.room_type_at(pos))]
 		if not by_piece.has(key):
 			by_piece[key] = []
 		by_piece[key].append(Transform3D(Basis.IDENTITY, world))
 	for key: Array in by_piece:
-		_add_multimesh(_catalog.mesh_parts(_catalog.piece(key[0])), by_piece[key], false, key[1])
+		var material: Material = null
+		if not String(key[2]).is_empty():
+			material = load("res://assets/room_tiles/floors/floor_%s.tres" % key[2])
+		_add_multimesh(_catalog.mesh_parts(_catalog.piece(key[0])), by_piece[key], false, key[1], material)
 
 
 ## Whether `pos`'s sides toward a WALL are seen from the room: floor and
@@ -821,7 +829,7 @@ func _add_cover_edge(pos: Vector3i, side: int, cover_type: int) -> void:
 ## footprint, not one independent pool per edge. Collision is layer 4, same as
 ## ordinary edge cover: neither tier blocks line of sight (Sec 6.1), only
 ## movement, so this is not built like a wall.
-func _add_cover_block(footprint: Rect2i, tier: int) -> void:
+func _add_cover_block(footprint: Rect2i, tier: int, kind: StringName = &"crate", hp_scale := 1.0) -> void:
 	var first := cell_to_world(Vector3i(footprint.position.x, 0, footprint.position.y))
 	var last := cell_to_world(Vector3i(footprint.position.x + footprint.size.x - 1, 0, footprint.position.y + footprint.size.y - 1))
 	var center := (first + last) / 2.0
@@ -831,13 +839,15 @@ func _add_cover_block(footprint: Rect2i, tier: int) -> void:
 		footprint.size.y * GridManager.TILE_SIZE,
 	)
 	var mat := _cover_heavy_mat if tier == MapData.Cover.HEAVY else _cover_light_mat
-	var body := _add_box_body(center, size, mat, 4)
+	var body := _add_box_body(center, size, mat, 5 if tier == MapData.Cover.HEAVY and kind != &"crate" else 4)
 	body.set_script(load("res://scripts/cover_block.gd"))
+	body.set("kind", kind)
 	# No floor material: _build_floors already drew floor under the footprint,
 	# so a destroyed block has nothing to lay down.
 	body.call("setup", footprint, 0, tier, null, GridManager.TILE_SIZE, GridManager.FLOOR_HEIGHT)
-	_dress_cover_block(body, footprint, tier)
-	GridManager.register_cover_block(footprint, 0, tier, body)
+	_dress_cover_block(body, footprint, tier, kind)
+	var edge := GridManager.register_cover_block(footprint, 0, tier, body)
+	edge.hp = 8 if kind in [&"fuel_tank", &"gas", &"panel"] else maxi(1, roundi(edge.hp * hp_scale))
 
 
 ## Swaps a cover block's placeholder box for kit cover: one piece per footprint
@@ -845,7 +855,24 @@ func _add_cover_block(footprint: Rect2i, tier: int) -> void:
 ## turn by hash so a row of crates doesn't repeat exactly. The body and its
 ## BoxShape3D stay exactly as they were — only the "Mesh" child goes — and the
 ## art is parented to the body, so CoverBlock.on_destroyed frees it with the rest.
-func _dress_cover_block(body: StaticBody3D, footprint: Rect2i, tier: int) -> void:
+func _dress_cover_block(body: StaticBody3D, footprint: Rect2i, tier: int, kind: StringName = &"crate") -> void:
+	var furniture_socket := ("hazard_" if kind in [&"fuel_tank", &"gas", &"panel"] else "furniture_") + String(kind)
+	var furniture := _catalog.pick(furniture_socket, _socket_hash([kind, footprint]), func(p: Dictionary) -> bool:
+		var a: Array = p.get("footprint", [1, 1])
+		var matching := Vector2i(a[0], a[1]) == footprint.size or Vector2i(a[1], a[0]) == footprint.size
+		return matching and p.get("tier", "light") == ("heavy" if tier == MapData.Cover.HEAVY else "light"))
+	if not furniture.is_empty():
+		var mesh := body.get_node("Mesh")
+		body.remove_child(mesh)
+		mesh.free()
+		var node := _catalog.instance(furniture)
+		body.add_child(node)
+		node.global_position = body.global_position - Vector3(0, CoverObject.TIER_HEIGHT[tier] / 2.0, 0)
+		var a: Array = furniture.get("footprint", [1, 1])
+		if Vector2i(a[0], a[1]) != footprint.size:
+			node.rotation.y = PI / 2.0
+		piece_log.append("%s:%s@%s" % [furniture_socket, furniture.id, footprint])
+		return
 	var socket := "cover_heavy" if tier == MapData.Cover.HEAVY else "cover_light"
 	var p := _catalog.pick(socket, _socket_hash([socket, footprint]))
 	if p.is_empty():
@@ -1129,6 +1156,7 @@ func _build_wall_lamps() -> void:
 ## `slide` moves the lamp along the wall from the middle of the face, in metres.
 func _add_wall_lamp(source: LightSource, cell: Vector3i, side: int,
 		slide := Vector3.ZERO) -> void:
+	source.room_index = data.room_index_at(cell)
 	var step: Vector3i = MapData.SIDE_STEP[side]
 	_lamp_spots[[cell, side]] = true
 	source.beam_pitch = WALL_LAMP_PITCH

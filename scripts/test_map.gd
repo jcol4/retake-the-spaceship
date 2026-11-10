@@ -61,7 +61,7 @@ func build_deck(deck: Dictionary) -> bool:
 		"generated":
 			build_generated(int(deck.get("seed", 0)), ContractOffer.config_for(
 				int(deck.get("size", CampaignEconomy.DeckSize.MEDIUM)),
-				int(deck.get("primary", -1)), int(deck.get("secondary", -1))))
+				int(deck.get("primary", -1)), int(deck.get("secondary", -1)), int(deck.get("objective", -1))))
 			return true
 		"layout":
 			build_layout(String(deck.get("path", layout_path)))

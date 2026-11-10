@@ -43,9 +43,18 @@ static func generate(rng: RandomNumberGenerator) -> ContractOffer:
 	o.type = OFFERED_TYPES[rng.randi_range(0, OFFERED_TYPES.size() - 1)]
 	o.size = _weighted(CampaignEconomy.DECK_SIZE_WEIGHTS, rng)
 	if o.size != CampaignEconomy.DeckSize.SMALL:
-		var roll := rng.randi_range(0, 99)
-		for zone: int in DeckLayout.PRIMARY_ODDS:
-			roll -= DeckLayout.PRIMARY_ODDS[zone]
+		var weights: Dictionary = DeckLayout.PRIMARY_ODDS.duplicate()
+		var preferred := RoomTypes.Zone.ENGINEERING if o.type == Contract.Type.DESTROY else (RoomTypes.Zone.HABITATION if o.type == Contract.Type.RECOVER else RoomTypes.Zone.COMMAND)
+		# Retrieve can be either research specimens or command data.
+		if o.type == Contract.Type.RETRIEVE and rng.randf() < 0.5:
+			preferred = RoomTypes.Zone.MEDICAL
+		weights[preferred] = int(weights[preferred]) * 3
+		var total := 0
+		for value in weights.values():
+			total += int(value)
+		var roll := rng.randi_range(0, total - 1)
+		for zone: int in weights:
+			roll -= weights[zone]
 			if roll < 0:
 				o.primary = zone
 				break
@@ -53,7 +62,7 @@ static func generate(rng: RandomNumberGenerator) -> ContractOffer:
 		o.secondary = options[rng.randi_range(0, options.size() - 1)]
 	for _attempt in SEED_ATTEMPTS:
 		o.map_seed = rng.randi() & 0x7fffffff
-		var data := MapGenerator.generate(o.map_seed, config_for(o.size, o.primary, o.secondary))
+		var data := MapGenerator.generate(o.map_seed, config_for(o.size, o.primary, o.secondary, o.type))
 		var types := Contract.supported_types(data)
 		if types.is_empty():
 			continue
@@ -67,7 +76,7 @@ static func generate(rng: RandomNumberGenerator) -> ContractOffer:
 	return o
 
 
-static func config_for(p_size: int, p_primary: int = -1, p_secondary: int = -1) -> MapGenerator.Config:
+static func config_for(p_size: int, p_primary: int = -1, p_secondary: int = -1, p_objective: int = -1) -> MapGenerator.Config:
 	var cfg := MapGenerator.Config.new()
 	var dims: Vector2i = CampaignEconomy.DECK_DIMENSIONS.get(p_size, CampaignEconomy.DECK_DIMENSIONS[CampaignEconomy.DeckSize.MEDIUM])
 	cfg.width = dims.x
@@ -78,6 +87,7 @@ static func config_for(p_size: int, p_primary: int = -1, p_secondary: int = -1) 
 	cfg.room_scale = CampaignEconomy.DECK_ROOM_SCALE.get(p_size, 1.0)
 	cfg.profile_primary = p_primary
 	cfg.profile_secondary = p_secondary
+	cfg.objective_kind = p_objective
 	return cfg
 
 
@@ -95,6 +105,7 @@ func build_contract(data: MapData) -> Contract:
 	if c == null:
 		return null
 	c.payout = payout if c.type == type else CampaignEconomy.payout_for(c.type, size)
+	data.select_objective_insertion(c.target_tile, rng)
 	return c
 
 
@@ -125,7 +136,7 @@ func profile_name() -> String:
 ## The deck as a deployment names it (see Campaign / TestMap): generated from a
 ## seed at a size.
 func deck() -> Dictionary:
-	return {"kind": "generated", "seed": map_seed, "size": size, "primary": primary, "secondary": secondary}
+	return {"kind": "generated", "seed": map_seed, "size": size, "primary": primary, "secondary": secondary, "objective": type}
 
 
 func to_dict() -> Dictionary:

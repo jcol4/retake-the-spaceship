@@ -505,6 +505,9 @@ func has_line_of_sight(shooter: Node3D, target: Node3D) -> bool:
 ## Duck-typed on `grid_pos` and `can_peek()`, so a headless tool's stand-in node
 ## works, and so does any non-Unit: it has no lean.
 func sight_line(seer: Node3D, target: Node3D) -> Array:
+	var systems := RoomSystems.current()
+	if seer is CerberusUnit and systems != null and not systems.robots_enabled:
+		return []
 	# Either end may be standing ON a piece of geometry that must not block its
 	# own sightlines — a door gun on its landed ship's hull (extraction plan
 	# Phase 5, GDD §7.2): the hull blocks sight for everyone else in the bay, but
@@ -534,6 +537,10 @@ func tiles_have_sight(ref: Node3D, from_tile: Vector3i, to_tile: Vector3i,
 
 func _sight_between(ref: Node3D, from_tile: Vector3i, to_tile: Vector3i, eye: Vector3,
 		chest: Vector3, from_peeks: bool, to_peeks: bool, exclude: Array[RID] = []) -> Array:
+	if world_node != null and world_node.get("data") != null:
+		var deck: MapData = world_node.data
+		if (deck.is_dark_at(from_tile) or deck.is_dark_at(to_tile)) and chebyshev_dist(from_tile, to_tile) > RoomSystems.DARK_RANGE:
+			return []
 	if has_clear_line(ref, eye, chest, exclude):
 		return [from_tile, to_tile]
 	var from_leans := _leans_toward(from_tile, to_tile) if from_peeks else []
@@ -728,6 +735,10 @@ func covered_sides(pos: Vector3i) -> Array[int]:
 ## turn into impassable rubble the way the old per-tile version did. Light is the
 ## bottom tier and does go to nothing.
 func damage_cover_edge(pos: Vector3i, side: int, amount: int) -> int:
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
+		return cover_type_on(pos, side)
+	var damaged := cover_edge(pos, side)
+	var was_intact := damaged != null and damaged.is_intact()
 	# Only the host resolves the fire that does this, so each ready client is
 	# handed the same damage to apply to its own copy — the edge HP starts the
 	# same everywhere, so the same hits leave it at the same tier.
@@ -737,7 +748,10 @@ func damage_cover_edge(pos: Vector3i, side: int, amount: int) -> int:
 	if multiplayer.has_multiplayer_peer() and multiplayer.is_server():
 		for peer_id in SteamLobby.ready_peers:
 			_rpc_damage_cover_edge.rpc_id(peer_id, pos, side, amount)
-	return _damage_cover_edge(pos, side, amount)
+	var result := _damage_cover_edge(pos, side, amount)
+	if was_intact and not damaged.is_intact() and is_instance_valid(damaged.node) and damaged.node.has_method("explode"):
+		damaged.node.explode()
+	return result
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -779,6 +793,7 @@ func _damage_cover_edge(pos: Vector3i, side: int, amount: int) -> int:
 ## with no tile yet (see below), so reopening needs no coordinate math of its
 ## own beyond that.
 func _destroy_cover_block(edge: CoverEdge) -> void:
+	invalidate_sight_cache()
 	edge.type = MapData.Cover.NONE
 	edge.hp = 0
 	for reg: Array in edge.registrations:

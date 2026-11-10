@@ -128,6 +128,86 @@ var zone_bands: Array = []
 ## Themed decks mark every entrance explicitly. Legacy authored decks still
 ## infer doorways from bulkhead lines where openings were painted as floor.
 var explicit_doorways := false
+var zone_power: Dictionary = {}
+var objective_room_hint := -1
+
+
+## Final insertion selection uses the actual objective, after its legal tile is
+## known. Closed-room access does not affect the main passageway distances.
+func select_objective_insertion(target: Vector3i, rng: RandomNumberGenerator) -> void:
+	if hangars.is_empty() or not explicit_doorways:
+		return
+	var distance := {target: 0}
+	var queue: Array[Vector3i] = [target]
+	var head := 0
+	while head < queue.size():
+		var at := queue[head]
+		head += 1
+		for dz in [-1, 0, 1]:
+			for dx in [-1, 0, 1]:
+				var next := at + Vector3i(dx, 0, dz)
+				if distance.has(next) or not is_passable(next):
+					continue
+				if dx != 0 and dz != 0 and not is_passable(at + Vector3i(dx, 0, 0)) and not is_passable(at + Vector3i(0, 0, dz)):
+					continue
+				distance[next] = distance[at] + 1
+				queue.append(next)
+	var choices: Array = hangars.duplicate()
+	choices.sort_custom(func(a: Hangar, b: Hangar) -> bool:
+		var da: int = distance.get(a.square[4], -1)
+		var db: int = distance.get(b.square[4], -1)
+		return da > db if da != db else a.room_index < b.room_index)
+	var chosen: Hangar = choices[rng.randi_range(0, ceili(choices.size() / 2.0) - 1)]
+	var players := spawns(Spawn.PLAYER)
+	for pos in players:
+		get_cell(pos).spawn = Spawn.NONE
+	for bay: Hangar in hangars:
+		bay.is_insertion = bay == chosen
+	var square: Array[Vector3i] = chosen.square.duplicate()
+	for i in range(square.size() - 1, 0, -1):
+		var j := rng.randi_range(0, i)
+		var old := square[i]
+		square[i] = square[j]
+		square[j] = old
+	for i in mini(players.size(), square.size()):
+		get_cell(square[i]).spawn = Spawn.PLAYER
+	var near := {}
+	queue = chosen.square.duplicate()
+	var steps := {}
+	for pos in queue:
+		steps[pos] = 0
+	head = 0
+	while head < queue.size():
+		var at := queue[head]
+		head += 1
+		near[room_index_at(at)] = true
+		if steps[at] >= 14:
+			continue
+		for step: Vector3i in SIDE_STEP:
+			var next := at + step
+			if not steps.has(next) and is_passable(next):
+				steps[next] = steps[at] + 1
+				queue.append(next)
+	for pos: Vector3i in cells:
+		var cell: Cell = cells[pos]
+		if near.has(room_index_at(pos)) and cell.spawn not in [Spawn.PLAYER, Spawn.NONE]:
+			cell.spawn = Spawn.NONE
+			worm_counts.erase(pos)
+
+
+func room_is_dark(room: int) -> bool:
+	return room_condition(room) == RoomTypes.Condition.OVERRUN or not bool(zone_power.get(room_zone(room), true))
+
+
+func is_dark_at(pos: Vector3i) -> bool:
+	return room_condition(room_index_at(pos)) == RoomTypes.Condition.OVERRUN or not bool(zone_power.get(zone_at(pos), true))
+
+
+func movement_noise_at(pos: Vector3i) -> float:
+	match zone_at(pos):
+		RoomTypes.Zone.ENGINEERING, RoomTypes.Zone.CARGO: return 1.5
+		RoomTypes.Zone.HABITATION, RoomTypes.Zone.COMMAND: return 0.75
+	return 1.0
 
 
 ## The zone at grid position `grid_pos`: its room's, or for a corridor or spine

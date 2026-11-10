@@ -326,6 +326,10 @@ func _on_destroyed(_unit: Unit) -> void:
 
 
 func take_turn() -> void:
+	var systems := RoomSystems.current()
+	if systems != null and not systems.robots_enabled:
+		ap = 0
+		return
 	# Coroutine, like the base version — TurnManager awaits it.
 	if emp_turns > 0:
 		emp_turns -= 1
@@ -404,5 +408,7 @@ func _set_state(new_state: AlertState) -> void:
 func _refresh_status_light() -> void:
 	if visual == null:
 		return
-	var color: Color = STATUS_COLOR_DISABLED if emp_turns > 0 else STATUS_COLOR[alert_state]
+	var systems := RoomSystems.current()
+	var offline := emp_turns > 0 or (systems != null and not systems.robots_enabled)
+	var color: Color = STATUS_COLOR_DISABLED if offline else STATUS_COLOR[alert_state]
 	visual.set_status_color(color)

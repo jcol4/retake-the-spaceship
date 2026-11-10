@@ -39,6 +39,7 @@ class Config:
 	# Small deck's middle band is too shallow for the plan's full-size engine
 	# room, so its contracts shrink the rooms rather than the hangars.
 	var room_scale := 1.0
+	var objective_kind := -1
 	# Per-axis room size band, sampled independently per room — a wide band is
 	# what gives the Dead-Space mix of tiny closets and big chambers, rather
 	# than one room "type" uniformly scaled.
@@ -205,22 +206,99 @@ func _run(map_seed: int) -> MapData:
 	# A rejected layout is never played: avoid dressing it before the reroll.
 	if _layout_failed:
 		return data
+	if _cfg.themed_rooms and _cfg.objective_kind >= 0:
+		_choose_objective_insertion(data)
 	# After `room_of` is complete, because MapData derives each bay from it.
 	for i in _hangar_rooms.size():
 		data.add_hangar(_hangar_pads[i][0], _hangar_pads[i][1], i == _insertion)
 	_place_spawns(data)
+	if _cfg.themed_rooms:
+		RoomDressing.roll_conditions(data, _rng)
 	_place_cover(data)
+	if _cfg.themed_rooms and data.insertion_hangar() != null:
+		var safe := _rooms_near_insertion(data, data.insertion_hangar())
+		for pos: Vector3i in data.cells:
+			var cell: MapData.Cell = data.cells[pos]
+			if safe.has(data.room_index_at(pos)) and cell.spawn != MapData.Spawn.PLAYER and cell.spawn != MapData.Spawn.NONE:
+				cell.spawn = MapData.Spawn.NONE
+				data.worm_counts.erase(pos)
 	# Last: crates go where cover and spawns did not, and each one is checked not
 	# to cut its room in two (`_place_loot`). Last also keeps every deck that
 	# generated before loot existed identical in all but the crates, since the
 	# loot rolls come after every other draw on `_rng`.
 	_place_loot(data)
+	if _cfg.themed_rooms:
+		_place_room_keys(data)
+		if _cfg.objective_kind == 0 and data.objective_room_hint >= 0:
+			var spot := _container_spot(data, data.objective_room_hint)
+			if spot != NO_SPOT:
+				data.add_container(spot, ItemPresets.roll_container(_rng, RoomTypes.loot_of(data.room_type(data.objective_room_hint))))
 	# After the loot, for the same reason the loot comes last: every draw before
 	# this one is unchanged, so a seed gives the same deck it always did, plus
 	# (sometimes) a merc crew.
 	_place_mercs(data)
 	data.resolve_stairs()
 	return data
+
+
+func _choose_objective_insertion(data: MapData) -> void:
+	var candidates: Array[int] = []
+	for room in _rooms.size():
+		if data.room_type(room) in RoomTypes.OBJECTIVE_ROOMS.get(_cfg.objective_kind, []):
+			candidates.append(room)
+	if candidates.is_empty() or _hangar_rooms.is_empty():
+		return
+	data.objective_room_hint = candidates[_rng.randi_range(0, candidates.size() - 1)]
+	var center := _rooms[data.objective_room_hint].get_center()
+	var start := Vector3i(center.x, 0, center.y)
+	var distance := {start: 0}
+	var queue: Array[Vector3i] = [start]
+	var head := 0
+	while head < queue.size():
+		var at := queue[head]
+		head += 1
+		for step: Vector3i in MapData.SIDE_STEP:
+			var next := at + step
+			if not distance.has(next) and data.is_walkable(next):
+				distance[next] = distance[at] + 1
+				queue.append(next)
+	var bays: Array[int] = []
+	for i in _hangar_pads.size():
+		bays.append(i)
+	bays.sort_custom(func(a: int, b: int) -> bool:
+		var da: int = distance.get(_hangar_pads[a][0], -1)
+		var db: int = distance.get(_hangar_pads[b][0], -1)
+		return da > db if da != db else a < b)
+	_insertion = bays[_rng.randi_range(0, ceili(bays.size() / 2.0) - 1)]
+
+
+func _place_room_keys(data: MapData) -> void:
+	for room in _rooms.size():
+		var type := data.room_type(room)
+		if not RoomTypes.is_locked(type):
+			continue
+		var preferred: Array = [&"security_station"] if type in [&"armory", &"brig"] else [&"comms", &"security_station", &"navigation"]
+		var choices: Array[int] = []
+		for i in _rooms.size():
+			if not _room_is_corridor[i] and not _hangar_rooms.has(i) and not RoomTypes.is_locked(data.room_type(i)):
+				choices.append(i)
+		choices.sort_custom(func(a: int, b: int) -> bool:
+			var pa: int = int(data.room_type(a) in preferred)
+			var pb: int = int(data.room_type(b) in preferred)
+			return pa > pb if pa != pb else a < b)
+		for source in choices:
+			var existing: MapData.LootSpot = null
+			for container: MapData.LootSpot in data.containers:
+				if data.room_index_at(container.pos) == source:
+					existing = container
+					break
+			if existing != null:
+				existing.items.append("keycard:" + String(type))
+				break
+			var spot := _container_spot(data, source)
+			if spot != NO_SPOT:
+				data.add_container(spot, PackedStringArray(["keycard:" + String(type)]))
+				break
 
 
 func _fill_hull(data: MapData) -> void:
@@ -654,6 +732,9 @@ func _place_spawns(data: MapData) -> void:
 	_shuffle(cells)
 	for i in mini(_cfg.player_spawn_count, cells.size()):
 		data.get_cell(cells[i]).spawn = MapData.Spawn.PLAYER
+	if _cfg.themed_rooms:
+		_place_faction_enemies(data, real_rooms, safe_rooms)
+		return
 	for idx in real_rooms:
 		if safe_rooms.has(idx):
 			continue
@@ -701,11 +782,43 @@ func _place_mercs(data: MapData) -> void:
 		room_spots[i] = spots
 	if rooms.is_empty():
 		return
-	var room: int = rooms[_rng.randi_range(0, rooms.size() - 1)]
+	var pool: Array = rooms
+	if _cfg.themed_rooms and _rng.randf() < 0.6:
+		var homes: Array = rooms.filter(func(i: int) -> bool: return RoomTypes.is_home_of(data.room_type(i), RoomTypes.MERCS))
+		if not homes.is_empty():
+			pool = homes
+	var room: int = pool[_rng.randi_range(0, pool.size() - 1)]
 	var spots: Array = room_spots[room]
 	_shuffle(spots)
 	for n in mini(_cfg.merc_squad_size, spots.size()):
 		data.get_cell(spots[n]).spawn = MapData.Spawn.MERC
+
+
+func _place_faction_enemies(data: MapData, real_rooms: Array[int], safe: Dictionary) -> void:
+	var eligible: Array[int] = []
+	for room in real_rooms:
+		if not safe.has(room):
+			eligible.append(room)
+	if _cfg.enemy_room_chance <= 0.0:
+		return
+	for faction: StringName in [RoomTypes.ALIENS, RoomTypes.ROBOTS]:
+		var count := roundi(eligible.size() * _cfg.enemy_room_chance) if faction == RoomTypes.ALIENS else clampi(eligible.size() / 10, 1, 4)
+		for _n in count:
+			var homes: Array[int] = []
+			for room in eligible:
+				if RoomTypes.is_home_of(data.room_type(room), faction):
+					homes.append(room)
+			var pool: Array[int] = homes if not homes.is_empty() and _rng.randf() < 0.6 else eligible
+			if pool.is_empty():
+				break
+			var room := pool[_rng.randi_range(0, pool.size() - 1)]
+			var spots := _room_cells(data, room).filter(func(pos: Vector3i) -> bool:
+				return data.is_walkable(pos) and data.get_cell(pos).spawn == MapData.Spawn.NONE)
+			if spots.is_empty():
+				eligible.erase(room)
+				continue
+			var at: Vector3i = spots[_rng.randi_range(0, spots.size() - 1)]
+			data.get_cell(at).spawn = MapData.Spawn.ENEMY if faction == RoomTypes.ALIENS else MapData.Spawn.SAGITTARII
 
 
 ## Tiles walked from the insertion square within which a themed deck keeps rooms
@@ -804,7 +917,8 @@ func _place_cover(data: MapData) -> void:
 		if _hangar_rooms.has(i):
 			_place_hangar_cover(data, i)
 		else:
-			_place_room_cover(data, _rooms[i])
+			if not _cfg.themed_rooms or not RoomDressing.place(data, i, _rng, _cfg.cover_max_per_room):
+				_place_room_cover(data, _rooms[i])
 
 
 ## The rect a hangar's cover must stay out of: the pad (the ship's whole reserved
@@ -983,7 +1097,10 @@ func _place_loot(data: MapData) -> void:
 			var pos := _container_spot(data, i)
 			if pos == NO_SPOT:
 				break
-			data.add_container(pos, ItemPresets.roll_container(_rng))
+			var items := ItemPresets.roll_container(_rng, RoomTypes.loot_of(data.room_type(i)))
+			if data.room_condition(i) == RoomTypes.Condition.BARRICADED:
+				items.append(ItemPresets.roll_valuable(_rng).code)
+			data.add_container(pos, items)
 
 
 ## A legal crate tile in `room`, picked at random among the legal ones, or NO_SPOT.

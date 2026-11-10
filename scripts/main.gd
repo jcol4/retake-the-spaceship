@@ -324,6 +324,26 @@ func _spawn_and_start() -> void:
 				contract.payout = CampaignEconomy.payout_for(contract.type,
 					int(deck.get("size", CampaignEconomy.DeckSize.MEDIUM)))
 	var nest_spawns: Array[Vector3i] = map.nest_spawns.duplicate()
+	if contract != null and map.data.explicit_doorways:
+		# Offers already selected insertion with their own seeded RNG. Bare dev
+		# missions use a separate RNG so this does not disturb the spawn stream.
+		if Campaign.deployed_offer() == null:
+			var insertion_rng := RandomNumberGenerator.new()
+			insertion_rng.seed = hash([map.data.seed, contract.target_tile, "insertion"])
+			map.data.select_objective_insertion(contract.target_tile, insertion_rng)
+		map.player_spawns = map.data.spawns(MapData.Spawn.PLAYER)
+		map.enemy_spawns = map.data.spawns(MapData.Spawn.ENEMY)
+		map.swarm_spawns = map.data.spawns(MapData.Spawn.SWARM)
+		map.brawler_spawns = map.data.spawns(MapData.Spawn.BRAWLER)
+		map.hunter_spawns = map.data.spawns(MapData.Spawn.HUNTER)
+		map.worm_spawns = map.data.spawns(MapData.Spawn.WORM)
+		map.worm_counts = map.data.worm_counts.duplicate()
+		map.merc_spawns = map.data.spawns(MapData.Spawn.MERC)
+		for kind in MapData.CERBERUS_SPAWNS:
+			map.cerberus_spawns[kind] = map.data.spawns(kind)
+		map._explored.clear()
+		map._explored[map.data.insertion_hangar().room_index] = true
+		map._apply_fog()
 	if contract != null and contract.place_nest:
 		nest_spawns.append(contract.target_tile)
 
@@ -422,7 +442,7 @@ func _spawn_and_start() -> void:
 	# sets `current_hp` from the stat block, so a count written before the node
 	# enters the tree is overwritten by the single worm's 5 HP.
 	var worm_index := 1
-	for spawn in (no_spawns if fodder_only else map.worm_spawns):
+	for spawn in (map.worm_spawns if map.data.explicit_doorways else (no_spawns if fodder_only else map.worm_spawns)):
 		var worm: WormUnit = WORM_SCENE.instantiate()
 		worm.stats = AlienPresets.worm("Worm_%d" % worm_index)
 		worm.name = "Worm_%d" % worm_index
@@ -442,6 +462,9 @@ func _spawn_and_start() -> void:
 	for spawn in nest_spawns:
 		var nest: NestUnit = NEST_SCENE.instantiate()
 		nest.stats = AlienPresets.nest("Nest_%d" % nest_index)
+		nest.reactor = contract != null and contract.type == Contract.Type.DESTROY and contract.target_name == "Reactor" and spawn == contract.target_tile
+		if nest.reactor:
+			nest.stats.display_name = "Reactor"
 		nest.name = "Nest_%d" % nest_index
 		nest.position = GridManager.grid_to_world(spawn)
 		add_child(nest)
@@ -709,12 +732,15 @@ func _spawn_hordes(map: Node3D, nest_spawns: Array[Vector3i], contract: Contract
 		reserved[contract.target_tile] = true
 	var anchors: Array[Vector3i] = []
 	var rooms_seen := {}
+	var worm_anchors: Array[Vector3i] = []
+	if not map.data.explicit_doorways:
+		worm_anchors = map.worm_spawns
 	for markers: Array[Vector3i] in [map.enemy_spawns, map.swarm_spawns,
-			map.brawler_spawns, map.hunter_spawns, map.worm_spawns]:
+			map.brawler_spawns, map.hunter_spawns, worm_anchors]:
 		for spawn in markers:
 			var room: int = map.room_at(spawn)
 			if room >= 0:
-				if rooms_seen.has(room):
+				if rooms_seen.has(room) and not RoomTypes.is_home_of(map.data.room_type(room), RoomTypes.ALIENS):
 					continue
 				rooms_seen[room] = true
 			anchors.append(spawn)
@@ -814,6 +840,9 @@ func _auto_play(unit: Unit) -> void:
 		return
 	await get_tree().process_frame
 	var target := _nearest_hostile(player)
+	if not _auto_hostile_in_sight(player) and _auto_room_tasks(player) and player.ap <= 0:
+		player.end_activation()
+		return
 	# Loot is grabbed when it is cheap (plan 3.2 harness): anything in reach, with
 	# nothing hostile in sight to spend the AP on instead.
 	_auto_loot_in_reach(player)
@@ -1039,6 +1068,8 @@ func _auto_loot_in_reach(player: PlayerUnit) -> void:
 			var items: Array = source.loot_items()
 			for i in items.size():
 				var item: ItemData = items[i]
+				if item.slots() > player.free_slots():
+					continue
 				var score := 1000000 if item.is_objective() else item.value
 				if score > best_score:
 					best_score = score
@@ -1168,6 +1199,24 @@ func _auto_fetch_vip(player: PlayerUnit) -> bool:
 ## this activation's AP less `keep_ap`. True if it moved.
 func _auto_walk_toward(player: PlayerUnit, tile: Vector3i, keep_ap: int, what: String) -> bool:
 	var path := GridManager.find_path(player.grid_pos, tile, 999, true)
+	if path.is_empty() and RoomSystems.current() != null:
+		# Plan as far as the first locked door, then pay the normal interaction
+		# costs on subsequent thinks. No door state is changed by this query.
+		var saved := {}
+		for door: Dictionary in RoomSystems.current().doors.values():
+			if not door.open:
+				for at: Vector3i in door.cells:
+					var grid := GridManager.get_tile(at)
+					if grid != null:
+						saved[at] = grid.passable
+						grid.passable = true
+		path = GridManager.find_path(player.grid_pos, tile, 999, true)
+		for at: Vector3i in saved:
+			GridManager.get_tile(at).passable = saved[at]
+		for i in path.size():
+			if not GridManager.get_tile(path[i]).passable:
+				path.resize(i)
+				break
 	if path.is_empty():
 		return false
 	if not GridManager.is_free(path[-1]):
@@ -1180,6 +1229,22 @@ func _auto_walk_toward(player: PlayerUnit, tile: Vector3i, keep_ap: int, what: S
 	await player.move_along(walk)
 	_on_unit_log("%s auto-moved to %s heading for %s" % [player.stats.display_name, walk[-1], what])
 	return true
+
+
+func _auto_room_tasks(player: PlayerUnit) -> bool:
+	var systems := RoomSystems.current()
+	if systems == null:
+		return false
+	var choices := systems.options(player)
+	for wanted in ["key", "charge", "breach", "power", "heal", "ammo"]:
+		if wanted == "heal" and player.current_hp == player.stats.max_hp():
+			continue
+		if wanted == "ammo" and player.ammo > 0 and player.reserve != 0:
+			continue
+		for option: Dictionary in choices:
+			if option.action == wanted and player.can_afford(option.cost):
+				return systems.act(player, wanted, option.room, option.extra)
+	return false
 
 
 ## The Destroy contract's nest, if it is alive and this soldier could walk to it.
