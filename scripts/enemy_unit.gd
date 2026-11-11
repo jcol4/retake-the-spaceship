@@ -296,7 +296,7 @@ func acquire_target() -> Unit:
 	## activation — which is what an Unaware alien idling at its nest should do.
 	if alert_state != AlertState.COMBAT:
 		return null
-	if target == null or not _still_a_target(target):
+	if not _still_a_target(target):
 		_lose_target()
 		return null
 	if target.is_downed:
@@ -325,8 +325,11 @@ func finishes_downed() -> bool:
 ## Whether `unit` is still something this unit fights: anyone ACTIVE, or a
 ## downed body it finishes (see `finishes_downed`). Never a corpse, and never a
 ## carried body — that one is shot through its carrier, not aimed at.
-func _still_a_target(unit: Unit) -> bool:
-	if unit == null or unit.life_state == LifeState.DEAD:
+## Untyped on purpose: a held `target` can be a freed node (a merc that boarded
+## its ship is queue_free'd), and passing one to a `Unit`-typed parameter is a
+## script error before the body ever runs.
+func _still_a_target(unit) -> bool:
+	if not is_instance_valid(unit) or unit.life_state == LifeState.DEAD:
 		return false
 	if not unit.is_downed:
 		return true
@@ -447,6 +450,9 @@ func _check_contact() -> void:
 	# Run once per activation while in COMBAT. Losing sight — by breaking LOS or
 	# by the target going dark — eventually breaks the lock, which is the other
 	# half of making the flashlight a decision rather than a free upgrade.
+	if not is_instance_valid(target):
+		_lose_target()  # freed out from under the lock (e.g. a merc boarded its ship)
+		return
 	if _detects(target):
 		_last_contact_turn = TurnManager.turn_number
 		return
@@ -565,7 +571,7 @@ func _enter_combat(new_target: Unit, reason: String) -> void:
 
 
 func _lose_target() -> void:
-	if target != null:
+	if is_instance_valid(target):
 		last_known_pos = target.grid_pos
 		_has_last_known = true
 	action_logged.emit("%s loses track of its target" % stats.display_name)

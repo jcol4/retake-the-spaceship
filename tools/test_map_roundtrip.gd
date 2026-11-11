@@ -43,12 +43,10 @@ func _initialize() -> void:
 	_check(data.spawns(MapData.Spawn.MERC).size() == 2, "2 merc spawns")
 	_check(data.spawns(MapData.Spawn.HUNTER).size() == 1, "1 Agile Hunter spawn")
 	_check(data.spawns(MapData.Spawn.WORM).size() == 2, "2 worm spawns")
-	# The deck now DOES carry one robot — the Lictor, so the security faction's
-	# cover-breaking doctrine is exercised by the map the game actually loads
-	# rather than only by a test fixture.
-	_check(data.spawns(MapData.Spawn.LICTOR).size() == 1, "1 Lictor spawn")
+	# No robots: the Lictor it carried for a while is archived
+	# (MapData.ARCHIVED_CERBERUS).
 	for kind: int in [MapData.Spawn.AUXILIUM, MapData.Spawn.SAGITTARII, MapData.Spawn.PROCTOR,
-			MapData.Spawn.SECURUS]:
+			MapData.Spawn.SECURUS, MapData.Spawn.LICTOR]:
 		_check(data.spawns(kind).is_empty(),
 			"no spawn of Spawn kind %d (got %d)" % [kind, data.spawns(kind).size()])
 

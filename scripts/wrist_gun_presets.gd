@@ -13,7 +13,7 @@ extends RefCounted
 ## WRIST_GUNS, and a row here.
 
 ## APPEND-ONLY, like WeaponPresets.WeaponId.
-enum WristGunId { WRIST_LMG }
+enum WristGunId { WRIST_LMG, WRIST_CANNON }
 
 ## burst: [min, max] rounds a trigger pull draws, rolled per shot. Cosmetic like
 ## every burst (Unit.BURST_MIN): one pull is still one roll and one round of the
@@ -31,6 +31,18 @@ const DATA := {
 		# shortest lmg_fire take (1.27 s), which plays once per burst.
 		"burst": [7, 10],
 		"tracer_every": 3,
+	},
+	WristGunId.WRIST_CANNON: {
+		# Sagittarii's. The numbers are the old MKV Support Cannon's, unchanged:
+		# moving it onto the wrist is a model swap, not a rebalance.
+		"display_name": "MKV Support Cannon",
+		"base_accuracy": 30, "damage": 10, "mag_size": 5,
+		"penetration": 60,
+		"model": &"wrist_cannon",
+		"fire_sfx": "battle_rifle_fire",
+		# One barrel, a few heavy rounds a pull, each one a tracer.
+		"burst": [2, 3],
+		"tracer_every": 1,
 	},
 }
 

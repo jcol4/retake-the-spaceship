@@ -116,6 +116,16 @@ MODELS = {
 SKIP_POSES = {
     "securus": ["run"],
 }
+## Samples per authored frame, for a variant keyed on fewer frames than it plays
+## at. The exporter samples once per scene frame and Godot blends those samples
+## in straight lines, so a sparse clip turns into a polyline of poses with a
+## kink at every one. Upsampling (see upsample_actions) takes the in-betweens
+## off the source's Bezier curves instead. zombie_2 is keyed at 6 fps and
+## played at 12 fps (UnitVisual.VARIANT_LOOP_TIME), so 2 samples per frame
+## gives one real pose per frame of the game's playback.
+SAMPLES_PER_FRAME = {
+    "zombie_2": 2,
+}
 ## Game-budget reductions, applied in memory on the way out. The sources were
 ## made for 256 px sprite renders and a Mixamo download, not for a scene with
 ## sixteen of them on screen: the nest shipped four packed 4096 px maps and a
@@ -161,6 +171,18 @@ GUNS = {
 ## by tools/rig_wrist_gun.py, exported to OUT_DIR/wrist_guns/.
 WRIST_GUNS = {
     "wrist_lmg": "art_src/wrist_guns/wrist_lmg.blend",
+    # Sagittarii's. Cut down from the battle rifle; one barrel, so one marker.
+    "wrist_cannon": "art_src/wrist_guns/wrist_cannon.blend",
+}
+## Unrigged characters: one static mesh the game moves as a whole (export_prop).
+## Each .blend holds an object named after the variant, centred on the origin,
+## forward +Y, plus any sockets (`eye`) as Empty children. The dict is written
+## into the sidecar for UnitVisual -- `hover_height` makes it a drone, hung that
+## high and tipped into its motion.
+PROPS = {
+    # XVT-7 Proctor, from assets/sec_drone_v0.blend via tools/prep_proctor_drone.py.
+    # Hovers at the height its click capsule sits at (proctor_unit.tscn).
+    "proctor": ("art_src/proctor_drone.blend", {"hover_height": 1.3}),
 }
 ## The Empty a gun-carrying character holds its gun by. Its `gun` property
 ## names the gun the .blend previews, and becomes the sidecar's default.
@@ -316,6 +338,10 @@ def export_model(variant, out_dir):
     poses = pose_actions(variant, character)
     if variant == "zombie_2" and "run" in poses:
         close_run_loop(bpy.data.actions["run"])
+    if variant in SAMPLES_PER_FRAME:
+        actions = [bpy.data.actions[p] for p in poses]
+        bake_constrained_bones(character, actions)
+        upsample_actions(actions, SAMPLES_PER_FRAME[variant])
     # The rest yaw, set once where the sprite renderer set it before every
     # facing. Only Z: the worm's rig lies ~93 degrees about X and that tilt is
     # the model, not a facing.
@@ -391,6 +417,139 @@ def close_run_loop(action):
     action.use_frame_range = True
     action.frame_start, action.frame_end = start, end + 1
     print("[export_models] closed run loop on frame %g" % (end + 1))
+
+
+def align_quaternion_signs(action):
+    """Negate any quaternion key on the far hemisphere from the key before it.
+
+    q and -q are the same rotation, so the keyed poses do not change, but
+    Blender interpolates each component on its own: between 0.91 and -0.57 the
+    curve passes near zero and the in-between is a nonsense rotation (zombie_2's
+    `downed` hand.L, frames 13-14, swung 180 degrees). Sampled once per key this
+    never showed, because Godot slerps the shortest way; sampled in between,
+    it does. Assumes a bone's four channels share key frames, as a baked clip's do.
+    """
+    groups = {}
+    for fc in _fcurves(action):
+        if fc.data_path.endswith("rotation_quaternion"):
+            groups.setdefault(fc.data_path, {})[fc.array_index] = fc
+    for path, group in groups.items():
+        if len(group) != 4:
+            continue
+        curves = [group[i] for i in range(4)]
+        keys = [list(fc.keyframe_points) for fc in curves]
+        if len({len(k) for k in keys}) != 1:
+            print("[export_models] %s %s: channels keyed apart, signs left" % (action.name, path))
+            continue
+        flips = 0
+        for i in range(1, len(keys[0])):
+            if sum(k[i - 1].co.y * k[i].co.y for k in keys) < 0:
+                flips += 1
+                for k in keys:
+                    k[i].co.y = -k[i].co.y
+                    k[i].handle_left.y = -k[i].handle_left.y
+                    k[i].handle_right.y = -k[i].handle_right.y
+        if flips:
+            for fc in curves:
+                fc.update()
+            print("[export_models] %s %s: %d quaternion sign flip(s) aligned" % (
+                action.name, path.split('"')[1] if '"' in path else path, flips))
+
+
+def bake_constrained_bones(character, actions):
+    """Key every constrained bone (and each IK chain's upper bones) to its solved
+    rotation on every whole frame, then drop the constraints. In memory only.
+
+    Upsampling evaluates the rig BETWEEN frames, and a constraint re-solves
+    there from interpolated targets. IK near full reach is the trouble: zombie_2's
+    walk holds forearm.L almost straight, its hand target dips from 1.02x to 0.95x
+    reach halfway between frames 10 and 11, and the elbow bends 37 degrees and
+    back inside one frame. Baked, the in-betweens come from rotation curves
+    through the same per-frame poses the game showed before.
+    """
+    scene = bpy.context.scene
+    bones = set()
+    for pb in character.pose.bones:
+        for con in pb.constraints:
+            if con.mute or con.influence == 0:
+                continue
+            bones.add(pb.name)
+            if con.type == "IK":
+                parent, depth = pb.parent, 1
+                while parent is not None and (con.chain_count == 0 or depth < con.chain_count):
+                    bones.add(parent.name)
+                    parent, depth = parent.parent, depth + 1
+    if not bones:
+        return
+    anim = character.animation_data or character.animation_data_create()
+    previous = anim.action
+    for action in actions:
+        anim.action = action
+        start, end = (int(round(f)) for f in action.frame_range)
+        frames = list(range(start, end + 1))
+        poses = {name: [] for name in bones}
+        for frame in frames:
+            scene.frame_set(frame)
+            for name in bones:
+                pb = character.pose.bones[name]
+                local = character.convert_space(
+                    pose_bone=pb, matrix=pb.matrix, from_space="POSE", to_space="LOCAL")
+                poses[name].append(local.to_quaternion())
+        bag = action.layers[0].strips[0].channelbag(anim.action_slot, ensure=True)
+        for name, quats in poses.items():
+            for prev, quat in zip(quats, quats[1:]):
+                if prev.dot(quat) < 0:
+                    quat.negate()
+            path = 'pose.bones["%s"].rotation_quaternion' % name
+            for i in range(4):
+                fc = bag.fcurves.find(path, index=i) or bag.fcurves.new(path, index=i)
+                fc.keyframe_points.clear()
+                fc.keyframe_points.add(len(frames))
+                for key, frame, quat in zip(fc.keyframe_points, frames, quats):
+                    key.co = (frame, quat[i])
+                    key.interpolation = "BEZIER"
+                    key.handle_left_type = key.handle_right_type = "AUTO_CLAMPED"
+                fc.update()
+        print("[export_models] %s: baked %d constrained bones over frames %d-%d" % (
+            action.name, len(bones), start, end))
+    anim.action = previous
+    for name in bones:
+        pb = character.pose.bones[name]
+        pb.rotation_mode = "QUATERNION"
+        for con in list(pb.constraints):
+            pb.constraints.remove(con)
+
+
+def upsample_actions(actions, factor):
+    """Stretch every key's time by `factor`, in memory, and raise the scene fps
+    to match, so the forced-sampling export takes `factor` samples per authored
+    frame. Each extra sample is read off the source's Bezier curve, so the
+    in-betweens ease the way the animator's curves do rather than sitting on
+    the straight line Godot would draw anyway.
+
+    Seconds are unchanged (frames and fps both scale), and UnitVisual time-scales
+    every clip to its configured duration regardless. Runs after close_run_loop,
+    which sets an explicit frame range that is scaled here too.
+    """
+    scene = bpy.context.scene
+
+    def stretch(frame):
+        return 1 + (frame - 1) * factor
+
+    for action in actions:
+        align_quaternion_signs(action)
+        start, end = action.frame_range
+        for fc in _fcurves(action):
+            for key in fc.keyframe_points:
+                key.handle_left.x = stretch(key.handle_left.x)
+                key.co.x = stretch(key.co.x)
+                key.handle_right.x = stretch(key.handle_right.x)
+            fc.update()
+        if action.use_frame_range:
+            action.frame_start, action.frame_end = stretch(start), stretch(end)
+        print("[export_models] %s: frames %g-%g -> %g-%g" % (
+            action.name, start, end, stretch(start), stretch(end)))
+    scene.render.fps = round(scene.render.fps * factor)
 
 
 def export_pile(variant, out_dir):
@@ -481,6 +640,36 @@ def export_gun(gun, out_dir, subdir="guns"):
     print("[export_models] wrote %s" % glb)
 
 
+def export_prop(variant, out_dir):
+    """An unrigged character: the `variant` object and its children, no
+    animation. Its sidecar has no poses -- UnitVisual animates it in code."""
+    root = bpy.data.objects.get(variant)
+    if root is None:
+        sys.exit("[export_models] %s has no object named %r" % (bpy.data.filepath, variant))
+    strip_scene(root)
+    rs.unlink_missing_images()
+    for image in bpy.data.images:
+        w, h = image.size
+        if max(w, h) > MAX_TEXTURE:
+            s = MAX_TEXTURE / max(w, h)
+            image.scale(max(1, int(w * s)), max(1, int(h * s)))
+    os.makedirs(out_dir, exist_ok=True)
+    glb = os.path.join(out_dir, variant + ".glb")
+    bpy.ops.export_scene.gltf(
+        filepath=glb,
+        export_format="GLB",
+        export_yup=True,
+        export_apply=True,
+        export_animations=False,
+        export_image_format="AUTO",
+    )
+    sidecar = {"variant": variant, "poses": []}
+    sidecar.update(PROPS.get(variant, (None, {}))[1])
+    with open(os.path.join(out_dir, variant + ".json"), "w") as f:
+        json.dump(sidecar, f, indent=2)
+    print("[export_models] wrote %s (static prop)" % glb)
+
+
 def _fcurves(action):
     return [fc for layer in action.layers for strip in layer.strips
             for bag in getattr(strip, "channelbags", ()) for fc in bag.fcurves]
@@ -492,6 +681,7 @@ def export_all():
     jobs = [(blend, "--variant", v) for v, blend in list(MODELS.items()) + list(PILES.items())]
     jobs += [(blend, "--gun", g) for g, blend in GUNS.items()]
     jobs += [(blend, "--wrist-gun", g) for g, blend in WRIST_GUNS.items()]
+    jobs += [(blend, "--prop", p) for p, (blend, _) in PROPS.items()]
     for blend, flag, name in jobs:
         print("[export_models] --- %s from %s" % (name, blend))
         result = subprocess.run([blender, "-b", blend, "-P", me, "--", flag, name])
@@ -505,6 +695,7 @@ def main():
     parser.add_argument("--variant")
     parser.add_argument("--gun")
     parser.add_argument("--wrist-gun")
+    parser.add_argument("--prop")
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--out", default=OUT_DIR)
     args = parser.parse_args(argv)
@@ -514,12 +705,14 @@ def main():
         export_gun(args.gun, os.path.abspath(args.out))
     elif args.wrist_gun:
         export_gun(args.wrist_gun, os.path.abspath(args.out), "wrist_guns")
+    elif args.prop:
+        export_prop(args.prop, os.path.abspath(args.out))
     elif args.variant in PILES:
         export_pile(args.variant, os.path.abspath(args.out))
     elif args.variant:
         export_model(args.variant, os.path.abspath(args.out))
     else:
-        sys.exit("pass --variant <name>, --gun <name>, --wrist-gun <name> or --all")
+        sys.exit("pass --variant <name>, --gun <name>, --wrist-gun <name>, --prop <name> or --all")
 
 
 if __name__ == "__main__":

@@ -45,9 +45,15 @@ enum Spawn {
 
 ## The Cerberus half of `Spawn`, in roster order. Iterated by MapBuilder and by
 ## the spawner in main.gd so adding a fifth robot is one entry here plus a glyph.
+##
+## ARCHIVED_CERBERUS are out of the demo's scope (2026-11-10): their code,
+## scenes and presets are intact and their glyphs still parse, but nothing
+## spawns them — a map that places one gets an empty tile. Moving a kind back
+## into CERBERUS_SPAWNS (and dev_spawn.gd's menu) restores it.
 const CERBERUS_SPAWNS: Array[int] = [
-	Spawn.AUXILIUM, Spawn.SAGITTARII, Spawn.PROCTOR, Spawn.SECURUS, Spawn.LICTOR,
+	Spawn.SAGITTARII, Spawn.PROCTOR, Spawn.SECURUS,
 ]
+const ARCHIVED_CERBERUS: Array[int] = [Spawn.AUXILIUM, Spawn.LICTOR]
 
 ## Which boundary of a tile an edge is. Cover lives on these rather than on the
 ## tile itself (see `cover_edges`), so a unit stands ON a tile and is protected

@@ -183,11 +183,12 @@ const VARIANT_LOOP_TIME := {
 	# 1.95 m/s — change the two together. Idle and flinch play at their
 	# authored 47 and 12 frames (the idle is tools/roboticize_robot.py's head
 	# scan, IDLE_FRAMES). The hook punch is 26 frames (2.17 s) of guard,
-	# wind-up, swing and recovery, played at 1.6 s; see STRIKE_AT for when it
+	# wind-up, swing and recovery, played at 1.6 / 0.7 (~2.29 s, 30% slower
+	# than its old 1.6 s); see STRIKE_AT for when it
 	# connects. The wrist gun's raise and lower were keyed by hand at the
 	# scene's 30 fps, 16 frames each, and play at that speed rather than
 	# squeezed to RAISE_TIME / SETTLE_TIME (`_play_burst` waits on these too).
-	&"securus": {WALK: 1.2, IDLE: 47 / 12.0, MELEE: 1.6, HIT_REACT: 12 / 12.0, DOWNED: 12 / 12.0,
+	&"securus": {WALK: 1.2, IDLE: 47 / 12.0, MELEE: 1.6 / 0.7,HIT_REACT: 12 / 12.0, DOWNED: 12 / 12.0,
 		BEGIN_SHOOT: 16 / 30.0, END_SHOOT: 16 / 30.0},
 }
 
@@ -400,6 +401,9 @@ var _mount: Node3D = null
 ## EYE_NODE. See `_build_eye`.
 var _eye_material: StandardMaterial3D = null
 var _eye_light: OmniLight3D = null
+## What the eye glows: EYE_COLOR until the unit sets its own (`set_eye_color`).
+## Kept across a model rebuild, like `_status_color`.
+var _eye_color := EYE_COLOR
 ## Placeholder only: the node posed to crouch or lie down, and the status light.
 var _pose_root: Node3D = null
 var _status_material: StandardMaterial3D = null
@@ -477,6 +481,8 @@ func _build_model() -> void:
 	_mount = null
 	_eye_material = null
 	_eye_light = null
+	_drone = null
+	_drone_ready = false
 	_aim_mod = null
 	_health_band = null
 	_band_glow = null
@@ -525,10 +531,12 @@ func set_dead_tint(on: bool) -> void:
 # --- The glowing eye -----------------------------------------------------------
 #
 # A model that has an EYE_NODE (an Empty on its head bone in the .blend, placed
-# by tools/add_eye_socket.py — the security robot's camera lens) gets a lit red
-# lens there and a small light that throws red on whatever is close: the read,
-# across a dark deck, that one of the things is looking at you. It rides the
-# head through every animation and the ragdoll, and goes dark with the body.
+# by tools/add_eye_socket.py — the security robot's camera lens) gets a lit
+# lens there and a small light that throws its colour on whatever is close: the
+# read, across a dark deck, that one of the things is looking at you. Red unless
+# the unit says otherwise (`set_eye_color` — a robot shows its alert state). It
+# rides the head through every animation and the ragdoll, and goes dark with
+# the body.
 
 const EYE_NODE := "eye"
 const EYE_COLOR := Color(1.0, 0.06, 0.03)
@@ -562,7 +570,6 @@ func _build_eye(inst: Node) -> void:
 	socket.add_child(lens)
 	_eye_light = OmniLight3D.new()
 	_eye_light.name = "EyeGlow"
-	_eye_light.light_color = EYE_COLOR
 	_eye_light.omni_range = EYE_LIGHT_RANGE
 	_eye_light.omni_attenuation = 2.0
 	_eye_light.shadow_enabled = false
@@ -599,8 +606,158 @@ func _apply_eye() -> void:
 	if _eye_material == null:
 		return
 	var lit := not _dead_tinted
-	_set_glow(_eye_material, EYE_COLOR, EYE_EMISSION if lit else 0.0)
+	_set_glow(_eye_material, _eye_color, EYE_EMISSION if lit else 0.0)
+	_eye_light.light_color = _eye_color
 	_eye_light.visible = lit
+
+
+## Recolours the eye. Mirrored like `set_status_color`, and for the same reason:
+## what drives it (a robot's alert state) lives on the host alone.
+##
+## Pick the colour for EYE_EMISSION, not as a swatch: there is no tonemapper, so
+## at 6x every channel over ~0.17 clips to 1. A colour keeps its hue only if its
+## minor channels are tiny — (0.25, 1, 0.45) would glow white, not green.
+func set_eye_color(color: Color) -> void:
+	_mirror(&"_rpc_set_eye_color", [color])
+	_set_eye_color(color)
+
+
+func _set_eye_color(color: Color) -> void:
+	_eye_color = color
+	_apply_eye()
+
+
+# --- Drones ----------------------------------------------------------------------
+#
+# A model whose sidecar has `hover_height` (export_models.py PROPS — the Proctor)
+# is one rigid body with no clips, and everything it does is done here: it hangs
+# in the air with a slow bob, noses down into its direction of travel and banks
+# into sideways motion the way a quadcopter does, and drops onto the deck when
+# downed. The tilt is driven by how fast the unit is ACTUALLY moving (measured
+# off its position each frame), not by the run stance, so it leans in as it
+# speeds up, levels as it stops, and agrees with whatever speed playback uses.
+#
+# All of it is on `_drone`, a node between `_model` (which `_apply_body` yaws)
+# and the imported scene, so it composes with the facing rather than fighting it.
+
+## Lean per metre/second of ground speed, radians: ~4.5 degrees per m/s.
+const DRONE_TILT_PER_SPEED := 0.078
+## Hard cap on the lean, radians (~24 degrees) — the Proctor's 5 m/s dash.
+const DRONE_MAX_TILT := 0.42
+## How fast the lean chases its target (critically damped spring).
+const DRONE_TILT_OMEGA := 7.0
+## Low-pass on the measured velocity, 1/s: a tween's per-frame jitter must not
+## shake the airframe.
+const DRONE_VEL_SMOOTH := 10.0
+## Idle bob: metres of travel and cycles per second.
+const DRONE_BOB := 0.035
+const DRONE_BOB_HZ := 0.45
+## A slow roll wander on top, radians, so a parked drone is never dead still.
+const DRONE_SWAY := 0.035
+const DRONE_SWAY_HZ := 0.29
+## How fast it climbs back to hover height (replay standing it back up).
+const DRONE_LIFT_OMEGA := 4.0
+## Downed: falls under gravity, bounces this much, lands canted on its side.
+const DRONE_GRAVITY := 9.8
+const DRONE_BOUNCE := 0.3
+const DRONE_CRASH_ROLL := 0.35
+## A hit knocks the nose up, radians/second added to the pitch spring.
+const DRONE_HIT_KICK := -4.0
+
+var _drone: Node3D = null
+var _drone_ready := false
+var _hover_height := 0.0
+## Height of the drone's centre when it lies on the deck: its lowest point.
+var _drone_floor := 0.0
+var _drone_y := 0.0
+var _drone_vy := 0.0
+var _drone_last := Vector3.ZERO
+var _drone_vel := Vector3.ZERO
+## Pitch (x) and roll (y), radians, and their spring velocities.
+var _drone_tilt := Vector2.ZERO
+var _drone_tilt_vel := Vector2.ZERO
+var _drone_time := 0.0
+
+
+func _build_drone(inst: Node3D, hover_height: float) -> void:
+	_drone = Node3D.new()
+	_drone.name = "Hover"
+	_model.add_child(_drone)
+	_drone.add_child(inst)
+	# `_drone` sits inside `_model`, so both heights are in its unscaled units.
+	_hover_height = hover_height / model_scale
+	var lowest := 0.0
+	for node in inst.find_children("*", "MeshInstance3D", true, false):
+		var mesh := node as MeshInstance3D
+		if mesh.mesh == null:
+			continue
+		var box := _rest_in(mesh, inst) * mesh.get_aabb()
+		lowest = minf(lowest, box.position.y)
+	_drone_floor = -lowest
+	_drone_ready = false
+
+
+func _is_grounded() -> bool:
+	return _action == DOWNED or _stance == DOWNED or _stance == DEAD
+
+
+func _drive_drone(delta: float) -> void:
+	var pos := _unit.global_position if _unit else global_position
+	var grounded := _is_grounded()
+	if _instant() or not _drone_ready or delta <= 0.0:
+		_drone_last = pos
+		_drone_vel = Vector3.ZERO
+		_drone_tilt = Vector2.ZERO
+		_drone_tilt_vel = Vector2.ZERO
+		_drone_y = _drone_floor if grounded else _hover_height
+		_drone_vy = 0.0
+		_drone_ready = true
+		_pose_drone(grounded)
+		return
+	var raw := (pos - _drone_last) / delta
+	_drone_last = pos
+	raw.y = 0.0
+	if raw.length() > 30.0:
+		raw = Vector3.ZERO  # a teleport, not a flight
+	_drone_vel = _drone_vel.lerp(raw, 1.0 - exp(-DRONE_VEL_SMOOTH * delta))
+
+	# Into the model's frame (forward -Z). Nose DOWN is negative pitch about X;
+	# banking toward +X is negative roll about Z.
+	var local := _model.global_transform.basis.orthonormalized().inverse() * _drone_vel
+	var target := Vector2.ZERO
+	if not grounded:
+		target.x = clampf(local.z * DRONE_TILT_PER_SPEED, -DRONE_MAX_TILT, DRONE_MAX_TILT)
+		target.y = clampf(-local.x * DRONE_TILT_PER_SPEED, -DRONE_MAX_TILT, DRONE_MAX_TILT)
+	var p := _spring(_drone_tilt.x, _drone_tilt_vel.x, target.x, DRONE_TILT_OMEGA, delta)
+	var r := _spring(_drone_tilt.y, _drone_tilt_vel.y, target.y, DRONE_TILT_OMEGA, delta)
+	_drone_tilt = Vector2(p.x, r.x)
+	_drone_tilt_vel = Vector2(p.y, r.y)
+
+	if grounded:
+		_drone_vy -= DRONE_GRAVITY * delta
+		_drone_y += _drone_vy * delta
+		if _drone_y <= _drone_floor:
+			_drone_y = _drone_floor
+			_drone_vy = -_drone_vy * DRONE_BOUNCE if _drone_vy < -0.5 else 0.0
+	else:
+		var s := _spring(_drone_y, _drone_vy, _hover_height, DRONE_LIFT_OMEGA, delta)
+		_drone_y = s.x
+		_drone_vy = s.y
+	_drone_time += delta
+	_pose_drone(grounded)
+
+
+func _pose_drone(grounded: bool) -> void:
+	# Per-unit phase, so a room of them does not bob in unison.
+	var phase := loop_phase * TAU
+	var bob := 0.0 if grounded else sin(_drone_time * TAU * DRONE_BOB_HZ + phase) * DRONE_BOB
+	var sway := 0.0 if grounded else sin(_drone_time * TAU * DRONE_SWAY_HZ + phase * 1.7) * DRONE_SWAY
+	var crash := 0.0
+	if grounded:
+		var fall := maxf(_hover_height - _drone_floor, 0.01)
+		crash = DRONE_CRASH_ROLL * clampf(1.0 - (_drone_y - _drone_floor) / fall, 0.0, 1.0)
+	_drone.position = Vector3(0.0, _drone_y + bob, 0.0)
+	_drone.rotation = Vector3(_drone_tilt.x, 0.0, _drone_tilt.y + sway + crash)
 
 
 func _tint_materials(tint: Color) -> void:
@@ -615,7 +772,10 @@ func _build_single(sidecar: Dictionary) -> bool:
 	if scene == null:
 		return false
 	var inst := scene.instantiate() as Node3D
-	_model.add_child(inst)
+	if sidecar.has("hover_height"):
+		_build_drone(inst, float(sidecar["hover_height"]))
+	else:
+		_model.add_child(inst)
 	_adopt_players(inst, 0.0)
 	var yaw: Variant = sidecar.get("pose_yaw_degrees", {})
 	if yaw is Dictionary:
@@ -1418,6 +1578,11 @@ func _rpc_set_status_color(color: Color) -> void:
 
 
 @rpc("authority", "call_remote", "reliable")
+func _rpc_set_eye_color(color: Color) -> void:
+	_set_eye_color(color)
+
+
+@rpc("authority", "call_remote", "reliable")
 func _rpc_set_tempo(value: float) -> void:
 	_set_tempo(value)
 
@@ -1473,7 +1638,7 @@ func _set_stance(stance: StringName) -> void:
 	if _action != &"":
 		return
 	_play(stance)
-	if stance == RUN and not _stepping and not _instant():
+	if stance == RUN and not _stepping and not _instant() and _drone == null:
 		_footstep_loop()  # deliberately not awaited: runs until the stance ends
 	elif stance == IDLE:
 		_maybe_start_fidget()
@@ -1555,6 +1720,8 @@ func play_hit_react() -> void:
 
 
 func _play_hit_react() -> void:
+	if _drone != null and not _instant():
+		_drone_tilt_vel.x += DRONE_HIT_KICK  # no clip: the airframe takes the hit
 	if _instant() or _action != &"" or not (_authored and _has_any(HIT_REACT)):
 		return
 	await _play_action(HIT_REACT)
@@ -1934,6 +2101,8 @@ func _moving() -> bool:
 func _process(delta: float) -> void:
 	if _model == null or _ragdoll != null:
 		return
+	if _drone != null:
+		_drive_drone(delta)
 	if _instant() or not _facing_ready:
 		snap_facing()
 		return

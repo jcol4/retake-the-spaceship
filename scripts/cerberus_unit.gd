@@ -40,6 +40,19 @@ const STATUS_COLOR := {
 ## "this thing is not currently a threat", which is the window the player bought.
 const STATUS_COLOR_DISABLED := Color(0.25, 0.5, 1.0)
 
+## The eye's colour by the same states: green standing post, orange caution
+## (an alert it is investigating), red engaged. Its own table rather than
+## STATUS_COLOR because the eye glows at UnitVisual.EYE_EMISSION with no
+## tonemapper, so these are chosen for what they CLIP to (shown after each):
+## the status light's green would glow white and its amber yellow.
+const EYE_COLOR := {
+	AlertState.UNAWARE: Color(0.03, 1.0, 0.06),  # -> (0.18, 1, 0.36) green
+	AlertState.ALERT: Color(1.0, 0.09, 0.0),  # -> (1, 0.54, 0) orange
+	AlertState.COMBAT: Color(1.0, 0.02, 0.01),  # -> (1, 0.12, 0.06) red
+}
+## EMP'd or powered down: the status light's blue, so the two agree.
+const EYE_COLOR_DISABLED := Color(0.02, 0.12, 1.0)  # -> (0.12, 0.72, 1)
+
 ## Damage that gets through no matter how thick the plate. Without a floor, a
 ## weapon whose damage is at or below a unit's Armor does literally nothing, and
 ## an SMG stops being a weapon rather than becoming a poor choice.
@@ -412,3 +425,4 @@ func _refresh_status_light() -> void:
 	var offline := emp_turns > 0 or (systems != null and not systems.robots_enabled)
 	var color: Color = STATUS_COLOR_DISABLED if offline else STATUS_COLOR[alert_state]
 	visual.set_status_color(color)
+	visual.set_eye_color(EYE_COLOR_DISABLED if offline else EYE_COLOR[alert_state])

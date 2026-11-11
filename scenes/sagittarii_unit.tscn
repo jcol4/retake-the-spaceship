@@ -4,14 +4,18 @@
 [ext_resource type="Script" path="res://scripts/unit_visual.gd" id="2_visual"]
 
 [sub_resource type="CapsuleShape3D" id="capsule_shape"]
-radius = 0.5
-height = 1.9
+radius = 0.55
+height = 2.3
 
 [node name="SagittariiUnit" type="Node3D" groups=["enemy_units", "units"]]
 script = ExtResource("1_script")
-; The slowest thing on the deck that still advances. Its threat is that it never
+; Rides the security robot body (variant "securus"), which is animated to a walk
+; and nothing else, so it walks only. Its threat is that it never
 ; stops coming, not that it arrives.
-move_speed = 1.8
+walks_only = true
+; 1.95 m/s, NOT a free dial: the robot's walk is timed to it
+; (UnitVisual.VARIANT_LOOP_TIME, securus_unit.tscn). Change them together.
+move_speed = 1.95
 ; The heaviest plate short of Securus, and the reason EMP is worth a kit slot:
 ; at 5, a Shoot with the Assault Rifle's 8 damage delivers 3, while the same shot
 ; into a zeroed-armor window delivers all 8.
@@ -26,8 +30,8 @@ salvage_value = 4
 
 [node name="Visual" type="Node3D" parent="."]
 script = ExtResource("2_visual")
-layers = Array[StringName]([&"body", &"head", &"weapon", &"status"])
-variant = &"sagittarii"
+layers = Array[StringName]([&"body", &"head", &"status"])
+variant = &"securus"
 placeholder_style = &"machine"
 has_light = false
 
@@ -36,10 +40,10 @@ collision_layer = 2
 collision_mask = 0
 
 [node name="Collision" type="CollisionShape3D" parent="Body"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.95, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.15, 0)
 shape = SubResource("capsule_shape")
 
 [node name="NameLabel" type="Label3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.4, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.8, 0)
 billboard = 1
 text = "Sagittarii"

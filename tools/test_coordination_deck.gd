@@ -96,7 +96,9 @@ func _check_the_deck_is_what_the_design_says() -> void:
 	_check(_map.merc_spawns.size() == 6, "6 mercs (got %d)" % _map.merc_spawns.size())
 	_check(_map.player_spawns.size() == 3, "3 soldiers (got %d)" % _map.player_spawns.size())
 	_check(_map.hunter_spawns.size() == 1, "1 Agile Hunter")
-	_check(_map.cerberus_spawns.get(MapData.Spawn.LICTOR, []).size() == 1, "1 Lictor")
+	# Its Auxilium and Lictor are archived (MapData.ARCHIVED_CERBERUS); the
+	# robot wing keeps its Sagittarii.
+	_check(_map.cerberus_spawns.get(MapData.Spawn.SAGITTARII, []).size() == 1, "1 Sagittarii")
 	# The alarm panel sits on the corridor every route between wings crosses.
 	var alarm = _grid.get_tile(Vector3i(10, 0, 12))
 	_check(alarm != null and alarm.alarm, "an alarm panel is on the corridor")

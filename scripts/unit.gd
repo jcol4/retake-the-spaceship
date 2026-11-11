@@ -50,10 +50,6 @@ const TURN_TIME := 0.09  # seconds to swing toward the next tile
 # TRACER_EVERY likewise (WeaponData.tracer_every). See `_burst_size`.
 const BURST_MIN := 4
 const BURST_MAX := 6
-# On a hit, this many rounds are thrown wide anyway so the burst reads as a
-# burst; the rest converge. On a miss every round misses. Kept below BURST_MIN
-# so a hit always lands visibly more rounds on target than it throws away.
-const BURST_STRAY_MAX := 2
 # One round in this many draws a tracer (VfxManager), starting with the first.
 const TRACER_EVERY := 2
 
@@ -406,6 +402,14 @@ var _pending_target: Unit = null
 # result. Decided up front so the pattern is fixed before the first round.
 var _burst_round: int = 0
 var _burst_strays: Array[int] = []
+## The bodies the armed burst lands in, nearest the shooter first: the target if
+## it was hit and every body Penetration hit in front of or behind it. Every
+## round of the burst streaks through all of them and stops in the last
+## (VfxManager.shot_through); empty, the rounds go wide as one group.
+var _burst_chain: Array[Unit] = []
+## Where a burst that landed in nobody groups its rounds (VfxManager.miss_group),
+## picked on its first round.
+var _burst_group := Vector2.ZERO
 ## Whether the armed burst kills (or downs) its target, and where its first
 ## landing round strikes — so the body drops on the round that does it
 ## (UnitVisual.take_round) rather than after the whole burst. Presentation
@@ -2763,6 +2767,7 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	_pending_target = target
 	_burst_round = 0
 	_burst_strays = _pick_strays(rounds, result.hit)
+	_burst_chain = _hit_chain(result, target)
 	# Where the round lands and whether it drops the target, decided now so the
 	# burst can show it: the fall starts on the first round that lands. Only
 	# when nothing can redirect the hit (a carrier may take it into the body on
@@ -2792,10 +2797,12 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	var lean := _lean_step_toward(target)
 	_record(ExplorationRules.EV_SHOT, {"target": target, "hit": result.hit, "crit": result.crit,
 		"rounds": rounds, "strays": PackedInt32Array(_burst_strays), "melee": false, "lean": lean,
-		"doomed": _burst_doomed, "part": vis_part, "reaction": reaction, "overkill": _burst_overkill})
+		"doomed": _burst_doomed, "part": vis_part, "reaction": reaction, "overkill": _burst_overkill,
+		"chain": _burst_chain.duplicate()})
 	await _play_armed_burst(rounds, lean)  # emits `muzzle` once per round
 	var doomed := _burst_doomed
 	_burst_doomed = false
+	_burst_chain.clear()
 	_burst_reaction = false
 	_pending_shot = null
 	_pending_target = null
@@ -2865,7 +2872,6 @@ func _land_collateral(result: Combat.ShotResult) -> void:
 				shot_part(Combat.ShotAction.SHOOT, Combat.BodyPart.TORSO))
 			c.damage = victim.take_damage(raw)
 			c.absorbed = raw - c.damage
-			show_impact(victim.global_position, false)
 		_report_incoming(body)
 
 
@@ -2885,18 +2891,29 @@ func _tracer_every() -> int:
 
 
 func _pick_strays(rounds: int, hit: bool) -> Array[int]:
-	# A miss throws everything wide. A hit still throws one or two away, because
-	# a burst where every round lands in the same spot reads as a single shot.
+	# All or nothing: a miss throws every round wide (as one group, see
+	# `_burst_group`), a hit lands every round. A hit used to throw one or two
+	# away so the burst read as a burst; the scatter on the body (CONE_TIGHT)
+	# does that job now, and a lone stray beside a hit read as sloppy.
 	var strays: Array[int] = []
 	if not hit:
 		for i in rounds:
 			strays.append(i)
-		return strays
-	var pool: Array[int] = []
-	for i in rounds:
-		pool.append(i)
-	pool.shuffle()
-	return pool.slice(0, randi_range(1, BURST_STRAY_MAX))
+	return strays
+
+
+## The bodies `result` lands in, nearest `self` first (see `_burst_chain`).
+func _hit_chain(result: Combat.ShotResult, target: Unit) -> Array[Unit]:
+	var chain: Array[Unit] = []
+	if result.hit:
+		chain.append(target)
+	for c: Combat.ShotResult in result.collateral:
+		if c.hit and c.unit != null and is_instance_valid(c.unit):
+			chain.append(c.unit)
+	var origin := global_position
+	chain.sort_custom(func(a: Unit, b: Unit) -> bool:
+		return origin.distance_squared_to(a.global_position) < origin.distance_squared_to(b.global_position))
+	return chain
 
 
 func melee_at(target: Unit) -> Combat.ShotResult:
@@ -2977,6 +2994,9 @@ func _on_muzzle() -> void:
 	var vfx := get_tree().get_first_node_in_group("vfx")
 	if vfx == null:
 		return
+	if round_index == 0:
+		# Cosmetic, so rolled on the global RNG and per peer, like the scatter.
+		_burst_group = vfx.miss_group()
 	# Origin is the barrel tip as the animation currently has it, not the middle
 	# of the unit — the rifle is held off to the right, so a centreline shot
 	# visibly left the chest. Still read per round now that no beam is drawn from
@@ -3001,7 +3021,22 @@ func _on_muzzle() -> void:
 	if not lands and runner_vel.length() > 0.5:
 		at -= runner_vel.normalized() * TRAIL_MISS * clampf(runner_vel.length() / maxf(0.1,
 			_pending_target.move_speed), 0.0, 1.0)
-	vfx.shot_impact(visual.barrel_tip(), at, lands, crit, round_index % _tracer_every() == 0)
+	var tracer := round_index % _tracer_every() == 0
+	# Every round of a burst that landed in anybody goes through all of them
+	# (Penetration's collateral included) and stops in the last; one that landed
+	# in nobody goes wide with the rest of the burst.
+	var chain := PackedVector3Array()
+	var crit_index := -1
+	if _pending_shot != null:
+		for body: Unit in _burst_chain:
+			if is_instance_valid(body):
+				if body == _pending_target and crit:
+					crit_index = chain.size()
+				chain.append(body.visual.global_position)
+	if chain.is_empty():
+		vfx.shot_miss(visual.barrel_tip(), at, _burst_group, tracer)
+	else:
+		vfx.shot_through(visual.barrel_tip(), chain, crit_index, tracer)
 	# The round into the body: the one that drops it starts the fall, every one
 	# after jolts it (UnitVisual.take_round). The first landing round strikes
 	# where the shot was rolled to land; the rest go where rounds go.
@@ -3073,9 +3108,13 @@ func _play_armed_burst(rounds: int, lean := Vector3i.ZERO) -> void:
 		var hit := has_shot and _pending_shot.hit
 		var crit := has_shot and _pending_shot.crit
 		var strays := PackedInt32Array(_burst_strays)
+		var chain := []
+		for body: Unit in _burst_chain:
+			if is_instance_valid(body):
+				chain.append(body.get_path())
 		for peer_id in SteamLobby.ready_peers:
 			_rpc_play_armed_burst.rpc_id(peer_id, target_path, rounds, has_shot, hit, crit, strays, lean,
-				_burst_doomed, _burst_part, _burst_reaction, _burst_overkill)
+				_burst_doomed, _burst_part, _burst_reaction, _burst_overkill, chain)
 	await _play_burst_leaning(rounds, lean)
 
 
@@ -3133,7 +3172,7 @@ func _set_lean(offset: Vector3) -> void:
 @rpc("authority", "call_remote", "reliable")
 func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, hit: bool,
 		crit: bool, strays: PackedInt32Array, lean: Vector3i, doomed := false, part := -1,
-		reaction := false, overkill := 0) -> void:
+		reaction := false, overkill := 0, chain: Array = []) -> void:
 	# Only what `_on_muzzle` reads; the rest of the result stays on the host.
 	var shot: Combat.ShotResult = null
 	if has_shot:
@@ -3144,6 +3183,14 @@ func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, h
 	_pending_target = get_node_or_null(target_path) as Unit if not target_path.is_empty() else null
 	_burst_round = 0
 	_burst_strays.assign(strays)
+	_burst_chain.clear()
+	for path in chain:
+		var body := get_node_or_null(path as NodePath) as Unit
+		if body != null:
+			_burst_chain.append(body)
+	# A hit from a sender that names no chain still lands in its target.
+	if hit and _burst_chain.is_empty() and _pending_target != null:
+		_burst_chain.append(_pending_target)
 	_burst_doomed = doomed
 	_burst_part = part
 	_burst_overkill = overkill
@@ -3164,6 +3211,7 @@ func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, h
 	if _pending_shot == shot:
 		_pending_shot = null
 		_pending_target = null
+		_burst_chain.clear()
 
 
 ## Draws an attack the tick already resolved (exploration plan B.12): the burst
@@ -3172,7 +3220,7 @@ func _rpc_play_armed_burst(target_path: NodePath, rounds: int, has_shot: bool, h
 ## the timeline itself. Coroutine.
 func replay_attack(target: Unit, hit: bool, crit: bool, rounds: int,
 		strays: PackedInt32Array, melee: bool, lean := Vector3i.ZERO, doomed := false, part := -1,
-		reaction := false, overkill := 0) -> void:
+		reaction := false, overkill := 0, chain: Array = []) -> void:
 	if melee:
 		# The flash and the flinch land on the contact frame, as they did live
 		# (`melee_at`), not after the recovery.
@@ -3187,8 +3235,12 @@ func replay_attack(target: Unit, hit: bool, crit: bool, rounds: int,
 			visual.strike.disconnect(land)
 			land.call()
 		return
+	var chain_paths := []
+	for body in chain:
+		if is_instance_valid(body) and body is Unit:
+			chain_paths.append((body as Unit).get_path())
 	await _rpc_play_armed_burst(target.get_path(), rounds, true, hit, crit, strays, lean, doomed, part,
-		reaction, overkill)
+		reaction, overkill, chain_paths)
 	# A runner hit by reaction fire keeps running (move_along keeps its stance
 	# live the same way, via `is_busy`); one that has stopped flinches as usual.
 	if hit and not target.is_downed and not (reaction and target.visual.is_moving()):
@@ -3228,6 +3280,7 @@ func _arm_covering_fire(target: Unit) -> void:
 	_pending_target = target
 	_burst_round = 0
 	_burst_strays.clear()
+	_burst_chain.clear()
 	_burst_doomed = false
 
 

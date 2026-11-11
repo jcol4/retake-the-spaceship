@@ -81,13 +81,9 @@ func _check_deck() -> void:
 	# it is asserted rather than dropped so that putting robots back is a
 	# deliberate edit here.
 	#
-	# The Lictor IS on the deck now, deliberately: the security faction's
-	# cover-breaking doctrine is worth exercising in the map the game actually
-	# loads rather than only in fixtures, and one gun platform in the far room
-	# does not turn an alien-tier deck into a robot fight.
-	for kind in MapData.CERBERUS_SPAWNS:
-		if kind == MapData.Spawn.LICTOR:
-			continue
+	# The Lictor was on the deck for a while; it is archived now
+	# (MapData.ARCHIVED_CERBERUS), so the deck is robot-free again.
+	for kind in MapData.CERBERUS_SPAWNS + MapData.ARCHIVED_CERBERUS:
 		var spawns: Array = _map.cerberus_spawns.get(kind, [])
 		_check(spawns.is_empty(), "%s: no spawn on the test deck (got %d)" % [
 			_presets.display_name(kind), spawns.size()])

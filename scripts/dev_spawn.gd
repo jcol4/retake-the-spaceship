@@ -41,11 +41,11 @@ const KINDS := [
 	["worm", "Worm", "Aliens"],
 	["worm_tide", "Worm mass (16)", "Aliens"],
 	["nest", "Nest", "Aliens"],
-	["auxilium", "QRN-4 Auxilium", "Security robots"],
+	# Auxilium and Lictor are archived (MapData.ARCHIVED_CERBERUS); ROBOT_KIND
+	# still maps them, so putting a row back here is all it takes.
 	["sagittarii", "MKV-9 Sagittarii", "Security robots"],
 	["proctor", "XVT-7 Proctor", "Security robots"],
 	["securus", "JXM-2 Securus", "Security robots"],
-	["lictor", "FRC-6 Lictor", "Security robots"],
 	["merc", "Rival merc", "Mercs"],
 ]
 const ROBOT_KIND := {

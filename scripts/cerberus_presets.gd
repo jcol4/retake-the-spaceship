@@ -85,7 +85,8 @@ const DATA := {
 		# Hits harder than anything the squad carries, and reloads less often. The
 		# counterplay is exposure management, not a damage race — and on the
 		# shortened HP scale that is no longer advice: 10 a hit is half a soldier.
-		"weapon": {"display_name": "MKV Support Cannon", "base_accuracy": 30, "damage": 10, "mag_size": 5},
+		# Its numbers live with the gun (WristGunPresets.WRIST_CANNON).
+		"wrist_gun": WristGunPresets.WristGunId.WRIST_CANNON,
 		"melee": [35, 5],
 	},
 	MapData.Spawn.PROCTOR: {
