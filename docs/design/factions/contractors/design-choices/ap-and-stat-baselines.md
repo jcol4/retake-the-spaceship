@@ -57,9 +57,12 @@ uniform cost (GDD Sec 4.0, restored after an interim four-way period), so `GridM
 N AP reaches a *square* of side 2N+1. Charging 2 AP for a diagonal would make it a Dijkstra and
 re-break the reachable set the map's corridors were sized against.
 
-There is no Run band and no Sprint band any more. The move preview is one range overlay, graded by
-what each tile costs against the pool, and the hovered destination reports both its price and what
-it leaves (`HighlightManager.show_move_range` / `show_path`).
+There is no Run band and no Sprint band any more. The move preview is two XCOM-style borders: blue
+round every tile the soldier can walk to and still afford a base Shoot from (a reload too, if the
+magazine is empty), yellow round the rest of what the pool reaches. The split is wherever that
+soldier's own shot price lands, not a fixed tile count. A label pinned above the cursor gives the
+hovered destination's price and what it leaves, coloured by its zone
+(`HighlightManager.show_move_range` / `show_path`, `PlayerUnit.shot_ready_cost`).
 
 **The one modifier:** an injured leg (GDD Sec 4.2.1) raises AP-per-tile rather than shrinking a tile
 allowance, since the allowance is what this rework deleted. It stays a movement-only penalty that

@@ -231,13 +231,13 @@ func set_mode(new_mode: Mode) -> void:
 			# No area overlay out of combat (E13): a walk has no budget to show the
 			# edge of, only a path to the cursor with its step and round cost.
 			if not exploring:
-				# One band, bounded by what the pool actually affords. The old inner/
-				# outer split existed because a move was one of two fixed-price
-				# actions; now the price is the distance, so a second band would just
-				# be an arbitrary line drawn across a continuous cost.
+				# Bounded by what the pool actually affords, and split where the walk
+				# stops leaving a shot: blue inside, yellow beyond (XCOM's move/dash
+				# read, priced by this soldier's own shot rather than a fixed band).
 				_move_costs = GridManager.reachable_costs(grid_pos, move_tiles_affordable())
 				if highlights:
-					highlights.show_move_range(_move_costs, move_ap_per_tile(), ap)
+					highlights.show_move_range(grid_pos, _move_costs, move_ap_per_tile(), ap,
+						shot_ready_cost())
 		Mode.SHOOT, Mode.AIMED_SHOT, Mode.SUPPRESS:
 			if highlights:
 				_show_targets(highlights)
@@ -274,6 +274,21 @@ func body_targets(for_mode: Mode) -> Array[Unit]:
 		if why == "":
 			out.append(body)
 	return out
+
+
+## AP this soldier must still hold to take a base Shoot wherever it stops: the
+## shot itself with a round chambered, a reload plus the shot on an empty
+## magazine, and -1 when there is nothing left to load at all. Priced through
+## `action_cost`, so the gun in hand (the sidearm while carrying), its
+## attachments and the Reflexes discount all count. What splits the move range's
+## blue border from its yellow one.
+func shot_ready_cost() -> int:
+	var shot := action_cost(UnitStats.Action.SHOOT)
+	if can_shoot():
+		return shot
+	if can_reload():
+		return action_cost(UnitStats.Action.RELOAD) + shot
+	return -1
 
 
 func _cost_for(tile: Vector3i) -> int:
