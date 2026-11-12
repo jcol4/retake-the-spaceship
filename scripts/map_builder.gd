@@ -118,6 +118,8 @@ var _spotted: Dictionary = {}
 ## where `_sight_key` says and no cover has been blown off since.
 var _sight_cache: Dictionary = {}
 var _sight_key: Array = []
+## The standing soldiers `_sight_key` was read from (`_refresh_sight_key`).
+var _sight_soldiers: Array[Unit] = []
 var _fade_tween: Tween = null
 ## Wall nodes mid-fade, and the GeometryInstance3Ds under them whose
 ## `transparency` the fade drives.
@@ -224,6 +226,7 @@ func build(map_data: MapData) -> void:
 	_spotted.clear()
 	_sight_cache.clear()
 	_sight_key = []
+	_sight_soldiers = []
 	_explored.clear()
 	_fog_groups.clear()
 	_fog_group_regions.clear()
@@ -1383,10 +1386,13 @@ func _room_under_cursor(cam: Camera3D) -> int:
 ## resolves its whole activation with no time on the clock, instead of making the
 ## player wait out animations against a static screen. See Unit.is_instant.
 func _apply_unit_visibility() -> void:
-	for node in get_tree().get_nodes_in_group("units"):
+	# The squad is read ONCE for the whole pass: nothing in it moves a soldier,
+	# and re-reading it per unit was most of this pass's cost every frame.
+	_refresh_sight_key()
+	for node in get_tree().get_nodes_in_group(&"units"):
 		var unit := node as Unit
 		if unit:
-			unit.set_rendered(unit_visible_at(unit, unit.grid_pos))
+			unit.set_rendered(_visible_at(unit, unit.grid_pos, false))
 
 
 ## Whether `unit` standing on `tile` is drawn: a revealed region, already spotted
@@ -1394,13 +1400,20 @@ func _apply_unit_visibility() -> void:
 ## asks this of each tile ahead, so a walk into view animates from that step
 ## rather than waiting for the next frame's pass.
 func unit_visible_at(unit: Unit, tile: Vector3i) -> bool:
+	return _visible_at(unit, tile, true)
+
+
+## `unit_visible_at`, re-reading the squad first only when `refresh` says to.
+func _visible_at(unit: Unit, tile: Vector3i, refresh: bool) -> bool:
 	if data == null:
 		return true
 	if unit.is_player_controlled or _revealed.has(data.room_index_at(tile)):
 		return true
 	if _spotted.has(unit):
 		return true
-	if not squad_sees_tile(tile):
+	if refresh:
+		_refresh_sight_key()
+	if not _sees_cached(tile):
 		return false
 	# A tick's AI pass is decided on roots already at their final tiles: spotting
 	# from there would draw a model before playback walks it into view (B.12.2).
@@ -1413,9 +1426,31 @@ func unit_visible_at(unit: Unit, tile: Vector3i) -> bool:
 ## rules shoot along (GridManager.tiles_have_sight), either end free to lean.
 ## Cached per tile until a soldier moves or cover is destroyed.
 func squad_sees_tile(tile: Vector3i) -> bool:
+	_refresh_sight_key()
+	return _sees_cached(tile)
+
+
+## `squad_sees_tile` against the squad as `_refresh_sight_key` last read it. For
+## a loop that moves no soldier: refresh once, then ask per tile.
+func _sees_cached(tile: Vector3i) -> bool:
+	if _sight_cache.has(tile):
+		return _sight_cache[tile]
+	var seen := false
+	for soldier in _sight_soldiers:
+		if soldier.grid_pos == tile or GridManager.tiles_have_sight(self, soldier.grid_pos, tile, true, true):
+			seen = true
+			break
+	_sight_cache[tile] = seen
+	return seen
+
+
+## Re-reads the standing squad, dropping the sight cache if anyone has moved or
+## gone down since it was filled. Cheap but not free (a group read and a key
+## compare), so a loop that moves nobody calls it once rather than per tile.
+func _refresh_sight_key() -> void:
 	var soldiers: Array[Unit] = []
 	var key: Array = []
-	for node in get_tree().get_nodes_in_group("player_units"):
+	for node in get_tree().get_nodes_in_group(&"player_units"):
 		var soldier := node as Unit
 		if soldier == null or soldier.is_downed or not soldier.is_inside_tree():
 			continue
@@ -1424,15 +1459,7 @@ func squad_sees_tile(tile: Vector3i) -> bool:
 	if key != _sight_key:
 		_sight_key = key
 		_sight_cache.clear()
-	if _sight_cache.has(tile):
-		return _sight_cache[tile]
-	var seen := false
-	for soldier in soldiers:
-		if soldier.grid_pos == tile or GridManager.tiles_have_sight(self, soldier.grid_pos, tile, true, true):
-			seen = true
-			break
-	_sight_cache[tile] = seen
-	return seen
+	_sight_soldiers = soldiers
 
 
 ## The round-end half of the spotted memory: whoever no soldier can see any more
@@ -1505,9 +1532,10 @@ func _update_sight_dim() -> void:
 	if _dim_pending.is_empty():
 		return
 	var deadline := Time.get_ticks_usec() + FOG_SIGHT_BUDGET_USEC
+	_refresh_sight_key()  # once: the loop moves nobody
 	while not _dim_pending.is_empty() and Time.get_ticks_usec() < deadline:
 		var tile: Vector3i = _dim_pending.pop_back()
-		if not squad_sees_tile(tile):
+		if not _sees_cached(tile):
 			_dim_next.append(tile)
 	if _dim_pending.is_empty():
 		_show_sight_dim()
@@ -1580,13 +1608,14 @@ func _reveal_seen() -> bool:
 	var any := false
 	var budgeted := DisplayServer.get_name() != "headless"
 	var deadline := Time.get_ticks_usec() + FOG_SIGHT_BUDGET_USEC
+	_refresh_sight_key()  # once: the loop moves nobody
 	while not _fog_pending.is_empty() and (not budgeted or Time.get_ticks_usec() < deadline):
 		var region: int = _fog_pending[0]
 		var tiles: Array = _region_tiles.get(region, [])
 		if _explored.has(region) or _fog_tile_index >= tiles.size():
 			_fog_pending.pop_front()
 			_fog_tile_index = 0
-		elif squad_sees_tile(tiles[_fog_tile_index]):
+		elif _sees_cached(tiles[_fog_tile_index]):
 			_explored[region] = true
 			any = true
 			_fog_pending.pop_front()

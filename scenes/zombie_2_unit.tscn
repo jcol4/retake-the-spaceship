@@ -1,0 +1,61 @@
+[gd_scene format=3 uid="uid://c0ombie2unit1"]
+
+[ext_resource type="Script" path="res://scripts/swarm_unit.gd" id="1_script"]
+[ext_resource type="Script" path="res://scripts/unit_visual.gd" id="2_visual"]
+
+[sub_resource type="CapsuleShape3D" id="capsule_shape"]
+radius = 0.42
+height = 1.8
+
+[node name="Zombie2Unit" type="Node3D" groups=["enemy_units", "units"]]
+script = ExtResource("1_script")
+; Zombie 2 (assets/models/zombie_2.glb, exported from assets/zombie_2.blend):
+; the Fodder body until 2026-11-11, when swarm_unit.tscn went back to the
+; Mixamo zombie. Kept for the dev menu's "Zombie 2" and test_swarm_pace.gd.
+;
+; Walks alone (Unit.walks_only), runs in a pack of 3+ (SwarmUnit.run_crowd),
+; which flips walks_only at runtime; the run speeds up at SwarmUnit.CROWD_SPRINT.
+walks_only = true
+; 0.9 m/s, and NOT a free dial: the walk's planted foot slides ~1.04 m a cycle
+; and UnitVisual.VARIANT_LOOP_TIME plays that cycle over 14 / 12 s. Change one
+; and the other is owed the same edit, or the feet skate.
+move_speed = 0.9
+run_crowd = 3
+; The run covers ~1.2 m a cycle (its foot travel against the walk's, measured
+; on the clip: 0.85x the old civilian_cleaned run's) and plays at the default
+; RUN cycle, 2 x FOOTSTEP_GAP = 0.667 s, so its footstep sounds land: 1.8 m/s.
+; Same pairing rule as the walk.
+run_speed = 1.8
+
+; `layers` only shapes the placeholder, which a model replaces: ONE layer, no
+; weapon — the swarm has no ranged attack at all (Sec 11.4).
+[node name="Visual" type="Node3D" parent="."]
+script = ExtResource("2_visual")
+layers = Array[StringName]([&"body"])
+variant = &"zombie_2"
+has_light = false
+; The zombie's skin is pale, and the character lighting is tuned for dark gear:
+; the hotspot blew it out to a glossy white in the beam, and the darkness floor
+; (an unshaded glow of the model's own colour) turned it into a flat grey
+; cut-out in the dark — and, reading the RULES' light for its tile, lifted a
+; body at a beam's edge to pale and flat as well. So the Fodder is lit like the
+; walls, and is dark until a light finds it: the horde in the dark is a threat
+; you lose track of, by choice.
+darkness_floor = false
+takes_hotspot = false
+
+; Layer 2, mask 0 — nothing raycasts against it today (grid_manager's LOS and
+; lighting occlusion both query layer 1 map geometry only), so this is a body
+; volume rather than a gameplay surface.
+[node name="Body" type="StaticBody3D" parent="."]
+collision_layer = 2
+collision_mask = 0
+
+[node name="Collision" type="CollisionShape3D" parent="Body"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+shape = SubResource("capsule_shape")
+
+[node name="NameLabel" type="Label3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.2, 0)
+billboard = 1
+text = "Zombie 2"

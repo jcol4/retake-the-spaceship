@@ -204,6 +204,13 @@ func _on_unit_activated(unit: Unit) -> void:
 		unit.inventory_changed.connect(_on_inventory_changed)
 	if unit is PlayerUnit and not unit.ap_changed.is_connected(_on_ap_changed):
 		unit.ap_changed.connect(_on_ap_changed)
+	# Ammo too, not just AP: a shot PAYS first (`_do_shoot` -> `_pay_attack`, the
+	# refresh) and only spends its round after `fire_at`'s turn-to-face, so on
+	# `ap_changed` alone the panel kept the pre-shot count — the last round read
+	# "Ammo 1" with Shoot lit while the gun was already dry, and the click did
+	# nothing. The room hazard shot pays before its round the same way.
+	if unit is PlayerUnit and not unit.ammo_changed.is_connected(_on_ap_changed):
+		unit.ammo_changed.connect(_on_ap_changed)
 	if unit is PlayerUnit and not unit.aimed_shot_target_picked.is_connected(_on_aimed_shot_target_picked):
 		unit.aimed_shot_target_picked.connect(_on_aimed_shot_target_picked)
 	if unit is PlayerUnit and not unit.grenade_target_picked.is_connected(_on_grenade_target_picked):

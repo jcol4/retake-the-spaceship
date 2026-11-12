@@ -46,10 +46,12 @@ var _base: Dictionary = {}  # Vector3i -> float, static fixtures only
 # beams — a non-zero value here means a player is deliberately lighting the tile.
 var _dynamic: Dictionary = {}  # Vector3i -> float, flashlights only
 var _dynamic_source: Dictionary = {}  # Vector3i -> Unit, whose beam is brightest
-## Tick playback's display layer (plan B.12.1): Vector3i -> total light as DRAWN,
-## with each beam cast from where its model is mid-playback. Read only through
+## Tick playback's display layer (plan B.12.1): Vector3i -> the brightest beam
+## as DRAWN, each cast from where its model is mid-playback. Only the beams are
+## kept: `display_light` adds the base on read, so a playback slot touches the
+## beams' tiles rather than rebuilding every tile on the deck. Read only through
 ## `display_light`, and only while `_display_active`.
-var _display: Dictionary = {}
+var _display_beams: Dictionary = {}
 var _display_active := false
 
 
@@ -65,11 +67,31 @@ func recompute_base() -> void:
 	# Static fixtures only. Call once at map load and again whenever a
 	# flickering light rerolls.
 	_base.clear()
-	for pos in GridManager.tiles.keys():
-		var total := AMBIENT_FLOOR
-		for source in _sources:
-			total += _contribution(source, pos)
-		_base[pos] = total
+	var tiles: Dictionary = GridManager.tiles
+	for pos: Vector3i in tiles:
+		_base[pos] = AMBIENT_FLOOR
+	# Each source over only the square its range can reach (Chebyshev, so every
+	# floor) rather than every tile on the deck: a deck carries ~50 fixtures and
+	# a source reaches ~6 tiles, so the all-pairs loop spent ~95% of its calls on
+	# tiles out of range — ~22 ms of a 29 ms recompute on the demo deck, and it
+	# scales with deck size. Same rays, and each tile still sums its sources in
+	# `_sources` order, so the base is bit-for-bit what the all-pairs loop gave.
+	var levels: int = GridManager._floors.size()
+	for source in _sources:
+		var reach := int(source.light_range)
+		var span := 2 * reach + 1
+		if span * span * levels >= tiles.size():
+			for pos: Vector3i in tiles:  # a reach bigger than the deck
+				_base[pos] += _contribution(source, pos)
+			continue
+		var origin: Vector3i = source.grid_pos
+		for level: int in GridManager._floors:
+			for dz in range(-reach, reach + 1):
+				for dx in range(-reach, reach + 1):
+					var pos := Vector3i(origin.x + dx, level, origin.z + dz)
+					if tiles.has(pos):
+						_base[pos] += _contribution(source, pos)
+	_full_pass_needed = true  # every tile's base may have moved
 	recompute_dynamic()
 
 
@@ -94,7 +116,8 @@ func reroll_flicker(flicker_seed: int) -> void:
 func recompute_dynamic() -> void:
 	# Flashlights only. Called often (every step of a move), so each unit only
 	# walks tiles within its own flashlight range rather than the whole map.
-	_dynamic.clear()
+	var previous := _dynamic
+	_dynamic = {}
 	_dynamic_source.clear()
 	for unit: Unit in _flashlight_units():
 		var beam := _beam_contribution(unit.grid_pos, unit.global_position, _aim_of(unit), unit)
@@ -104,10 +127,36 @@ func recompute_dynamic() -> void:
 			if beam[pos] > _dynamic.get(pos, 0.0):
 				_dynamic[pos] = beam[pos]
 				_dynamic_source[pos] = unit
-	for pos in GridManager.tiles.keys():
-		var t: GridTileData = GridManager.get_tile(pos)
-		t.light_value = clampf(_base.get(pos, AMBIENT_FLOOR) + _dynamic.get(pos, 0.0), 0.0, 100.0)
+	# Off the beams, a tile's light is its base. So once a full pass has written
+	# the base everywhere, only the tiles the last beams lit and the ones these
+	# beams light can differ from it: a step rewrites ~100 tiles, not the deck
+	# (2.5k on a generated one, ~1 ms of every lit step). A new base or a new
+	# tile set takes the full pass again.
+	var tiles: Dictionary = GridManager.tiles
+	if _full_pass_needed or GridTileData.topology_version != _lit_topology:
+		_full_pass_needed = false
+		_lit_topology = GridTileData.topology_version
+		for pos: Vector3i in tiles:
+			_write_light(tiles, pos)
+	else:
+		for pos: Vector3i in previous:
+			if not _dynamic.has(pos):
+				_write_light(tiles, pos)
+		for pos: Vector3i in _dynamic:
+			_write_light(tiles, pos)
 	lighting_changed.emit()
+
+
+## Whether the next recompute must rewrite every tile (see recompute_dynamic):
+## set by a new base, and the tile set it was written over.
+var _full_pass_needed := true
+var _lit_topology := -1
+
+
+func _write_light(tiles: Dictionary, pos: Vector3i) -> void:
+	var t: GridTileData = tiles.get(pos)
+	if t:
+		t.light_value = clampf(_base.get(pos, AMBIENT_FLOOR) + _dynamic.get(pos, 0.0), 0.0, 100.0)
 
 
 ## One beam's light, tile -> contribution, cast from `origin_tile` /
@@ -119,24 +168,32 @@ func _beam_contribution(origin_tile: Vector3i, origin_pos: Vector3, aim: Vector3
 	# floors), rather than every tile on the deck — this runs on each step of a
 	# lit walk and each slot of a playback.
 	var reach := int(FLASHLIGHT_RANGE)
-	var span: Array[Vector3i] = []
+	var tiles: Dictionary = GridManager.tiles
+	# `_within_cone`'s test with its per-beam parts worked out once, not per tile.
+	var facing_flat := Vector3(aim.x, 0.0, aim.z).normalized()
+	var eye := origin_pos + Vector3(0, 1.2, 0)
 	for level: int in GridManager._floors:
 		for dz in range(-reach, reach + 1):
 			for dx in range(-reach, reach + 1):
-				span.append(Vector3i(origin_tile.x + dx, level, origin_tile.z + dz))
-	for pos: Vector3i in span:
-		var t: GridTileData = GridManager.get_tile(pos)
-		if t == null:
-			continue
-		if not _within_cone(origin_pos, aim, t.world_pos, FLASHLIGHT_CONE_DEGREES):
-			continue
-		var c := _falloff(origin_tile, pos, FLASHLIGHT_INTENSITY, FLASHLIGHT_RANGE)
-		if c <= 0.0:
-			continue
-		if not GridManager.has_clear_line(unit, origin_pos + Vector3(0, 1.2, 0), t.world_pos + Vector3(0, 0.5, 0)):
-			continue
-		out[pos] = c
+				var pos := Vector3i(origin_tile.x + dx, level, origin_tile.z + dz)
+				var t: GridTileData = tiles.get(pos)
+				if t == null:
+					continue
+				var dir := t.world_pos - origin_pos
+				dir.y = 0.0
+				if dir.length() >= 0.001 and facing_flat.dot(dir.normalized()) < _beam_cone_cos:
+					continue
+				var c := _falloff(origin_tile, pos, FLASHLIGHT_INTENSITY, FLASHLIGHT_RANGE)
+				if c <= 0.0:
+					continue
+				if not GridManager.has_clear_line(unit, eye, t.world_pos + Vector3(0, 0.5, 0)):
+					continue
+				out[pos] = c
 	return out
+
+
+## cos of the beam's half-angle: the dot-product threshold `_within_cone` uses.
+var _beam_cone_cos := cos(deg_to_rad(FLASHLIGHT_CONE_DEGREES / 2.0))
 
 
 # --- Display layer (exploration plan B.12.1) -----------------------------------
@@ -169,9 +226,7 @@ func recompute_display() -> void:
 		var beam := _beam_contribution(GridManager.world_to_grid(origin), origin, _aim_of(unit), unit)
 		for pos: Vector3i in beam:
 			beams[pos] = maxf(beams.get(pos, 0.0), beam[pos])
-	_display.clear()
-	for pos: Vector3i in GridManager.tiles.keys():
-		_display[pos] = clampf(_base.get(pos, AMBIENT_FLOOR) + beams.get(pos, 0.0), 0.0, 100.0)
+	_display_beams = beams
 	display_lighting_changed.emit()
 
 
@@ -179,7 +234,7 @@ func recompute_display() -> void:
 ## what is drawn now equals the rules layer again.
 func end_display() -> void:
 	_display_active = false
-	_display.clear()
+	_display_beams.clear()
 	display_lighting_changed.emit()
 
 
@@ -188,7 +243,9 @@ func end_display() -> void:
 ## HUD readout. Accuracy and awareness keep reading `light_value`.
 func display_light(pos: Vector3i) -> float:
 	if _display_active:
-		return _display.get(pos, 0.0)
+		if not GridManager.tiles.has(pos):
+			return 0.0
+		return clampf(_base.get(pos, AMBIENT_FLOOR) + _display_beams.get(pos, 0.0), 0.0, 100.0)
 	var t: GridTileData = GridManager.get_tile(pos)
 	return t.light_value if t else 0.0
 

@@ -141,8 +141,10 @@ BUDGET = {
     "worm": {"decimate": 0.3, "max_texture": 1024},
     # Four 4096 px Mixamo maps on a unit that comes in swarms.
     "zombie_2": {"max_texture": 1024},
-    # Eight 4096 px Mixamo maps, same reason.
-    "zombie": {"max_texture": 1024},
+    # Eight 4096 px Mixamo maps, same reason. The Fodder again since 2026-11-11,
+    # so a horde multiplies its mesh too: Ch10 downloads at 49.6k tris (6x
+    # zombie_2's 7.7k), and FodderGibs bakes the whole posed mesh on each death.
+    "zombie": {"decimate": 0.3, "max_texture": 1024},
 }
 
 PILES = {

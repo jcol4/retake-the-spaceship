@@ -61,11 +61,11 @@ func _run() -> void:
 		if String(node.name).begins_with("Dev_securus"):
 			_check(node.visual._authored, "the spawned Securus draws its model")
 			_check(node.visual._eye_material != null, "and has its eye")
-		if String(node.name).begins_with("Dev_zombie") and not String(node.name).begins_with("Dev_zombie_old"):
-			_check(node.visual._authored and node.visual.variant == &"zombie_2", "the spawned Zombie draws the zombie 2 model")
+		if String(node.name).begins_with("Dev_zombie") and not String(node.name).begins_with("Dev_zombie2"):
+			_check(node.visual._authored and node.visual.variant == &"zombie", "the spawned Zombie draws the Mixamo model")
 			_check(node.has_method("is_fodder") and node.is_fodder(), "the Zombie is Fodder")
-		if String(node.name).begins_with("Dev_zombie_old"):
-			_check(node.visual._authored and node.visual.variant == &"zombie", "the old Zombie draws the Mixamo model")
+		if String(node.name).begins_with("Dev_zombie2"):
+			_check(node.visual._authored and node.visual.variant == &"zombie_2", "Zombie 2 draws the zombie 2 model")
 	if OS.has_environment("DEV_SHOT"):
 		dev._set_open(true)
 		dev._arm("securus")

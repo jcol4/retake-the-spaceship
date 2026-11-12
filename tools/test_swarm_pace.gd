@@ -28,7 +28,7 @@ extends SceneTree
 ## nothing about the roster.
 
 const SWARM := "res://scenes/swarm_unit.tscn"
-const ZOMBIE_2 := "res://scenes/swarm_unit.tscn"  # the Fodder IS zombie 2 now
+const ZOMBIE_2 := "res://scenes/zombie_2_unit.tscn"  # the Fodder before 2026-11-11
 ## A single-gait body (the old Mixamo zombie, the brute's), whose pace the
 ## synapse's linked tempo drives — zombie 2's crowd gait replaces that.
 const ZOMBIE_1 := "res://scenes/zombie_1_unit.tscn"

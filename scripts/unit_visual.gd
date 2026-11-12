@@ -410,6 +410,9 @@ var _status_material: StandardMaterial3D = null
 ## This unit's own material copies that carry the darkness floor, re-scaled
 ## whenever the lighting changes.
 var _floor_materials: Array[BaseMaterial3D] = []
+## How many of `_floor_materials` `_apply_floor` has zeroed for a body with no
+## darkness floor; -1 until it has. A model rebuild resets it.
+var _floor_off_count := -1
 
 var _light: SpotLight3D = null
 ## Kept apart from the light, which is rebuilt with the model on a variant swap.
@@ -493,6 +496,7 @@ func _build_model() -> void:
 	_pose_root = null
 	_status_material = null
 	_floor_materials.clear()
+	_floor_off_count = -1
 	_current = &""
 	var sidecar := _load_json(MODEL_DIR + String(variant) + ".json")
 	if sidecar.has("pile_of"):
@@ -890,11 +894,83 @@ func _adopt_players(inst: Node, phase: float) -> void:
 			_poses[StringName(name)] = true
 			# The imported resource is shared by every unit of the variant, so
 			# setting this is idempotent rather than per-unit.
-			player.get_animation(name).loop_mode = Animation.LOOP_LINEAR \
+			var anim := player.get_animation(name)
+			anim.loop_mode = Animation.LOOP_LINEAR \
 				if _timing_pose(StringName(name)) in LOOPING else Animation.LOOP_NONE
+			_strip_rest_tracks(player, anim)
 		player.speed_scale = tempo
 		_players.append(player)
 		_phases.append(phase)
+	_sync_animating()
+
+
+## Bone tracks that only ever hold the bone at its rest pose, removed from the
+## shared clip once per run. The mixer pays per TRACK every frame, keys or not,
+## and these are pure cost: a missing track blends to the rest pose, which is
+## the value it held anyway. The Mixamo zombie is the case that matters — the
+## glTF exporter samples every bone's translation, and the decomposition noise
+## (~1e-7 m) keeps Godot's `remove_immutable_tracks` from dropping them, so 50 of
+## its 103 tracks a clip were at-rest positions. Ragdoll.clear restores every
+## bone it moved, so nothing relies on a track to put one back.
+const REST_POSITION_TOLERANCE := 1e-4  # metres
+const REST_ROTATION_TOLERANCE := 2e-4  # radians
+static var _rest_checked: Dictionary = {}  # Animation -> true
+
+
+static func _strip_rest_tracks(player: AnimationPlayer, anim: Animation) -> void:
+	if _rest_checked.has(anim):
+		return
+	_rest_checked[anim] = true
+	var root := player.get_node_or_null(player.root_node)
+	if root == null:
+		return
+	for t in range(anim.get_track_count() - 1, -1, -1):
+		var type := anim.track_get_type(t)
+		if type != Animation.TYPE_POSITION_3D and type != Animation.TYPE_ROTATION_3D:
+			continue
+		var path := anim.track_get_path(t)
+		if path.get_subname_count() == 0:
+			continue
+		var skel := root.get_node_or_null(NodePath(path.get_concatenated_names())) as Skeleton3D
+		var bone := skel.find_bone(path.get_concatenated_subnames()) if skel else -1
+		if bone < 0:
+			continue
+		var rest := skel.get_bone_rest(bone)
+		var rest_rot := rest.basis.get_rotation_quaternion()
+		var at_rest := true
+		for k in anim.track_get_key_count(t):
+			var value: Variant = anim.track_get_key_value(t, k)
+			if type == Animation.TYPE_POSITION_3D:
+				at_rest = (value as Vector3).distance_to(rest.origin) < REST_POSITION_TOLERANCE
+			else:
+				at_rest = (value as Quaternion).angle_to(rest_rot) < REST_ROTATION_TOLERANCE
+			if not at_rest:
+				break
+		if at_rest:
+			anim.remove_track(t)
+
+
+## A hidden model's players stop advancing; a shown one's run. Fog of war hides
+## most of a deck's units, and the mixer, skeleton and skin of each still cost
+## ~50 us a frame while nobody can see them (tools/profile_frame.gd). Paused, a
+## loop picks up where it stopped when shown, which is the phase continuity
+## `refresh` keeps a live walk for; one-shots are replayed by `refresh` as before.
+## Manual mode keeps the current animation and position: only the per-frame
+## advance stops.
+func _sync_animating() -> void:
+	var mode := AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_IDLE if is_visible_in_tree() \
+		else AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
+	for player in _players:
+		if is_instance_valid(player) and player.callback_mode_process != mode:
+			player.callback_mode_process = mode
+
+
+func _notification(what: int) -> void:
+	# Sent to this node for its own `visible` and for any ancestor's (the unit
+	# root hides when carried or aboard), before Unit.set_rendered calls refresh.
+	# Entering the tree sends none, so a reparent re-syncs there.
+	if what == NOTIFICATION_VISIBILITY_CHANGED or what == NOTIFICATION_ENTER_TREE:
+		_sync_animating()
 
 
 ## Hangs a MuzzleFlash on the gun at each barrel marker's rest transform. A
@@ -982,6 +1058,16 @@ func _add_floor(mat: BaseMaterial3D) -> void:
 ## Sets the darkness floor from the light on the unit's own tile: MIN_BRIGHTNESS
 ## in the dark, nothing at 100% light. See MIN_BRIGHTNESS.
 func _apply_floor() -> void:
+	if not darkness_floor:
+		# No floor on this body (the Fodder): the energy is 0 whatever the light,
+		# so set it once per model rather than on every lighting change — this
+		# runs for every unit on each lit step and each playback slot.
+		if _floor_off_count == _floor_materials.size():
+			return
+		_floor_off_count = _floor_materials.size()
+		for mat in _floor_materials:
+			mat.emission_energy_multiplier = 0.0
+		return
 	var lit := 0.0
 	if _unit:
 		# The tile the MODEL stands on, read through the display layer: during a
@@ -2062,7 +2148,14 @@ func _presented_yaw() -> float:
 func _apply_body() -> void:
 	if _model == null or _ragdoll != null:
 		return
-	_model.rotation.y = _pose_yaw_rad + wrapf(_body_yaw - _presented_yaw(), -PI, PI)
+	var yaw := _pose_yaw_rad + wrapf(_body_yaw - _presented_yaw(), -PI, PI)
+	# Only on a change. Setting a Node3D's rotation re-dirties the transform of
+	# every node under it (skeleton, meshes, bone attachments, lights) even when
+	# the value is the same, and a settled body writes the same yaw every frame.
+	# A tolerance, not `!=`: the node stores 32-bit floats, so the yaw read back
+	# never equals the 64-bit one computed here.
+	if absf(_model.rotation.y - yaw) > 1e-6:
+		_model.rotation.y = yaw
 
 
 ## The twist the modifier is actually applying, radians.

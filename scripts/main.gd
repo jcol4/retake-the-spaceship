@@ -17,7 +17,7 @@ extends Node3D
 const PLAYER_SCENE := preload("res://scenes/player_unit.tscn")
 const ENEMY_SCENE := preload("res://scenes/enemy_unit.tscn")
 const SWARM_SCENE := preload("res://scenes/swarm_unit.tscn")
-## The horde's brute keeps the old Mixamo zombie body; the pack is zombie 2.
+## The horde's brute: the same Mixamo zombie body as the pack, drawn at BRUTE_SCALE.
 const BRUTE_SCENE := preload("res://scenes/zombie_1_unit.tscn")
 const BRAWLER_SCENE := preload("res://scenes/brawler_unit.tscn")
 const MERC_SCENE := preload("res://scenes/merc_unit.tscn")

@@ -751,9 +751,18 @@ func has_clear_line(from_node: Node3D, from: Vector3, to: Vector3, exclude: Arra
 	# world points rather than unit eye/chest heights. Used for LOS above and
 	# for lighting occlusion (Sec 5) — anything needing "can X see point Y".
 	var space := from_node.get_world_3d().direct_space_state
-	var query := PhysicsRayQueryParameters3D.create(from, to, 1, exclude)
-	var hit := space.intersect_ray(query)
-	return hit.is_empty()
+	# One query object, re-aimed per ray: this is the game's hottest raycast (a
+	# lit step casts ~40, a horde turn thousands), and `create` allocates a new
+	# one each time. Main thread only, like everything that calls it.
+	var query := _ray_query
+	query.from = from
+	query.to = to
+	query.exclude = exclude
+	return space.intersect_ray(query).is_empty()
+
+
+## has_clear_line's reusable query: map geometry only (layer 1).
+var _ray_query := PhysicsRayQueryParameters3D.create(Vector3.ZERO, Vector3.ZERO, 1)
 
 
 # --- Edge cover (Sec 6.1, XCOM model) ---------------------------------------
