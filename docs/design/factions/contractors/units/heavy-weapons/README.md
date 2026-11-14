@@ -20,7 +20,7 @@ over snap-shooting.
 
 | Stat | Range |
 |---|---|
-| Perception | 40–60 |
+| Perception (Aim) | 55–65, the same for every class ([accuracy](../../../../systems/accuracy/)) |
 | Reflexes | 25–45 |
 | Fitness | 65–90 |
 | Luck | 30–60 |

@@ -1,22 +1,26 @@
 # Assault Rifle
 
-| Base Accuracy | Damage | Mag Size | Reserve | Total |
+| Range table | Damage | Mag Size | Reserve | Total |
 |---|---|---|---|---|
-| 30 | 8 | 3 | 15 (5 mags) | 18 |
+| +10 at 1–4 tiles, +5 at 5–8, 0 at 9–12, −4/tile after | 8 | 3 | 15 (5 mags) | 18 |
+
+Range table: aim added at each distance on top of the soldier's Aim
+([accuracy](../../../systems/accuracy/)). Aim 60 against an open target: 70% at 2 tiles, 65% at 6,
+60% at 10, 48% at 15.
 
 ## Role
 
-The no-tradeoff baseline weapon — median accuracy, median damage, and (at 18) squarely
+The no-tradeoff baseline weapon — a range table that never strays far from 0, median damage, and (at 18) squarely
 middle-of-the-roster total ammo (see [the roster table](README.md#roster)). It's the weapon every
 other weapon is a deliberate deviation from, rather than a niche pick itself.
 
-Base accuracy and damage are exactly the old Assault class defaults from before weapon stats were
+Damage is exactly the old Assault class default from before weapon stats were
 pulled off the class (see [`../units/assault/`](../units/assault/)). Mag size (3) and reserve (15,
 5 spare mags) reflect the newer, tighter ammo pass — every weapon's mag size dropped and gained a
 finite reserve, so nothing plays *identically* to the original numbers anymore, but this one still
-plays closest to them. Unlike the Shotgun and SMG, it has no weapon-specific range falloff, and
-unlike the LMG, no movement penalty — it just has the plain global Distance Penalty curve (GDD
-Section 6.5) and nothing else layered on top.
+plays closest to them. Unlike the Shotgun and SMG it doesn't fall off a cliff at range, and unlike
+the LMG and Battle Rifle it isn't clumsy up close: the generalist's table is good everywhere and
+best nowhere.
 
 ## Suggested class
 

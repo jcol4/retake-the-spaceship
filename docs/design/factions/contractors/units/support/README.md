@@ -19,7 +19,7 @@ ability design implied by the GDD, likely extends some of that benefit to allies
 
 | Stat | Range |
 |---|---|
-| Perception | 45–65 |
+| Perception (Aim) | 55–65, the same for every class ([accuracy](../../../../systems/accuracy/)) |
 | Reflexes | 45–65 |
 | Fitness | 45–65 |
 | Luck | 45–75 |

@@ -148,10 +148,10 @@ func _check_recruits() -> void:
 	_check(priced, "recruit prices stay within 300–500")
 	var lo = _record.new()
 	lo.unit_class = SNIPER
-	lo.perception = 65; lo.reflexes = 45; lo.fitness = 30; lo.luck = 30
+	lo.perception = 55; lo.reflexes = 45; lo.fitness = 30; lo.luck = 30
 	var hi = _record.new()
 	hi.unit_class = SNIPER
-	hi.perception = 90; hi.reflexes = 65; hi.fitness = 50; hi.luck = 60
+	hi.perception = 65; hi.reflexes = 65; hi.fitness = 50; hi.luck = 60
 	_check(_econ.recruit_price(lo) == 300 and _econ.recruit_price(hi) == 500,
 		"a floor roll costs 300, a ceiling roll 500 (%d, %d)" % [_econ.recruit_price(lo), _econ.recruit_price(hi)])
 

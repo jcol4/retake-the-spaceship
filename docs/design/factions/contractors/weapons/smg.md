@@ -1,19 +1,22 @@
 # SMG
 
-| Base Accuracy | Damage | Mag Size | Reserve | Total | Optimal Range | Beyond it |
-|---|---|---|---|---|---|---|
-| 35 | 6 | 4 | 20 (5 mags) | 24 | 6 tiles | −6% accuracy per tile |
+| Range table | Damage | Mag Size | Reserve | Total | Close quarters |
+|---|---|---|---|---|---|
+| +20 at 1 tile, +10 at 4, +5 at 6, 0 at 7, −18 at 10, −6/tile after | 6 | 4 | 20 (5 mags) | 24 | Shoot −1 AP |
+
+Range table: aim added at each distance on top of the soldier's Aim
+([accuracy](../../../systems/accuracy/)). Aim 60 against an open target: 78% at 2 tiles, 65% at 6,
+42% at 10, 12% at 15.
 
 ## Role
 
-**Highest base accuracy** in the roster, tied with the Battle Rifle, but the **lowest damage** —
+A **strong short-range table** (+20 point-blank, still +5 at 6 tiles), but the **lowest damage** —
 the tradeoff is the **highest total ammo in the roster (24)**, carried as 6 mags of 4. It's built
 for cheap, reliable Shoot (1 AP, GDD Section 4.2) spam rather than a single big hit: it lands
 often, a target walks away from any one shot easily, but this soldier can afford to fire far more
-times across a mission than anyone else before running dry. Past 6 tiles it picks up an extra −6%
-accuracy per tile, a real but noticeably gentler falloff than the Shotgun's −15%/tile — this is a
-short-to-medium-range weapon, not a true long-range option, but it doesn't fall off a cliff the way
-the Shotgun does.
+times across a mission than anyone else before running dry. From 7 tiles its table goes negative
+at −6 per tile, a real but much gentler falloff than the Shotgun's — this is a short-to-medium-range
+weapon, not a true long-range option, but it doesn't fall off a cliff the way the Shotgun does.
 
 ## Close quarters
 
@@ -38,10 +41,9 @@ buffing/healing rather than hanging back at long range.
 
 ## Relationship to other systems
 
-- Highest base accuracy makes it a strong pick for Overwatch (GDD Section 4.2) *within* its
-  effective range — the flat −30% Overwatch penalty eats into accuracy proportionally less when the
-  base number is already high, but the weapon-specific range falloff still applies on top, so an
-  Overwatch shot at long range doesn't get the same benefit as one held closer in.
+- Its short-range bonus makes it a good Overwatch pick (GDD Section 4.2) *within* its effective
+  range — a reaction shot at 3 tiles starts +15 up before Overwatch's −30 — but past 7 tiles the
+  table is negative and the two stack, so watch a near angle, not a long corridor.
 - The small 4-round mag means Reload (1 AP) comes up often within a single engagement, but the deep
   20-round reserve means that rarely turns into a mission-length ammo problem the way it can for the
   Battle Rifle — frequent but cheap reloading, not scarce ammo.

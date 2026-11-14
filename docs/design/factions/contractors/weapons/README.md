@@ -18,33 +18,33 @@ LMG or a Heavy Weapons soldier running an SMG are legal loadouts, just off-arche
 
 ## Roster
 
-| Weapon | Base Accuracy | Damage | Mag Size | Reserve | Total | Optimal Range | Beyond it | Close quarters | Suggested class |
-|---|---|---|---|---|---|---|---|---|---|
-| [Assault Rifle](assault-rifle.md) | 30 | 8 | 3 | 15 (5 mags) | 18 | — | — | — | [Assault](../units/assault/) (baseline) |
-| [Shotgun](shotgun.md) | 20 | 14 | 6 | 15 (loose shells) | 21 | 3 tiles | −15%/tile | — | [Assault](../units/assault/) (aggressive) |
-| [SMG](smg.md) | 35 | 6 | 4 | 20 (5 mags) | 24 | 6 tiles | −6%/tile | Shoot −1 AP | [Support](../units/support/) |
-| [LMG](lmg.md) | 28 | 9 | 6 | 12 (2 mags) | 18 | — | — | −60 / −15 Aimed | [Heavy Weapons](../units/heavy-weapons/) |
-| [Battle Rifle](battle-rifle.md) | 35 | 10 | 3 | 12 (4 mags) | 15 | — | — | −80 / −20 Aimed | [Sniper](../units/sniper/) |
+| Weapon | Range table | Damage | Mag Size | Reserve | Total | Close quarters | Suggested class |
+|---|---|---|---|---|---|---|---|
+| [Assault Rifle](assault-rifle.md) | +10 close, about 0 out to 12 | 8 | 3 | 15 (5 mags) | 18 | — | [Assault](../units/assault/) (baseline) |
+| [Shotgun](shotgun.md) | +30 point-blank, useless past ~8 | 14 | 6 | 15 (loose shells) | 21 | — | [Assault](../units/assault/) (aggressive) |
+| [SMG](smg.md) | +20 close, 0 at 7, −6/tile after | 6 | 4 | 20 (5 mags) | 24 | Shoot −1 AP | [Support](../units/support/) |
+| [LMG](lmg.md) | −20 point-blank, +5 from 6 to 12 | 9 | 6 | 12 (2 mags) | 18 | — | [Heavy Weapons](../units/heavy-weapons/) |
+| [Battle Rifle](battle-rifle.md) | −30 point-blank, +5 from 9 to 18 | 10 | 3 | 12 (4 mags) | 15 | — | [Sniper](../units/sniper/) |
 
-**Close quarters** ([system doc](../../../systems/close-quarters/)) is what a gun does while its
-carrier is *engaged*, meaning a hostile it can see is within 3 tiles. The accuracy figures apply to
-Shoot and Overwatch, with the smaller number on Aimed Shot, all before the 99% cap. The Pistol
-sidearm gets the SMG's −1 AP. The LMG's old 75% move speed was removed in the AP rework (see
-`WeaponData`), and the close-quarters penalty replaces it as the LMG's cost.
+**Accuracy** ([system doc](../../../systems/accuracy/)) comes from the soldier's Aim plus the gun
+**archetype's distance table**: aim added at each range, in full in the system doc. Each roster gun
+is the first of its archetype and adds 0 flat aim; later guns in an archetype will differ by an aim
+modifier. The old base accuracy (20–35), optimal-range falloff and the Battle Rifle's/LMG's
+close-quarters accuracy penalties all became the tables.
 
-Three new per-weapon axes beyond base accuracy/damage, all added during stat tuning to give the
+**Close quarters** ([system doc](../../../systems/close-quarters/)) is the SMG's (and the Pistol
+sidearm's) 1 AP cheaper Shoot while a hostile its carrier can see is within 3 tiles.
+
+Two per-weapon axes beyond damage and the range table, added during stat tuning to give the
 five weapons a distinct *feel* rather than just different numbers on the same three stats:
 
 - **Mag size vs. reserve** — see [Ammo model](#ammo-model) below. Mag size governs how often a
   soldier reloads mid-engagement; reserve caps the *total* shots available for the whole mission.
   The two numbers tell different stories: SMG (small mag, huge reserve) reloads constantly but
   rarely runs dry; Battle Rifle (small mag, small reserve) does both.
-- **Optimal range / falloff** — an *additional* accuracy penalty stacked on top of the existing
-  global Distance Penalty curve (GDD Section 6.5), kicking in past the weapon's own optimal range.
-  Only the Shotgun and SMG have one; every other weapon relies on the global curve alone.
-- **Move speed** — multiplies the carrying soldier's move range (`UnitStats.move_run()`/
-  `move_sprint()`). Only the LMG is penalized (75%); it composes with the existing injured-leg
-  speed penalty (`unit.gd`'s `_leg_speed_multiplier()`), multiplicatively.
+- **Move speed** — *retired.* It multiplied the carrier's move range (only the LMG, 75%); the AP
+  rework made movement a flat 1 AP per tile and removed it (see `WeaponData`). The LMG's cost is now
+  its distance table, bad at 1–3 tiles.
 
 ## Ammo model
 
@@ -74,17 +74,18 @@ the last shells" rather than "swap to a fresh mag."
 
 ## Implementation
 
-- `scripts/weapon_data.gd` (`WeaponData`, a `Resource`) — the per-weapon stat block: base accuracy,
-  damage, magazine size, starting reserve, optimal range, falloff rate, move multiplier.
+- `scripts/weapon_data.gd` (`WeaponData`, a `Resource`) — the per-weapon stat block: archetype
+  (which distance table, `WeaponArchetype`), aim modifier, damage, magazine size, starting reserve.
 - `scripts/weapon_presets.gd` (`WeaponPresets`) — the five weapons' numbers (`DATA`) and each
   class's suggested default (`CLASS_DEFAULT`), mirroring how `ClassPresets` holds the four-stat
   ranges.
 - `scripts/unit_stats.gd` — `UnitStats.weapon: WeaponData` replaces the old flat
-  `weapon_base_accuracy`/`weapon_damage`/`mag_size` export fields. Those three names still exist as
+  `weapon_base_accuracy`/`weapon_damage`/`mag_size` export fields. Those three names (the first now
+  `weapon_aim_modifier`) still exist as
   read-only computed properties (`get:` accessors reading off `weapon`) so `combat.gd`, `unit.gd`,
   and `hud.gd` didn't need call-site changes. `null` means unarmed at range (the Fodder swarm).
-- `scripts/combat.gd` — `Combat.weapon_range_penalty()` adds the optimal-range/falloff penalty on
-  top of the existing `distance_penalty()` in `compute_accuracy()`.
+- `scripts/combat.gd` — `compute_accuracy()` adds the gun's `range_modifier()` (its archetype's
+  table, `scripts/weapon_archetype.gd`); see the [accuracy doc](../../../systems/accuracy/).
 - `scripts/class_presets.gd` — `ClassPresets.roll()` now sets `stats.weapon` to the class's
   suggested default (`WeaponPresets.default_for_class`) instead of embedding weapon numbers in
   `RANGES`.
@@ -114,11 +115,10 @@ the last shells" rather than "swap to a fresh mag."
   weapons it fits. Unlocks are per type, so any number of soldiers can load an unlocked type.
 
 ```
-accuracy = shooter.perception + weapon.base_accuracy  (+ Reflexes for Shoot/Overwatch, Section 4.6.2)
-           + situational modifiers (cover, light, elevation, Hunker)
-           − Distance Penalty (global curve, Section 6.5)
-           − weapon range penalty (weapon-specific, past its own optimal range)
-           + engaged penalty (close quarters, Battle Rifle / LMG), then clamped 1–99
+accuracy = Aim (shooter.perception, 55–65 recruit, cap 87) + weapon aim modifier (0 today)
+           + the archetype's range table at this distance (WeaponArchetype)
+           + 15 and the zone on an Aimed Shot, + elevation, − suppressed, − injured arms
+           − the target's Defense (own stat, cover, hunker, concealment), then clamped 1–95
 shoot AP = (6 + weapon AP modifiers, incl. engaged −1 for SMG / Pistol) − 0.03 × Reflexes, rounded up
 damage   = weapon.damage * hit-zone multiplier (Aimed Shot) or 1.0 (Shoot)
 ammo     = weapon.mag_size to start; Reload (1 AP) draws min(mag_size − ammo, reserve) from reserve
@@ -128,23 +128,22 @@ ammo     = weapon.mag_size to start; Reload (1 AP) draws min(mag_size − ammo, 
 
 Five weapons, one clear axis each, so the choice reads at a glance rather than needing a spreadsheet:
 
-- **Assault Rifle** — the generalist. No close-quarters rule and no range falloff, so it is never
-  bad anywhere. Each specialist beats it in its own niche; it is the gun that works on any map and
+- **Assault Rifle** — the generalist. Its table never strays far from 0 (+10 close, 0 out to 12),
+  so it is never bad anywhere. Each specialist beats it in its own niche; it is the gun that works on any map and
   at any range. Mag size (3) and total ammo (18) are the middle of the roster on both counts.
-- **Battle Rifle** — highest accuracy, tied-highest damage, the most penetration (and so the most
-  armor ignored: 3 points), but the **lowest total ammo in the roster (15)** and **clumsy up close**
-  (−80 Shoot/Overwatch, −20 Aimed while engaged). The long-range precision and anti-armor pick. Up
-  close, its answer is a slow Aimed Shot or stepping back.
-- **SMG** — highest accuracy, lowest damage, and the **highest total ammo in the roster (24)** —
-  but noticeably worse past 6 tiles (−6%/tile). The close-range volume gun: **Shoot costs 1 AP less
+- **Battle Rifle** — the best table at range (+5 from 9 to 18 tiles), the highest long-gun damage,
+  the most penetration (and so the most armor ignored: 3 points), but the **lowest total ammo in the
+  roster (15)** and **clumsy up close** (−30 at 1 tile, −25 at 2). The long-range precision and
+  anti-armor pick. Up close, its answer is stepping back.
+- **SMG** — a strong short table (+20 close, 0 at 7 tiles, −6/tile after), the lowest damage, and
+  the **highest total ammo in the roster (24)**. The close-range volume gun: **Shoot costs 1 AP less
   while engaged** (stacking with a Laser Sight to −2), so it can fire more often than anything else
   once it's in someone's face, and its deep reserve can afford to.
 - **LMG** — biggest single magazine (6), solid damage, 60 penetration, but **unwieldy when rushed**
-  (−60 Shoot/Overwatch, −15 Aimed while engaged). It holds a line at range and hates being closed
-  on. Its *total* ammo (18) is only middle-of-the-roster (tied with the Assault Rifle), fewer mags
+  (−20 at 1 tile, −15 at 2; +5 from 6 to 12). It holds a line at range and hates being closed on. Its *total* ammo (18) is only middle-of-the-roster (tied with the Assault Rifle), fewer mags
   carried (3) offsetting the bigger mag.
-- **Shotgun** — highest damage per hit, weakest accuracy, and effectively unusable past 3 tiles
-  (−15%/tile beyond that — the steepest range penalty in the roster by a wide margin), offset by a
+- **Shotgun** — highest damage per hit and the best point-blank table (+30 at 1 tile), effectively
+  unusable past ~8 tiles (−15/tile from there, the steepest falloff in the roster), offset by a
   generous total ammo pool (21, second only to the SMG) via its loose-shell reserve. All-in on
   repeated close-range trades; pairs with Assault's Fitness-driven movement range to actually
   close into that trade rather than getting caught firing from range.
@@ -152,8 +151,9 @@ Five weapons, one clear axis each, so the choice reads at a glance rather than n
 ## Relationship to the class system
 
 - Every class's suggested weapon reinforces its GDD Section 4.5 role rather than fighting it:
-  Sniper's high Perception makes the Battle Rifle's already-high accuracy hit hardest; Heavy
-  Weapons' high Fitness/HP tolerates the LMG's move-speed penalty since the class already leans on
+  the Sniper hangs back, where the Battle Rifle's table pays (every class rolls the same 55–65 Aim
+  now, so it's about position, not a better eye); Heavy Weapons' high Fitness/HP tolerates the
+  LMG's clumsiness up close since the class already leans on
   standing and holding rather than repositioning; Support's balanced stats and ability-focused kit
   pair with an SMG that asks little of Reload timing at the ranges Support usually operates; Assault
   gets a baseline (Assault Rifle) and an aggressive option (Shotgun) that both lean on its
@@ -171,7 +171,7 @@ Five weapons, one clear axis each, so the choice reads at a glance rather than n
 
 - Whether weapon choice should also feed `equipment_initiative` (`unit_stats.gd`'s third
   Initiative term, currently a flat per-unit default unrelated to weapon) is unresolved — a heavier
-  weapon like the LMG plausibly slowing Initiative, on top of its move-speed penalty, is a natural
+  weapon like the LMG plausibly slowing Initiative, on top of its close-range penalty, is a natural
   extension but isn't part of this pass.
 - Once a soldier is fully dry (0 ammo, 0 reserve) they have no ranged options for the rest of the
   mission — deliberate per this pass's design (no emergency reserve), but there's no fallback

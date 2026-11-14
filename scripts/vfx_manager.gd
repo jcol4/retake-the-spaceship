@@ -20,6 +20,11 @@ extends Node3D
 ## Tracers and impacts say which rounds CONNECTED. That is target-end feedback,
 ## not shooter-end decoration, and it is shared with melee.
 
+## What a round or a swing leaves where it connects, by what it connected with
+## (Unit.hit_style). FLASH is the old glowing puff, kept for every body that has
+## no style of its own yet; FLESH is a blood spray and mist (the zombie tier).
+enum HitStyle { FLASH, FLESH }
+
 ## How long an impact flash takes to fade out.
 const FADE_DURATION := 0.28
 const HIT_COLOR := Color(1.0, 0.9, 0.45)
@@ -103,6 +108,45 @@ const MUZZLE_LIGHT_FADE := 0.06
 ## the extra shadow cost is bounded however many guns go off.
 const MUZZLE_LIGHT_POOL := 3
 
+## FLESH hits. No glow at all: a realistic hit on a body is dark, not bright. A
+## spray of droplets mostly out of the far side along the line of fire (the
+## exit), some spatter back toward the shooter, and a red mist puff at the exit.
+## Unshaded so they still read in a dark room from the tactical camera.
+const BLOOD_COLOR := Color(0.42, 0.02, 0.03)
+const BLOOD_MIST_COLOR := Color(0.38, 0.03, 0.03, 0.75)
+## Droplets per hit, and per crit.
+const BLOOD_DROPS := 12
+const BLOOD_DROPS_CRIT := 22
+## Share of the droplets thrown back toward the shooter, slower than the exit.
+const BLOOD_BACK_SHARE := 0.25
+## Half-angle of the exit cone round the line of fire.
+const BLOOD_CONE := deg_to_rad(32.0)
+## Metres/second a droplet leaves at.
+const BLOOD_SPEED := Vector2(1.8, 4.0)
+## Seconds a spray lives; droplets shrink away over the last BLOOD_SHRINK of it.
+const BLOOD_TIME := 0.6
+const BLOOD_SHRINK := 0.35
+## Droplet radius, and how far one stretches into a streak at speed.
+const BLOOD_DROP_RADIUS := 0.016
+const BLOOD_STRETCH := 0.7
+## Mist: diameter it puffs out from and to, and how long it takes to go.
+const BLOOD_MIST_SIZE := Vector2(0.12, 0.5)
+const BLOOD_MIST_TIME := 0.35
+## Crit mist is this much bigger.
+const BLOOD_CRIT_SCALE := 1.5
+## Sprays alive at once; a horde under fire steals the oldest.
+const BLOOD_MAX_SPRAYS := 24
+
+static var _blood_drop_mesh: SphereMesh = null
+static var _blood_mist_mesh: QuadMesh = null
+
+## Live sprays: {mm: MultiMeshInstance3D, pos, vel: PackedVector3Array,
+## size: PackedFloat32Array, floor: float, t: float}
+var _blood_sprays: Array = []
+## The spray's own generator. CPUParticles3D, and the global randf(), advance
+## the generator seeded runs replay; blood must not shift a gameplay roll.
+var _blood_rng := RandomNumberGenerator.new()
+
 var _tracer_mesh: QuadMesh
 var _tracer_material: ShaderMaterial
 var _muzzle_lights: Array[OmniLight3D] = []
@@ -115,6 +159,7 @@ func _ready() -> void:
 	_tracer_mesh = QuadMesh.new()
 	_tracer_material = ShaderMaterial.new()
 	_tracer_material.shader = TRACER_SHADER
+	_blood_rng.randomize()
 
 
 ## Where a missed burst's group sits, picked once per burst and handed to every
@@ -144,11 +189,12 @@ func shot_miss(from: Vector3, to: Vector3, group: Vector2, tracer: bool = true) 
 ## A round of a burst that landed: one straight streak from the barrel into every
 ## body in `bodies` (feet positions, nearest first -- Penetration's path order),
 ## ending in the last. It passes any body the round missed on the way without a
-## mark. Each body flashes as the streak reaches it; `crit_index` is the one in
-## crit colour, -1 for none. Untraced rounds still flash after the same flight,
-## so a burst keeps its rhythm whether or not each round is drawn.
+## mark. Each body shows its hit as the streak reaches it; `crit_index` is the
+## crit one, -1 for none. `styles` is each body's HitStyle, parallel to `bodies`
+## (missing entries are FLASH). Untraced rounds still land after the same
+## flight, so a burst keeps its rhythm whether or not each round is drawn.
 func shot_through(from: Vector3, bodies: PackedVector3Array, crit_index: int = -1,
-		tracer: bool = true) -> void:
+		tracer: bool = true, styles: PackedInt32Array = PackedInt32Array()) -> void:
 	if bodies.is_empty():
 		return
 	var last := bodies[-1] + Vector3(0, CHEST_HEIGHT, 0)
@@ -169,13 +215,13 @@ func shot_through(from: Vector3, bodies: PackedVector3Array, crit_index: int = -
 			var on_line := from + dir * clampf((chest - from).dot(dir), 0.0, dist)
 			at = chest + (on_line - chest).limit_length(CONE_TIGHT)
 		var crit := i == crit_index
-		var color := CRIT_COLOR if crit else HIT_COLOR
-		var radius := CRIT_FLASH_RADIUS if crit else FLASH_RADIUS
+		var style := styles[i] if i < styles.size() else HitStyle.FLASH
 		var travel := from.distance_to(at) / TRACER_SPEED
+		var land := _spawn_hit.bind(at, dir, style, crit, bodies[i].y)
 		if travel <= 0.0:
-			_spawn_flash(at, color, radius)
+			land.call()
 		else:
-			get_tree().create_timer(travel, false).timeout.connect(_spawn_flash.bind(at, color, radius))
+			get_tree().create_timer(travel, false).timeout.connect(land)
 
 
 ## Where a round aimed at `point` ends up: on past it, stopped by the first wall
@@ -243,11 +289,172 @@ func _disc_basis(along: Vector3) -> Array[Vector3]:
 	return [side, side.cross(along.normalized())]
 
 
-func impact(at: Vector3, crit: bool = false) -> void:
-	# A melee connection: the same flash a landed shot leaves behind, without the
-	# scatter — one swing arrives at one place, so there is no group to open up.
-	_spawn_flash(at + Vector3(0, CHEST_HEIGHT, 0), CRIT_COLOR if crit else HIT_COLOR,
-		CRIT_FLASH_RADIUS if crit else FLASH_RADIUS)
+## A melee connection (or a grenade) at the feet position `at`: the same hit a
+## landed shot leaves, without the scatter — one swing arrives at one place, so
+## there is no group to open up. `dir` is the way the blow travelled (FLESH
+## sprays out along it); zero picks a random sideways one.
+func impact(at: Vector3, crit: bool = false, style: int = HitStyle.FLASH,
+		dir: Vector3 = Vector3.ZERO) -> void:
+	_spawn_hit(at + Vector3(0, CHEST_HEIGHT, 0), dir, style, crit, at.y)
+
+
+## One hit's mark at chest point `at`, from a blow travelling along `dir`.
+## `floor_y` is the deck under the body, where blood stops falling.
+func _spawn_hit(at: Vector3, dir: Vector3, style: int, crit: bool, floor_y: float) -> void:
+	if style == HitStyle.FLESH:
+		_spawn_blood(at, dir, crit, floor_y)
+	else:
+		_spawn_flash(at, CRIT_COLOR if crit else HIT_COLOR,
+			CRIT_FLASH_RADIUS if crit else FLASH_RADIUS)
+
+
+## A FLESH hit: droplets out of the exit and back toward the shooter, and a red
+## mist at the exit. Hand-rolled on a MultiMesh (see `_blood_rng`), stepped in
+## `_process`.
+func _spawn_blood(at: Vector3, dir: Vector3, crit: bool, floor_y: float) -> void:
+	_ensure_blood_meshes()
+	dir.y = clampf(dir.y, -0.3, 0.3)  # a round fired downhill still sprays out, not into the deck
+	if dir.length_squared() < 0.0001:
+		var a := _blood_rng.randf() * TAU
+		dir = Vector3(cos(a), 0.0, sin(a))
+	dir = dir.normalized()
+	if _blood_sprays.size() >= BLOOD_MAX_SPRAYS:
+		var oldest: Dictionary = _blood_sprays.pop_front()
+		(oldest.mm as Node).queue_free()
+
+	var n := BLOOD_DROPS_CRIT if crit else BLOOD_DROPS
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = _blood_drop_mesh
+	mm.instance_count = n
+	var mmi := MultiMeshInstance3D.new()
+	mmi.name = "BloodSpray"
+	mmi.multimesh = mm
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# Droplets move far from the node's origin; keep it from being culled.
+	mmi.extra_cull_margin = 3.0
+	add_child(mmi)
+	mmi.global_transform = Transform3D.IDENTITY
+	var basis := _disc_basis(dir)
+	var spread := tan(BLOOD_CONE)
+	var pos := PackedVector3Array()
+	var vel := PackedVector3Array()
+	var size := PackedFloat32Array()
+	pos.resize(n)
+	vel.resize(n)
+	size.resize(n)
+	for i in n:
+		var back := _blood_rng.randf() < BLOOD_BACK_SHARE
+		var a := _blood_rng.randf() * TAU
+		var r := sqrt(_blood_rng.randf()) * spread * (1.6 if back else 1.0)
+		var d := (dir * (-1.0 if back else 1.0) + (basis[0] * cos(a) + basis[1] * sin(a)) * r).normalized()
+		var speed := _blood_rng.randf_range(BLOOD_SPEED.x, BLOOD_SPEED.y) * (0.45 if back else 1.0)
+		vel[i] = d * speed + Vector3(0, 0.4, 0)
+		pos[i] = at + d * 0.08
+		size[i] = _blood_rng.randf_range(0.6, 1.3) * (1.2 if crit else 1.0)
+		mm.set_instance_transform(i, _drop_transform(pos[i], vel[i], size[i], 1.0, false))
+	_blood_sprays.append({"mm": mmi, "pos": pos, "vel": vel, "size": size,
+		"floor": floor_y + 0.01, "t": 0.0})
+
+	var mist := MeshInstance3D.new()
+	mist.name = "BloodMist"
+	mist.mesh = _blood_mist_mesh
+	mist.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mist)
+	mist.global_position = at + dir * 0.15
+	var grow := BLOOD_CRIT_SCALE if crit else 1.0
+	mist.scale = Vector3.ONE * BLOOD_MIST_SIZE.x * grow
+	var tween := mist.create_tween().set_parallel()
+	tween.tween_property(mist, "scale", Vector3.ONE * BLOOD_MIST_SIZE.y * grow, BLOOD_MIST_TIME) \
+		.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_CUBIC)
+	# Instance transparency, so every mist shares one material.
+	tween.tween_property(mist, "transparency", 1.0, BLOOD_MIST_TIME) \
+		.set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tween.chain().tween_callback(mist.queue_free)
+
+
+## A droplet streaked along its velocity in flight, a flat fleck once it is on
+## the deck; `life` (1 -> 0) shrinks it away.
+static func _drop_transform(pos: Vector3, vel: Vector3, size: float, life: float,
+		landed: bool) -> Transform3D:
+	var s := size * life
+	if landed:
+		return Transform3D(Basis.from_scale(Vector3(s * 1.6, s * 0.25, s * 1.6)), pos)
+	var speed := vel.length()
+	if speed < 0.001:
+		return Transform3D(Basis.from_scale(Vector3.ONE * s), pos)
+	var fwd := vel / speed
+	var up := Vector3.RIGHT if absf(fwd.y) > 0.99 else Vector3.UP
+	var stretch := 1.0 + speed * BLOOD_STRETCH
+	return Transform3D(Basis.looking_at(fwd, up) * Basis.from_scale(Vector3(s, s, s * stretch)), pos)
+
+
+func _ensure_blood_meshes() -> void:
+	if _blood_drop_mesh != null:
+		return
+	var drop_mat := StandardMaterial3D.new()
+	drop_mat.albedo_color = BLOOD_COLOR
+	drop_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_blood_drop_mesh = SphereMesh.new()
+	_blood_drop_mesh.radius = BLOOD_DROP_RADIUS
+	_blood_drop_mesh.height = BLOOD_DROP_RADIUS * 2.0
+	_blood_drop_mesh.radial_segments = 4
+	_blood_drop_mesh.rings = 2
+	_blood_drop_mesh.material = drop_mat
+
+	var g := Gradient.new()
+	g.set_color(0, Color(1, 1, 1, 1))
+	g.set_color(1, Color(1, 1, 1, 0))
+	g.add_point(0.4, Color(1, 1, 1, 0.55))
+	var tex := GradientTexture2D.new()
+	tex.gradient = g
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(0.5, 0.0)
+	tex.width = 64
+	tex.height = 64
+	var mist_mat := StandardMaterial3D.new()
+	mist_mat.albedo_color = BLOOD_MIST_COLOR
+	mist_mat.albedo_texture = tex
+	mist_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mist_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mist_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mist_mat.billboard_keep_scale = true
+	_blood_mist_mesh = QuadMesh.new()
+	_blood_mist_mesh.size = Vector2.ONE
+	_blood_mist_mesh.material = mist_mat
+
+
+func _process(delta: float) -> void:
+	if _blood_sprays.is_empty():
+		return
+	var gravity := Vector3(0, -9.8, 0) * delta
+	for s: Dictionary in _blood_sprays:
+		s.t += delta
+		var mmi := s.mm as MultiMeshInstance3D
+		if s.t >= BLOOD_TIME:
+			mmi.queue_free()
+			continue
+		var life := clampf((BLOOD_TIME - s.t) / (BLOOD_TIME * BLOOD_SHRINK), 0.0, 1.0)
+		var pos: PackedVector3Array = s.pos
+		var vel: PackedVector3Array = s.vel
+		var size: PackedFloat32Array = s.size
+		var floor_y: float = s.floor
+		var mm := mmi.multimesh
+		for i in pos.size():
+			var landed := vel[i] == Vector3.ZERO
+			if not landed:
+				vel[i] += gravity
+				var p := pos[i] + vel[i] * delta
+				if p.y <= floor_y:
+					p.y = floor_y
+					vel[i] = Vector3.ZERO
+					landed = true
+				pos[i] = p
+			mm.set_instance_transform(i, _drop_transform(pos[i], vel[i], size[i], life, landed))
+		s.pos = pos
+		s.vel = vel
+	_blood_sprays = _blood_sprays.filter(func(s: Dictionary) -> bool: return s.t < BLOOD_TIME)
 
 
 func _spawn_flash(at: Vector3, color: Color, radius: float = FLASH_RADIUS) -> void:

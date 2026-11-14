@@ -10,8 +10,8 @@ system exists) and using **percentile values (0–99)** in the style of the orig
 
 | Stat | Major role | Minor roles |
 |---|---|---|
-| Perception | Ranged accuracy for Shoot, Aimed Shot and Overwatch | max vision/detection range |
-| Reflexes | **AP cost discount** on Shoot/Melee/Grenade/Reload/Aimed Shot | Initiative; accuracy for Shoot and Overwatch only |
+| Perception (shown as **Aim**) | Every hit chance, ranged and melee, on its own 55–65 / cap 87 scale | max vision/detection range |
+| Reflexes | **AP cost discount** on Shoot/Melee/Grenade/Reload/Aimed Shot | Initiative |
 | Fitness | **AP pool size** | Max HP |
 | Luck | Crit chance/severity; reroll/dodge chances | — |
 
@@ -20,6 +20,13 @@ system exists) and using **percentile values (0–99)** in the style of the orig
 > this table now says: Fitness *was* Max HP and the movement allowance, and Reflexes was 60% of
 > Initiative. The point of the split is that each stat now owns exactly one major lever, so no two
 > compete to be the one that matters.
+
+> **2026-11-13: the split below is superseded** by the [accuracy rework](../../../systems/accuracy/).
+> Perception became **Aim**: every recruit rolls 55–65 whatever their class (cap 87), and Reflexes
+> left accuracy entirely, keeping only its AP discount and initiative. Added whole to the gun's
+> 20–35 base accuracy, the two started the average shot at 125–170, above the 99% cap before any
+> modifier. Aimed Shot is now set apart by a flat +15, not by missing Reflexes. The section is kept
+> as the record of why the split existed.
 
 ## Why Perception and Reflexes are split the way they are
 

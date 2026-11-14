@@ -161,9 +161,14 @@ unchanged.
 - **The LMG past 12 tiles.** The preview approved with these tables showed −12 at 15 tiles, but
   the table's own rule (+5 through 12, then −4/tile) gives −7. The rule is what was built.
   Lengthen or shorten the LMG's +5 run if 15 tiles should be worse.
-- **The AI's "worth taking" floor is still 15%** (`GoapBrain.MIN_VIABLE_ACCURACY`). On the new
-  scale more shots fall between 15 and 40%, so mercs will take more long-odds shots than before.
-  Measure with `tools/sim_merc_ai.gd`.
+- **Mercs now end their turn next to their target far more often.** `tools/sim_merc_ai.gd`
+  (48 scenarios × 8 rounds) shows attack rate unchanged (30.2% → 30.1%), still 100% fired when they
+  had a shot, and no shuttling. But "ends adjacent" went **1.4% → 10.8%** (merc duel deck 0.2% →
+  18.8%). The cause: a soldier in cover in the dark now sits below the AI's 15% "worth taking"
+  floor (`GoapBrain.MIN_VIABLE_ACCURACY`) from range. `RepositionToCover` walks to the nearest cover
+  tile where the shot clears it, which is often adjacent, where the SMG table's +20 lifts it (e.g.
+  "takes cover at 1 tile, fires at 37%"). Options: rank cover tiles by hit chance rather than
+  steps, lower the floor, or accept it as SMG-merc aggression. Not changed here.
 - **No leveling yet.** The 87 cap exists only as `UnitStats.AIM_CAP`.
 - **The HUD shows only the final %**, with no breakdown of Aim, range and Defense. Players will
   need one more than before, now that the terms actually move the number.

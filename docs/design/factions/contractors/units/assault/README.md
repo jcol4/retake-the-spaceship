@@ -17,7 +17,7 @@ movement range (+1 tile per 20 Fitness) to actually reach close range and surviv
 
 | Stat | Range |
 |---|---|
-| Perception | 30–50 |
+| Perception (Aim) | 55–65, the same for every class ([accuracy](../../../../systems/accuracy/)) |
 | Reflexes | 45–65 |
 | Fitness | 60–85 |
 | Luck | 30–60 |

@@ -2,17 +2,23 @@
 
 *Pump-action.*
 
-| Base Accuracy | Damage | Mag Size | Reserve | Total | Optimal Range | Beyond it |
-|---|---|---|---|---|---|---|
-| 20 | 14 | 6 | 15 loose shells | 21 | 3 tiles | −15% accuracy per tile |
+| Range table | Damage | Mag Size | Reserve | Total |
+|---|---|---|---|---|
+| +30 / +25 / +20 at 1 / 2 / 3 tiles, 0 at 5, −45 at 8, −15/tile after | 14 | 6 | 15 loose shells | 21 |
+
+Range table: aim added at each distance on top of the soldier's Aim
+([accuracy](../../../systems/accuracy/)). Aim 60 against an open target: 90% at 1 tile, 85% at 2,
+60% at 5, 45% at 6, 15% at 8.
 
 ## Role
 
-Highest damage per hit of any weapon in the roster, by a wide margin, and the **lowest base
-accuracy** — but its defining trait is range: past 3 tiles, accuracy craters at −15% per tile on
-top of the game's existing global falloff (GDD Section 6.5), the steepest penalty of any weapon by
-a wide margin. It's built to be **effectively unusable beyond close range** and to hit hard the
-moment a soldier is actually adjacent to (or nearly on top of) a target.
+Highest damage per hit of any weapon in the roster, by a wide margin, and the **best point-blank
+table** — but its defining trait is range: from 4 tiles on its table drops 10–15 per tile, the
+steepest of any weapon by a wide margin. It's built to be **effectively unusable beyond close
+range** and to hit hard and often the moment a soldier is nearly on top of a target.
+
+**Slug Rounds** swap it onto the Assault Rifle's table (+10 close, about 0 out to 12 tiles): one
+projectile with Battle Rifle penetration instead of splash, and reach instead of point-blank odds.
 
 Unlike the other four weapons, its reserve isn't carried as discrete spare mags — being
 pump-action, it's loaded a shell at a time from a loose **15-shell reserve**. Mechanically this is
@@ -29,9 +35,9 @@ own accuracy makes a mid-range trade viable.
 
 ## Relationship to other systems
 
-- `Combat.weapon_range_penalty()` (`combat.gd`) applies the −15%/tile falloff on top of the global
-  Distance Penalty curve, so at range this weapon is losing accuracy from *two* stacked penalties
-  at once, not one — closing distance isn't just the best option, it's close to the only one.
+- Its table (`WeaponArchetype`, `scripts/weapon_archetype.gd`) is the whole of its range story —
+  there's no separate global curve — and by 8 tiles it's −45: closing distance isn't just the best
+  option, it's close to the only one.
 - Total ammo (21) is the second-highest in the roster (after the SMG's 24), so despite the small
   6-shot tube this weapon can sustain quite a few close-range trades across a mission — the
   bottleneck is always range, never really ammo.

@@ -124,6 +124,12 @@ func _vary_body() -> void:
 	visual.loop_phase = rng.randf()
 
 
+## The zombie tier bleeds (VFX.HitStyle.FLESH): Fodder, the brute and the
+## brawler. The worm extends this and opts back out.
+func hit_style() -> int:
+	return VFX.HitStyle.FLESH
+
+
 ## The shambling tier acts after everything else in the round (TurnManager) —
 ## Fodder, and the brawler and worm that extend it.
 func draws_last() -> bool:

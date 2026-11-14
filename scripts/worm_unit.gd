@@ -671,3 +671,8 @@ func _add_worm(node_name: String, pos: Vector3i, hp: int) -> void:
 ## Not Fodder: keeps the whole-body death (FodderGibs is the basic zombie only).
 func is_fodder() -> bool:
 	return false
+
+
+## Not a zombie: keeps the old flash until the worm gets a hit style of its own.
+func hit_style() -> int:
+	return VFX.HitStyle.FLASH

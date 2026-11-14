@@ -27,6 +27,9 @@ signal moved(unit: Unit)
 ## (ExtractionManager) is the first.
 signal stepped(unit: Unit)
 
+## The shot/impact VFX script, for its HitStyle enum (no class_name of its own).
+const VFX := preload("res://scripts/vfx_manager.gd")
+
 ## AP per tile of movement (rework doc Sec 4.1). FLAT, for every unit regardless
 ## of stats: Fitness buys a bigger pool, not cheaper steps, and a diagonal costs
 ## the same one AP a cardinal does because the grid is eight-way at uniform cost
@@ -1691,6 +1694,13 @@ func is_fodder() -> bool:
 	return false
 
 
+## What a round or a swing leaves where it lands on this body
+## (VfxManager.HitStyle). Presentation only. The old glowing flash unless a body
+## says otherwise.
+func hit_style() -> int:
+	return VFX.HitStyle.FLASH
+
+
 ## Where an ordinary shot lands, for the fall: an Aimed Shot hits what it aimed
 ## at; anything else lands where rounds land — mostly centre mass.
 static func shot_part(action: Combat.ShotAction, aimed: int) -> int:
@@ -3026,7 +3036,7 @@ func melee_at(target: Unit) -> Combat.ShotResult:
 ## by `UnitVisual.strike` mid-swing (see `melee_at`).
 func _land_melee(target: Unit, result: Combat.ShotResult) -> void:
 	if result.hit and is_instance_valid(target):
-		show_impact(target.global_position, result.crit)
+		show_impact(target.global_position, result.crit, target.hit_style())
 		var raw := result.damage
 		target.note_hit(global_position + Vector3(0, GridManager.EYE_HEIGHT, 0),
 			Ragdoll.HitKind.MELEE, Combat.BodyPart.HEAD if _hit_rng.randf() < 0.3 else Combat.BodyPart.TORSO)
@@ -3109,6 +3119,7 @@ func _on_muzzle() -> void:
 	# (Penetration's collateral included) and stops in the last; one that landed
 	# in nobody goes wide with the rest of the burst.
 	var chain := PackedVector3Array()
+	var styles := PackedInt32Array()
 	var crit_index := -1
 	if _pending_shot != null:
 		for body: Unit in _burst_chain:
@@ -3116,10 +3127,11 @@ func _on_muzzle() -> void:
 				if body == _pending_target and crit:
 					crit_index = chain.size()
 				chain.append(body.visual.global_position)
+				styles.append(body.hit_style())
 	if chain.is_empty():
 		vfx.shot_miss(visual.barrel_tip(), at, _burst_group, tracer)
 	else:
-		vfx.shot_through(visual.barrel_tip(), chain, crit_index, tracer)
+		vfx.shot_through(visual.barrel_tip(), chain, crit_index, tracer, styles)
 	# The round into the body: the one that drops it starts the fall, every one
 	# after jolts it (UnitVisual.take_round). The first landing round strikes
 	# where the shot was rolled to land; the rest go where rounds go.
@@ -3309,7 +3321,7 @@ func replay_attack(target: Unit, hit: bool, crit: bool, rounds: int,
 		# (`melee_at`), not after the recovery.
 		var land := func() -> void:
 			if hit and is_instance_valid(target):
-				_show_impact(target.visual.global_position, crit)
+				_show_impact(target.visual.global_position, crit, target.hit_style())
 				if not target.is_downed:
 					target.visual.play_hit_react_local()
 		visual.strike.connect(land, CONNECT_ONE_SHOT)
@@ -3332,24 +3344,28 @@ func replay_attack(target: Unit, hit: bool, crit: bool, rounds: int,
 
 ## A hit landing at `at` — a swing connecting, a grenade going off. Sent to every
 ## ready client as well, each of which shows it only if it can see this unit.
-func show_impact(at: Vector3, crit: bool) -> void:
+## `style` is the struck body's hit_style(); the blow travels from this unit (the
+## attacker) to `at`.
+func show_impact(at: Vector3, crit: bool, style: int = VFX.HitStyle.FLASH) -> void:
 	if visual.mirrors() and not TurnManager.resolving_tick:
 		for peer_id in SteamLobby.ready_peers:
-			_rpc_show_impact.rpc_id(peer_id, at, crit)
-	_show_impact(at, crit)
+			_rpc_show_impact.rpc_id(peer_id, at, crit, style)
+	_show_impact(at, crit, style)
 
 
 @rpc("authority", "call_remote", "reliable")
-func _rpc_show_impact(at: Vector3, crit: bool) -> void:
-	_show_impact(at, crit)
+func _rpc_show_impact(at: Vector3, crit: bool, style: int) -> void:
+	_show_impact(at, crit, style)
 
 
-func _show_impact(at: Vector3, crit: bool) -> void:
+func _show_impact(at: Vector3, crit: bool, style: int = VFX.HitStyle.FLASH) -> void:
 	if is_instant():
 		return
 	var vfx := get_tree().get_first_node_in_group("vfx")
 	if vfx:
-		vfx.impact(at, crit)
+		var dir := at - global_position
+		dir.y = 0.0
+		vfx.impact(at, crit, style, dir)
 
 
 ## Arms the muzzle hook for a burst that resolves NO shot — suppressing fire.

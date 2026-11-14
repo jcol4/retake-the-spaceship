@@ -19,7 +19,7 @@ rather than repositioning turn to turn.
 
 | Stat | Range |
 |---|---|
-| Perception | 65–90 |
+| Perception (Aim) | 55–65, the same for every class ([accuracy](../../../../systems/accuracy/)) |
 | Reflexes | 45–65 |
 | Fitness | 30–50 |
 | Luck | 30–60 |

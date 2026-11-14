@@ -164,7 +164,8 @@ func _check_landing_cycle() -> void:
 	_check(gun.stats.initiative() == 65, "hidden Initiative 65 (got %d)" % gun.stats.initiative())
 	_check(gun.ap_pool() == 2 * gun.action_cost(ACTION_SHOOT), "AP for exactly two shots")
 	_check(gun.reserve < 0, "belt-fed: unlimited reserve")
-	_check(gun.stats.weapon.base_accuracy == 28 and gun.stats.weapon.damage == 9, "LMG accuracy and damage")
+	_check(gun.stats.weapon.archetype == WeaponArchetype.Id.LMG and gun.stats.weapon.damage == 9,
+		"LMG range table and damage")
 	_check(not gun.light_agnostic(), "the light modifier applies to it (A9)")
 	var ship = _em._dropships.get(A)
 	_check(ship != null and not ship.has_method("take_damage") and not ship.is_in_group("units"), "the Dropship is not a Unit")

@@ -81,7 +81,7 @@ func _stats_with(weapon):
 
 func _check_bare_weapon_is_unchanged() -> void:
 	var w = _make(W.ASSAULT_RIFLE)
-	_check(w.effective_accuracy() == w.base_accuracy, "no mods: accuracy is the base")
+	_check(w.effective_accuracy() == w.aim_modifier, "no mods: accuracy is the gun's own aim modifier")
 	_check(w.damage_against(true, 5) == w.damage and w.damage_against(false, 5) == w.damage,
 		"no mods: damage is the base against anything")
 	_check(w.effective_noise_radius() == 5, "no mods: noise is the old flat 5 tiles")
