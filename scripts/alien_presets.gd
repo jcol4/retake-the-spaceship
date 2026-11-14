@@ -52,16 +52,17 @@ const BRUTE_SCALE := 1.2
 static func ranged(display_name: String) -> UnitStats:
 	var stats := UnitStats.new()
 	stats.display_name = display_name
-	stats.perception = randi_range(30, 50)
+	stats.perception = randi_range(50, 60)  # Aim, a notch under the squad's 55-65
 	stats.reflexes = randi_range(25, 45)
 	stats.fitness = randi_range(30, 45)  # 8-9 AP: a shot and several tiles
 	stats.luck = 20
 	stats.base_hp = randi_range(8, 11)  # -> 10-14 HP, two or three rifle hits
 	var weapon := WeaponData.new()
-	weapon.base_accuracy = 20
+	weapon.archetype = WeaponArchetype.Id.ASSAULT_RIFLE
 	weapon.damage = 5
 	weapon.mag_size = 10
 	stats.weapon = weapon
+	stats.melee_base_accuracy = 30  # refit to its old ~85% swing at the new Aim
 	stats.base_initiative = 26  # -> ~36
 	stats.equipment_initiative = 3
 	return stats
@@ -78,7 +79,7 @@ static func ranged(display_name: String) -> UnitStats:
 static func swarm(display_name: String) -> UnitStats:
 	var stats := UnitStats.new()
 	stats.display_name = display_name
-	stats.perception = randi_range(25, 40)
+	stats.perception = randi_range(45, 55)  # Aim: its bite is Aim + the claw's 25
 	# Fixed rather than rolled. It no longer prices the claw (SwarmUnit overrides
 	# the melee cost with a flat CLAW_AP_COST); it only feeds the other
 	# Reflexes-discounted actions, none of which a swarm takes.
@@ -92,8 +93,11 @@ static func swarm(display_name: String) -> UnitStats:
 	# on top (UnitStats.HP_PER_FITNESS), and the pace bump is not meant to buy HP.
 	stats.base_hp = randi_range(4, 6)
 	# stats.weapon stays null — no ranged weapon at all (Sec 11.4); the
-	# weapon_base_accuracy/weapon_damage/mag_size getters all read 0 from that.
-	stats.melee_base_accuracy = 45
+	# weapon_aim_modifier/weapon_damage/mag_size getters all read 0 from that.
+	# Refit for the Aim rescale (docs/design/systems/accuracy): a bite still lands
+	# ~75% of the time against a soldier who is not hunkered, as it did at the old
+	# Perception 25-40 + 45.
+	stats.melee_base_accuracy = 25
 	stats.melee_damage = 3
 	stats.base_initiative = 17  # -> 27 (draws last regardless, SwarmUnit.draws_last)
 	stats.equipment_initiative = 2
@@ -114,7 +118,7 @@ static func swarm(display_name: String) -> UnitStats:
 static func hunter(display_name: String) -> UnitStats:
 	var stats := UnitStats.new()
 	stats.display_name = display_name
-	stats.perception = randi_range(45, 65)  # it hunts; it needs to find you
+	stats.perception = randi_range(60, 70)  # it hunts; it needs to find you
 	# High enough to make its claw cheap (4-5 AP against an 11 AP pool), which is
 	# what pays for the close-and-strike its whole design is built on: six or seven
 	# tiles of ground AND a blow, where everything else on the board buys one or
@@ -124,8 +128,13 @@ static func hunter(display_name: String) -> UnitStats:
 	stats.luck = 25
 	stats.base_hp = 8  # -> 13 HP: two rifle hits, killable once caught out of hiding
 	# Unarmed at range like the rest of the melee tier — stats.weapon stays null.
-	stats.melee_base_accuracy = 50
+	# ~85% a swing at the new Aim, before its ambush bonus (the old 45-65 + 50 was
+	# pinned at the cap).
+	stats.melee_base_accuracy = 20
 	stats.melee_damage = 8  # a real threat if it connects: three swings ends a soldier
+	# Fast and low: +20 Defense, so answering it this turn is a real gamble unless
+	# you flank it or take aim (docs/design/systems/accuracy).
+	stats.defense = 20
 	stats.base_initiative = 38  # -> ~55, it acts early
 	stats.equipment_initiative = 2
 	return stats
@@ -196,7 +205,7 @@ static func brawler(display_name: String) -> UnitStats:
 static func worm(display_name: String) -> UnitStats:
 	var stats := UnitStats.new()
 	stats.display_name = display_name
-	stats.perception = randi_range(25, 40)  # the swarm's range: bite accuracy is Perception
+	stats.perception = randi_range(45, 55)  # the swarm's range: bite accuracy is Aim + 25
 	stats.reflexes = 0
 	stats.fitness = 0
 	stats.luck = 15
@@ -211,7 +220,7 @@ static func worm(display_name: String) -> UnitStats:
 	# the same thing from the other end.
 	stats.base_hp = 5
 	# Unarmed at range like the rest of the melee tier — stats.weapon stays null.
-	stats.melee_base_accuracy = 45
+	stats.melee_base_accuracy = 25  # the swarm's refit claw
 	stats.melee_damage = 2
 	stats.base_initiative = 17  # -> 19, below the swarm: the last thing to act
 	stats.equipment_initiative = 2

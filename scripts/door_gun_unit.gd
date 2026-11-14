@@ -64,9 +64,9 @@ const MAX_HP := 30
 const ARMOR := 2
 const MIN_DAMAGE_THROUGH_ARMOR := 1
 ## A trained crewman behind a mounted gun: a soldier's Reflexes (so a soldier's
-## Shoot price), a little less Perception than a soldier's 50 — it is the ship's
-## gunner, not a marksman — and average Luck.
-const PERCEPTION := 40
+## Shoot price), Aim at parity with the squad's 55-65 (docs/design/systems/
+## accuracy), and average Luck.
+const PERCEPTION := 60
 const REFLEXES := 50
 const LUCK := 30
 ## Initiative 50 + 0.2 x 50 + 5 = 65: in among the squad's ~62-68, so it acts
@@ -75,11 +75,10 @@ const LUCK := 30
 ## PlayerUnits, hud.gd `_refresh`).
 const BASE_INITIATIVE := 50
 const EQUIPMENT_INITIATIVE := 5
-## The weapon is the LMG's numbers (WeaponPresets.DATA[LMG]: accuracy 28, damage
-## 9, no range falloff) on a belt fed from the ship: unlimited reserve, and the
+## The weapon is the LMG's numbers (WeaponPresets.DATA[LMG]: the LMG distance
+## table, damage 9) on a belt fed from the ship: unlimited reserve, and the
 ## magazine is topped back up after every burst (`_top_up`), so it never stops to
 ## reload. NOT a roster gun (id -1), so it is never an item anywhere.
-const WEAPON_ACCURACY := 28
 const WEAPON_DAMAGE := 9
 const WEAPON_MAG := 6
 const WEAPON_NOISE := 5
@@ -189,12 +188,13 @@ static func make_stats(display_name: String = "Door gun") -> UnitStats:
 	stats.melee_damage = 0
 	var w := WeaponData.new()
 	w.display_name = "Door gun"
-	w.base_accuracy = WEAPON_ACCURACY
+	w.archetype = WeaponArchetype.Id.LMG
 	w.damage = WEAPON_DAMAGE
 	w.mag_size = WEAPON_MAG
 	w.starting_reserve = -1
 	w.noise_radius = WEAPON_NOISE
 	w.penetration = 60  # a mounted heavy gun: LMG tier (docs/design/systems/penetration)
+	w.muzzle_light = 1.5  # a mounted heavy gun lights a bay
 	stats.weapon = w
 	return stats
 
@@ -320,10 +320,14 @@ func _on_lighting_changed() -> void:
 # --- Armor, and what being disabled looks like ------------------------------------
 
 
-func damage_taken(amount: int) -> int:
+func armor() -> int:
+	return ARMOR
+
+
+func damage_taken(amount: int, armor_ignore: int = 0) -> int:
 	if amount <= 0:
 		return 0
-	return maxi(MIN_DAMAGE_THROUGH_ARMOR, amount - ARMOR)
+	return maxi(MIN_DAMAGE_THROUGH_ARMOR, amount - maxi(0, ARMOR - armor_ignore))
 
 
 ## DISABLED rather than downed or a corpse. It cannot be downed at all (only a

@@ -135,9 +135,11 @@ const LEG_TARGET_CHANCE := 0.4  # vs. a quarry still able to disengage
 
 func _combat_turn() -> void:
 	# The ranged loop. Overridden wholesale by melee types (SwarmUnit).
-	var shoot_cost := action_cost(UnitStats.Action.SHOOT)
 	var reload_cost := action_cost(UnitStats.Action.RELOAD)
 	while ap > 0 and not is_downed:
+		# Re-priced every pass: close quarters can change it mid-activation (an
+		# SMG's last nearby hostile dropping takes its cheap shot with it).
+		var shoot_cost := action_cost(UnitStats.Action.SHOOT)
 		var quarry := acquire_target()
 		if quarry == null:
 			return

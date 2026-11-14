@@ -56,16 +56,22 @@ const SCENE := {
 ## `fitness` is PACE (AP pool = 6 + 0.075 x Fitness, floored), `base_hp` carries
 ## toughness, and `initiative` is [base, equipment bonus] — both now additive
 ## terms rather than the 0-99 percentiles the old weighted average took.
+## ACCURACY (docs/design/systems/accuracy): `perception` is Aim at parity with
+## the squad's 55-65, and each gun names the WeaponArchetype distance table it
+## reads. `melee` [accuracy, damage]: the accuracy is added to Aim, refit so each
+## swing lands about as often as it did before the Aim rescale (old odds capped
+## at 95, minus the new Aim).
 const DATA := {
 	MapData.Spawn.AUXILIUM: {
 		"name": "QRN-4 Auxilium",
 		# 7 AP: a shot (5) and two tiles. It anchors a doorway rather than roaming,
 		# so the pool is spent covering an approach rather than crossing the map.
-		"perception": 45, "reflexes": 35, "fitness": 20, "luck": 10,
+		"perception": 60, "reflexes": 35, "fitness": 20, "luck": 10,
 		"base_hp": 13,  # -> 14 HP
 		"initiative": [28, 5],  # -> 40
-		"weapon": {"display_name": "QRN Sentry Gun", "base_accuracy": 25, "damage": 7, "mag_size": 8},
-		"melee": [40, 4],
+		"weapon": {"display_name": "QRN Sentry Gun", "archetype": WeaponArchetype.Id.LMG,
+			"damage": 7, "mag_size": 8},
+		"melee": [25, 4],
 	},
 	MapData.Spawn.SAGITTARII: {
 		"name": "MKV-9 Sagittarii",
@@ -79,7 +85,7 @@ const DATA := {
 		# two tiles". Scaling Shoot with everything else restored it exactly. It is
 		# an invariant of two numbers, not of one, and nothing in this block says so
 		# on its own — the pool and the shot price have to move together.
-		"perception": 55, "reflexes": 20, "fitness": 10, "luck": 10,
+		"perception": 60, "reflexes": 20, "fitness": 10, "luck": 10,
 		"base_hp": 20,  # -> 20 HP
 		"initiative": [18, 3],  # -> 25
 		# Hits harder than anything the squad carries, and reloads less often. The
@@ -87,18 +93,20 @@ const DATA := {
 		# shortened HP scale that is no longer advice: 10 a hit is half a soldier.
 		# Its numbers live with the gun (WristGunPresets.WRIST_CANNON).
 		"wrist_gun": WristGunPresets.WristGunId.WRIST_CANNON,
-		"melee": [35, 5],
+		"melee": [30, 5],
 	},
 	MapData.Spawn.PROCTOR: {
 		"name": "XVT-7 Proctor",
-		# High Perception and the best Reflexes on the board: it is built to see
-		# and to leave, and its Initiative reflects that it usually reports first.
-		# 10 AP, second only to Securus — leaving is the whole job.
-		"perception": 70, "reflexes": 65, "fitness": 60, "luck": 25,
+		# The best Reflexes on the board: it is built to see and to leave, and its
+		# Initiative reflects that it usually reports first. 10 AP, second only to
+		# Securus — leaving is the whole job. Small and airborne: +20 Defense, so
+		# killing the spotter costs real effort.
+		"perception": 60, "reflexes": 65, "fitness": 60, "luck": 25,
+		"defense": 20,
 		"base_hp": 2,  # -> 6 HP: one solid hit ends it, which is now literally true
 		"initiative": [45, 6],  # -> 64, still drawing with the squad
 		"weapon": null,
-		"melee": [20, 1],
+		"melee": [30, 1],
 	},
 	MapData.Spawn.LICTOR: {
 		"name": "FRC-6 Lictor",
@@ -106,11 +114,12 @@ const DATA := {
 		# Thin plate and a 6 AP pool against a 6 AP shot: it fires exactly once and
 		# folds quickly if reached, which is what keeps "shoot the demolition gun
 		# first" a real answer to a squad that cannot be out-positioned.
-		"perception": 60, "reflexes": 30, "fitness": 10, "luck": 10,
+		"perception": 55, "reflexes": 30, "fitness": 10, "luck": 10,
 		"base_hp": 9,  # -> 9 HP, the roster's second-thinnest after Proctor
 		"initiative": [24, 3],  # -> 33
-		"weapon": {"display_name": "FRC Demolition Gun", "base_accuracy": 20, "damage": 4, "mag_size": 4},
-		"melee": [25, 3],
+		"weapon": {"display_name": "FRC Demolition Gun", "archetype": WeaponArchetype.Id.SHOTGUN,
+			"damage": 4, "mag_size": 4},
+		"melee": [30, 3],
 	},
 	MapData.Spawn.SECURUS: {
 		"name": "JXM-2 Securus",
@@ -118,7 +127,7 @@ const DATA := {
 		# (SecurusUnit.SWING_AP_COST) and a 5 AP shot (SecurusUnit.SHOT_AP_DISCOUNT):
 		# seven tiles and a strike, or two strikes in contact. The threat is still
 		# arrival — it just arrives from much further.
-		"perception": 50, "reflexes": 25, "fitness": 67, "luck": 10,
+		"perception": 55, "reflexes": 25, "fitness": 67, "luck": 10,
 		# Fitness 67 is the lowest that floors to 11 AP; base_hp went up by one to
 		# keep the HP its Fitness term took off.
 		"base_hp": 21,  # -> 26 HP with the Fitness term, the thickest on either roster
@@ -126,7 +135,7 @@ const DATA := {
 		# Wrist-mounted machine gun: what it does to a target it cannot reach this
 		# activation. Its numbers live with the gun (WristGunPresets).
 		"wrist_gun": WristGunPresets.WristGunId.WRIST_LMG,
-		"melee": [60, 12],  # two connected swings kill a soldier outright
+		"melee": [40, 12],  # two connected swings kill a soldier outright
 	},
 }
 
@@ -139,6 +148,7 @@ static func make_stats(kind: int, index: int = 1) -> UnitStats:
 	# a model designation rather than as a spawn slot.
 	stats.display_name = "%s" % d["name"] if index <= 1 else "%s #%d" % [d["name"], index]
 	stats.perception = d["perception"]
+	stats.defense = d.get("defense", 0)
 	stats.reflexes = d["reflexes"]
 	stats.fitness = d["fitness"]
 	stats.luck = d["luck"]
@@ -157,7 +167,7 @@ static func _make_weapon(spec) -> WeaponData:
 		return null
 	var w := WeaponData.new()
 	w.display_name = spec["display_name"]
-	w.base_accuracy = spec["base_accuracy"]
+	w.archetype = spec["archetype"]
 	w.damage = spec["damage"]
 	w.mag_size = spec["mag_size"]
 	# Unlimited reserve, like the aliens' inline weapon. A robot running dry

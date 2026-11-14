@@ -65,6 +65,40 @@ pays 50 to pass through it, hits the zombie behind, and can't pay to pass that o
 A body's own cover never reduces the damage it takes, only its hit chance (as before). What it costs
 only comes off the rest of the round.
 
+### Armor (added 2026-11-13)
+
+Penetration also gets through **armor**, the flat amount taken off each hit, out of **the same
+budget** it uses to pass bodies:
+
+- **Every 25 pen ignores 1 point of armor**, as many points as the round can afford, never more
+  than the body has. Ignoring armor is paid **first**, on **every body hit**: the intended target,
+  collateral, and bodies in front alike. A missed body pays nothing.
+- What's left then pays to pass the body as above, including the armored body's extra 25.
+- **Every 25 spent on armor is also a `keep` step**, so the bodies behind take less damage.
+- It covers every kind of armor: robot plate (Lictor 2, Auxilium 3, Sagittarii 5, Securus 6),
+  the door gun's 2, and soldier armour patches (0–3). Enemy rounds pierce your patches too. An
+  EMP'd robot has no plate, so there's nothing to pay for.
+- **Reach includes it.** Because bodies in front pay for their plate, an armored robot standing
+  in front can use up the penetration the target needed, and then the target can't be selected
+  (§3).
+
+| Gun (pen) | Ignores | Damage per hit to a Securus (6 armor), was → now |
+|---|---|---|
+| Battle Rifle (80) | 3 | 4 → 7 |
+| LMG (60) | 2 | 3 → 5 |
+| Assault Rifle (45) | 1 | 2 → 3 |
+| SMG (30) / Pistol (25) | 1 | 1 → 1 |
+| Shotgun (0) | 0 | 8 (unchanged) |
+
+Worked examples with the Battle Rifle (80):
+- **Into a Securus:** it ignores 3 armor (75 spent), so 7 of 10 damage lands. The 5 left can't pay
+  to pass, so the round stops there.
+- **Into a 1-armor soldier with Fodder behind:** 25 for the armor, 25 to pass, so the next body
+  takes 10 × keep² = 6 instead of 8.
+- **At a target behind a 2-armor armored merc:** 50 + 50 > 80, so the target is out of reach.
+
+The log says so: `HIT for 10 dmg (pierced 3 armor)`.
+
 **Ammo:**
 - **Penetrator Rounds** — now **+20 pen** only (BR → 100: 4 bodies, 80% keep).
 - **FMJ** — takes Penetrator's old job: **+34% damage vs armored**. Loses its +2 accuracy.
@@ -130,7 +164,7 @@ Slug Rounds swap the shotgun to line penetration at 80 pen (§2).
 | Shoot | yes |
 | Aimed Shot | yes (secondaries take flat torso hits, §3) |
 | Overwatch | yes |
-| Suppress | **no** |
+| Suppress | **no** (and so its break shot ignores no armor either) |
 
 Each trigger pull is still one round of ammo.
 
@@ -159,7 +193,8 @@ Each trigger pull is still one round of ammo.
 
 | Where | What |
 |---|---|
-| `scripts/penetration.gd` | `trace` (the path), `can_reach`, `through_penalty`, `resolve` (all rolls), buckshot `splash_tiles`. |
+| `scripts/penetration.gd` | `trace` (the path), `can_reach`, `through_penalty`, `resolve` (all rolls), buckshot `splash_tiles`, `armor_pierced` (§2 Armor). |
+| Armor | `Unit.armor()` (patches; `CerberusUnit` and `DoorGunUnit` override with their plate), `damage_taken` / `take_damage` / `would_collapse` take `armor_ignore`, `ShotResult.armor_ignored` carries it from the roll to where `fire_at` lands it. |
 | `scripts/combat.gd` | `resolve_shot` takes an accuracy cap, damage scale and `collateral` flag. `ShotResult` carries `collateral`, `unit`, `blocked_by`. `describe` prints the collateral. |
 | `scripts/unit.gd` | `has_shot_at` (line of sight + reach). `fire_at` resolves through `Penetration` and lands collateral (`_land_collateral`). Suppression's break shot passes `penetrates = false`. |
 | `scripts/weapon_data.gd`, `weapon_mod.gd` | `penetration`, `splash`; mods add `penetration` and can set `replaces_splash`. |

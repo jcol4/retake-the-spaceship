@@ -19,11 +19,13 @@ enum WristGunId { WRIST_LMG, WRIST_CANNON }
 ## every burst (Unit.BURST_MIN): one pull is still one roll and one round of the
 ## magazine. tracer_every: see WeaponData.tracer_every -- barrels + 1 is the
 ## number that walks the tracers across every barrel.
+## archetype: the WeaponArchetype distance table each reads (docs/design/systems/
+## accuracy). Both are LMG: mounted, unwieldy close, steady through the middle.
 const DATA := {
 	WristGunId.WRIST_LMG: {
 		"display_name": "JXM Wrist Gun",
 		# Securus pays 5 AP to fire it (SecurusUnit.SHOT_AP_DISCOUNT).
-		"base_accuracy": 30, "damage": 6, "mag_size": 12,
+		"archetype": WeaponArchetype.Id.LMG, "damage": 6, "mag_size": 12,
 		"penetration": 60,  # LMG tier (docs/design/systems/penetration)
 		"model": &"wrist_lmg",
 		"fire_sfx": "lmg_fire",
@@ -36,7 +38,7 @@ const DATA := {
 		# Sagittarii's. The numbers are the old MKV Support Cannon's, unchanged:
 		# moving it onto the wrist is a model swap, not a rebalance.
 		"display_name": "MKV Support Cannon",
-		"base_accuracy": 30, "damage": 10, "mag_size": 5,
+		"archetype": WeaponArchetype.Id.LMG, "damage": 10, "mag_size": 5,
 		"penetration": 60,
 		"model": &"wrist_cannon",
 		"fire_sfx": "battle_rifle_fire",
@@ -51,7 +53,7 @@ static func make(id: WristGunId) -> WeaponData:
 	var d: Dictionary = DATA[id]
 	var w := WeaponData.new()
 	w.display_name = d["display_name"]
-	w.base_accuracy = d["base_accuracy"]
+	w.archetype = d["archetype"]
 	w.damage = d["damage"]
 	w.mag_size = d["mag_size"]
 	w.penetration = d["penetration"]

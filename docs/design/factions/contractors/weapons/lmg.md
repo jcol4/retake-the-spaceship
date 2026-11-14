@@ -1,37 +1,45 @@
 # LMG
 
-| Base Accuracy | Damage | Mag Size | Reserve | Total | Move Speed |
-|---|---|---|---|---|---|
-| 28 | 9 | 6 | 12 (2 mags) | 18 | 75% |
+| Base Accuracy | Damage | Mag Size | Reserve | Total | Penetration | Close quarters |
+|---|---|---|---|---|---|---|
+| 28 | 9 | 6 | 12 (2 mags) | 18 | 60 | −60 Shoot/Overwatch, −15 Aimed |
 
 ## Role
 
-**Largest single magazine in the roster (6)** and solid damage, offset by a below-average base
-accuracy and, uniquely among the five, a **movement penalty**: carrying it slows the soldier's
-Run/Sprint range to 75% of normal (`UnitStats.move_run()`/`move_sprint()`). It reloads less often
-than anything else mid-engagement, but only carries 3 mags total (1 loaded + 2 reserve) — its total
-ammo (18) is only middle-of-the-roster, tied with the Assault Rifle. It's a sustained-fire weapon
-turn-to-turn, not an unlimited one over a whole mission: a soldier who has already committed to a
-position and isn't repositioning, not a walking ammo dump.
+**Largest single magazine in the roster (6)**, solid damage and the second-most penetration (60,
+which ignores 2 points of armor). It is **unwieldy when rushed**. It reloads less often than
+anything else mid-engagement, but only carries 3 mags total (1 loaded + 2 reserve), so its total
+ammo (18) is only middle-of-the-roster, tied with the Assault Rifle. It holds a line at range and
+hates being closed on.
+
+## Close quarters
+
+While a hostile the carrier can see is within 3 tiles
+([close quarters](../../../systems/close-quarters/)), the LMG takes **−60 on Shoot and Overwatch**
+(and the Suppress break shot) and **−15 on Aimed Shot**, before the 99% cap. That's the same 4:1
+ratio as the Battle Rifle, at a lower level.
+
+This is the LMG's cost now. It used to slow its carrier to 75% move speed, but the AP rework removed
+that (movement is a flat 1 AP per tile for everyone; see `WeaponData`). Without a replacement, the
+LMG out-stats the Assault Rifle everywhere: more damage, more penetration, double the magazine, the
+same total ammo. Its 2 points less accuracy are erased by the 99% cap.
+
+Mid-roll Heavy (the class it suits, with the lowest Reflexes; raw Shoot ~113): ~99% open / ~73%
+behind heavy cover normally, and ~53% / ~13% engaged.
 
 ## Suggested class
 
-[Heavy Weapons](../units/heavy-weapons/) — the class's high Fitness/HP pool absorbs the move-speed
-penalty better than any other class: it already has the roster's largest Fitness range (65–90,
-Section 4.6.3), so losing a quarter of its movement still leaves it competitive, and its GDD role
-("high damage, slow, area-effect") already reads as "not repositioning every turn" before the
-weapon's penalty is even applied.
+[Heavy Weapons](../units/heavy-weapons/). The class's GDD role ("high damage, slow, area-effect")
+already reads as "hold a position", which is what this gun wants. Its high Fitness and HP also make
+it the class best able to absorb being closed on while it backs off.
 
 ## Relationship to other systems
 
-- The move-speed penalty multiplies `UnitStats.move_run()`/`move_sprint()` directly, and then
-  `Unit.move_run()`/`move_sprint()` (`unit.gd`) applies the existing leg-injury speed penalty on
-  top of that — the two stack multiplicatively, so an LMG-carrying soldier with an injured leg is
-  hit twice, not once.
-- Base accuracy (28) pushes toward Aimed Shot (2 AP, Perception-only, GDD Section 4.6.2) over
-  Shoot for the same reason the class doc already notes about Heavy Weapons: Reflexes only helps
-  Shoot, and this weapon's below-average base number makes that gap sting more than it would on a
-  higher-accuracy weapon.
+- **Suppression.** Six rounds is two full bursts of suppressing fire (3 rounds each), which is why
+  the merc squad's designated gun carries one. The break shot rolls as a Shoot, so a pinned enemy
+  that runs *at* the gunner gets the close-quarters penalty applied to the shot it triggers.
+- **Aimed Shot.** Base accuracy (28) and the Heavy class's low Reflexes push toward Aimed Shot
+  (Perception only, GDD Section 4.6.2). Up close the Aimed penalty is a quarter of Shoot's, so
+  aiming is also the LMG's best close-range action.
 - With only 3 mags total, spending Aimed Shot freely rather than conserving with Shoot burns
-  through the mission's ammo budget faster than the big single mag makes it feel like — the large
-  mag hides how finite the *total* supply actually is turn-to-turn.
+  through the mission's ammo budget faster than the big single mag makes it feel.

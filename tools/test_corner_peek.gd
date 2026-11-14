@@ -189,8 +189,8 @@ func _check_corner_shot() -> void:
 	_check(result.had_cover and result.cover_type == _md.Cover.HEAVY, "a shot into corner cover meets heavy cover")
 	_check(result.cover_structural and not result.cover_broken, "structural, and nothing is broken")
 	_check(_grid.cover_edge(CORNER, _md.Side.EAST) == null, "and no edge was made to damage")
-	_check(shooter.cover_penalty_for(result.cover_type) == _combat.COVER_PENALTY_HEAVY,
-		"the shooter pays the heavy-cover penalty")
+	_check(shooter.cover_defense_for(result.cover_type) == _combat.COVER_DEFENSE_HEAVY,
+		"the target gets heavy cover's Defense against the shooter")
 	_free_units([shooter, target])
 
 

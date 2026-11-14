@@ -21,7 +21,9 @@ extends RefCounted
 var id: String = ""
 var display_name: String = "Soldier"
 var unit_class: UnitStats.UnitClass = UnitStats.UnitClass.ASSAULT
-var perception: int = 50
+## Aim (docs/design/systems/accuracy). Named `perception` like the stat it
+## feeds; saved under "aim" since the rescale, see `from_dict`.
+var perception: int = 60
 var reflexes: int = 50
 var fitness: int = 50
 var luck: int = 50
@@ -111,7 +113,7 @@ func injury_text() -> String:
 
 
 func stats_text() -> String:
-	return "Per %d  Ref %d  Fit %d  Luck %d  |  %d HP, %d AP" % [
+	return "Aim %d  Ref %d  Fit %d  Luck %d  |  %d HP, %d AP" % [
 		perception, reflexes, fitness, luck, to_stats().max_hp(), to_stats().ap_pool()]
 
 
@@ -142,7 +144,7 @@ func set_injuries(parts: Array) -> void:
 func to_dict() -> Dictionary:
 	return {
 		"id": id, "name": display_name, "class": int(unit_class),
-		"perception": perception, "reflexes": reflexes, "fitness": fitness, "luck": luck,
+		"aim": perception, "reflexes": reflexes, "fitness": fitness, "luck": luck,
 		"weapon": weapon_id, "attachments": attachment_ids.duplicate(), "ammo": ammo_id,
 		"injuries": injuries.duplicate(), "missions": missions_survived,
 	}
@@ -155,7 +157,13 @@ static func from_dict(d: Dictionary) -> SoldierRecord:
 	r.id = String(d.get("id", ""))
 	r.display_name = String(d.get("name", "Soldier"))
 	r.unit_class = clampi(int(d.get("class", 0)), 0, UnitStats.UnitClass.size() - 1) as UnitStats.UnitClass
-	r.perception = int(d.get("perception", 50))
+	# "aim" is the 55-65 scale. A save from before the rescale has only
+	# "perception", on the old 0-99 one, and is mapped across rather than kept: an
+	# old Perception would be read as Aim and sit far above the cap.
+	if d.has("aim"):
+		r.perception = int(d["aim"])
+	else:
+		r.perception = aim_from_old_perception(int(d.get("perception", 60)))
 	r.reflexes = int(d.get("reflexes", 50))
 	r.fitness = int(d.get("fitness", 50))
 	r.luck = int(d.get("luck", 50))
@@ -166,3 +174,12 @@ static func from_dict(d: Dictionary) -> SoldierRecord:
 	r.set_injuries(d.get("injuries", []))
 	r.missions_survived = int(d.get("missions", 0))
 	return r
+
+
+## An old-scale Perception as Aim. The classes rolled it anywhere from 30 (an
+## Assault's floor) to 90 (a Sniper's ceiling); that span maps linearly onto the
+## recruit band, so every saved soldier keeps their place relative to the others
+## and none lands outside what a new recruit could roll.
+static func aim_from_old_perception(old: int) -> int:
+	var t := clampf((old - 30) / 60.0, 0.0, 1.0)
+	return roundi(lerpf(UnitStats.AIM_RECRUIT_MIN, UnitStats.AIM_RECRUIT_MAX, t))

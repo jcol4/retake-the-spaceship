@@ -228,8 +228,13 @@ func _check_stale_claims_expire() -> void:
 ## The second merc is NOT told what the first did. It reads a world in which the
 ## target happens to be pinned, and its own doctrine does the rest.
 func _check_planner_chains_suppress_into_flank() -> void:
-	var a = await _spawn(MERC, EAST_A)
-	var b = await _spawn(MERC, EAST_B)
+	# One tile further out than EAST_A/B, which are exactly 3 from the target:
+	# close quarters (docs/design/systems/close-quarters), where a merc's SMG
+	# shot is 1 AP cheaper where it stands than from the flank tile. The planner
+	# then shoots first and may not have the AP to flank after — real behavior,
+	# noted as an open item in that doc, but not what this check is about.
+	var a = await _spawn(MERC, EAST_A + Vector3i(1, 0, 0))
+	var b = await _spawn(MERC, EAST_B + Vector3i(1, 0, 0))
 	var target = await _spawn(PLAYER, TARGET_TILE)
 	var board = _blackboard_cls.new()
 	var brain_a = _doctrines.merc_brain(board)

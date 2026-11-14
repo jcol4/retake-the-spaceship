@@ -180,8 +180,19 @@ const INITIATIVE_PER_REFLEXES := 0.2
 const LEVEL_BONUS_HP := 0
 const LEVEL_BONUS_INITIATIVE := 0
 
+## AIM, still named `perception` in code and saves. Every hit chance starts here
+## (docs/design/systems/accuracy): a recruit rolls AIM_RECRUIT_MIN-MAX whatever
+## the class, and nothing may take it past AIM_CAP once leveling exists. It was
+## a 0-99 percentile added to the gun's 20-35 and Reflexes, which put the
+## average shot at 125-170 before a single modifier and pinned it at the cap.
+const AIM_RECRUIT_MIN := 55
+const AIM_RECRUIT_MAX := 65
+const AIM_CAP := 87
+
 @export var display_name: String = "Soldier"
-@export_range(0, 99) var perception: int = 50
+@export_range(0, 87) var perception: int = 60
+## Speed of hand: an AP discount on most actions and an Initiative term. It no
+## longer adds to Shoot/Overwatch accuracy (docs/design/systems/accuracy).
 @export_range(0, 99) var reflexes: int = 50
 ## 0-150, not the 0-99 its three neighbours share, and the difference is not
 ## laxity. The other three are PERCENTILES — they feed accuracy and initiative
@@ -233,6 +244,12 @@ func active_weapon() -> WeaponData:
 ## types exist.
 @export var armored: bool = false
 
+## Base DEFENSE: subtracted from every hit chance against this unit, before cover,
+## hunkering and concealment add theirs (Combat.ranged_defense). 0 for soldiers,
+## mercs and most of the roster; the hard-to-hit (the Agile Hunter, the Proctor
+## drone) carry their own. Gear such as camo is meant to add here.
+@export var defense: int = 0
+
 ## Max HP before the Fitness term. 15 is the soldier's — it lands the squad at
 ## 17-22 max HP depending on class, centred on 20 — and non-player types hand-set
 ## their own (Sec 4.5/5.5) rather than being squeezed through the player's
@@ -265,7 +282,9 @@ func active_weapon() -> WeaponData:
 
 # All three read the weapon IN HAND (`active_weapon`), so a carrier's numbers are
 # the pistol's without any caller having to know a body is being carried.
-var weapon_base_accuracy: int:
+## The gun's flat aim (its own modifier plus attachments'), on top of Aim and
+## the archetype's distance table.
+var weapon_aim_modifier: int:
 	get:
 		var w := active_weapon()
 		return w.effective_accuracy() if w else 0
@@ -283,7 +302,12 @@ var mag_size: int:
 # Contact-range attack (Sec 11.4). Separate from the weapon numbers above so a
 # unit can be dangerous in melee and harmless at range, or the reverse — the
 # Fodder swarm has no gun at all (mag_size 0) and only these two matter to it.
-@export var melee_base_accuracy: int = 45
+#
+# melee_base_accuracy is added to Aim (Combat.compute_melee_accuracy). Each
+# preset's was refit when Aim moved to the 55-65 scale so a swing lands about as
+# often as it did: the old odds, capped at 95, minus the new Aim. 15 is a
+# soldier's: Aim 60 swings at ~75%.
+@export var melee_base_accuracy: int = 15
 @export var melee_damage: int = 3
 
 
@@ -297,10 +321,14 @@ func ap_pool() -> int:
 ## short-circuit here, before Reflexes or the weapon get a say; everything else
 ## takes the discounted base. `Unit.action_cost` delegates here, so a flat action
 ## is priced the same for the planner, the HUD and the command that spends it.
-func action_cost(action: Action) -> int:
+##
+## `engaged` is whether the carrier is in close quarters (Unit.is_engaged). A stat
+## block cannot know that — it has no position — so the unit says.
+func action_cost(action: Action, engaged: bool = false) -> int:
 	if is_flat_cost(action):
 		return FLAT_AP_COST[action]
-	return discounted_cost(BASE_AP_COST[action] + weapon_ap_modifier(action), K_REFLEXES[action], reflexes)
+	return discounted_cost(BASE_AP_COST[action] + weapon_ap_modifier(action, engaged),
+		K_REFLEXES[action], reflexes)
 
 
 ## Whether `action` is one of the undiscounted extraction actions. Static so a
@@ -313,12 +341,12 @@ static func is_flat_cost(action: Action) -> bool:
 ## price. Added BEFORE the Reflexes discount and the rounding, so a -1 is a real
 ## AP off rather than one the round-up can swallow. Melee, Grenade and Hunker
 ## don't touch the gun. Aimed Shot isn't in `Action` — see `aimed_ap_modifier`.
-func weapon_ap_modifier(action: Action) -> int:
+func weapon_ap_modifier(action: Action, engaged: bool = false) -> int:
 	var w := active_weapon()
 	if w == null:
 		return 0
 	match action:
-		Action.SHOOT: return w.ap_modifier(WeaponData.ApAction.SHOOT)
+		Action.SHOOT: return w.ap_modifier(WeaponData.ApAction.SHOOT, engaged)
 		Action.OVERWATCH: return w.ap_modifier(WeaponData.ApAction.OVERWATCH)
 		Action.SUPPRESS: return w.ap_modifier(WeaponData.ApAction.SUPPRESS)
 		Action.RELOAD: return w.ap_modifier(WeaponData.ApAction.RELOAD)

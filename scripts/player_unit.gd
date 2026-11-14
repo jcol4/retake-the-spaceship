@@ -329,7 +329,7 @@ func shot_targets() -> Array[Unit]:
 func target_hit_chance(target: Unit) -> int:
 	var action := Combat.ShotAction.SHOOT if mode == Mode.SHOOT else Combat.ShotAction.AIMED_SHOT
 	return clampi(Combat.compute_accuracy(self, target, action, Combat.BodyPart.TORSO)
-		- Penetration.through_penalty(self, target), 1, 99)
+		- Penetration.through_penalty(self, target), Combat.MIN_HIT_CHANCE, Combat.MAX_HIT_CHANCE)
 
 
 ## Picks (or with null, clears) the target Confirm will fire at. Local only.

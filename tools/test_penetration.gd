@@ -15,7 +15,11 @@ extends SceneTree
 ##     round after the body it protects, the first miss blocking the shot,
 ##     collateral never critting;
 ##   - buckshot's half-ring of splash tiles and the splash itself;
-##   - fire_at landing collateral damage and describing it in the log.
+##   - fire_at landing collateral damage and describing it in the log;
+##   - armor: a bracket of pen ignores a point of plate, spent greedily on every
+##     body hit out of the SAME budget passing bodies draws on (so it shortens
+##     the chain and costs keep steps), front bodies too (reach), and what
+##     fire_at actually lands with it — plus the log's "pierced".
 
 const PLAYER := "res://scenes/player_unit.tscn"
 const SWARM := "res://scenes/swarm_unit.tscn"
@@ -67,6 +71,10 @@ func _initialize() -> void:
 	await _check_first_miss_blocks()
 	await _check_splash()
 	await _check_fire_at()
+	await _check_armor_pierced()
+	await _check_armor_shares_budget()
+	await _check_armor_in_front_blocks_reach()
+	await _check_armor_lands()
 
 	print("")
 	if _failures == 0:
@@ -98,7 +106,8 @@ func _check_roster() -> void:
 	_check(br_pen.effective_penetration() == 100, "Penetrator adds 20 (BR -> 100)")
 	_check(br_pen.damage_percent(true, 1) == 0, "and no longer touches armor")
 	var br_fmj = _weapons.make(BATTLE_RIFLE, PackedInt32Array(), FMJ)
-	_check(br_fmj.damage_percent(true, 1) == 34 and br_fmj.effective_accuracy() == 35,
+	_check(br_fmj.damage_percent(true, 1) == 34
+		and br_fmj.effective_accuracy() == _weapons.make(BATTLE_RIFLE).effective_accuracy(),
 		"FMJ: +34% vs armored, no accuracy bonus")
 	var slug = _weapons.make(SHOTGUN, PackedInt32Array(), SLUG)
 	_check(not slug.effective_splash() and slug.effective_penetration() == pens[BATTLE_RIFLE],
@@ -177,14 +186,19 @@ func _check_armored_costs_double() -> void:
 	# LMG 60: the merc is hit free, passing through it costs 50, and the 10 left
 	# reaches the next body but cannot pay to pass it. Unarmored, the same round
 	# would still have 35 after the first pass and reach a third body.
+	# Only rolls where the body behind was HIT count against "goes no further": a
+	# missed body costs nothing to pass (§3), and since the 95% hit cap a miss is
+	# no longer near-impossible.
 	var reached_behind := 0
 	var reached_further := 0
 	for i in 40:
 		var r = _pen.resolve(shooter, merc, _combat.ShotAction.SHOOT, _combat.BodyPart.TORSO)
+		var behind_hit := false
 		for c in r.collateral:
 			if c.unit == behind:
 				reached_behind += 1
-			if c.unit == further:
+				behind_hit = c.hit
+			if c.unit == further and behind_hit:
 				reached_further += 1
 	_check(reached_behind > 20, "an LMG round passes through an armored merc (%d of 40)" % reached_behind)
 	_check(reached_further == 0, "but spends 50 doing it and goes no further (%d)" % reached_further)
@@ -286,6 +300,134 @@ func _check_fire_at() -> void:
 	_check(behind_hurt, "fire_at lands the collateral damage")
 	_check(log_seen, "and the log line names it")
 	await _free([shooter, target, behind])
+
+
+## A bracket of pen per point of plate, never more than the plate has.
+func _check_armor_pierced() -> void:
+	var body = await _spawn(SWARM, 12)
+	body.armour_bonus = 2
+	_check(_pen.armor_pierced(80, body) == 2, "pen 80 vs 2 plate: ignores 2 (capped by the plate)")
+	body.armour_bonus = 6
+	_check(_pen.armor_pierced(80, body) == 3, "pen 80 vs 6 plate: ignores 3 (one per bracket)")
+	_check(_pen.armor_pierced(30, body) == 1, "pen 30 (SMG) ignores 1")
+	_check(_pen.armor_pierced(0, body) == 0, "pen 0 (buckshot) ignores none")
+	body.armour_bonus = 0
+	_check(_pen.armor_pierced(80, body) == 0, "no plate, nothing to spend")
+	_check(body.damage_taken(10, 2) == 10 and body.damage_taken(10) == 10, "no plate: damage untouched")
+	body.armour_bonus = 3
+	_check(body.damage_taken(10) == 7 and body.damage_taken(10, 1) == 8 and body.damage_taken(10, 3) == 10,
+		"damage_taken: 3 plate takes 3, 2 with one ignored, 0 with all three")
+	await _free([body])
+
+
+## One budget: pen spent on a body's plate is pen the bodies behind never see,
+## and every bracket of it is a keep step. Shot from 4 tiles out so the Battle
+## Rifle is not in close quarters.
+func _check_armor_shares_budget() -> void:
+	var shooter = await _shooter(BATTLE_RIFLE)
+	var target = await _spawn(SWARM, 12)
+	var behind = await _spawn(SWARM, 14)
+	var further = await _spawn(SWARM, 16)
+	var beyond = await _spawn(SWARM, 18)
+	# 1 plate, not armored: BR 80 spends 25 on the plate (55), 25 to pass (30),
+	# so the next body takes 10 x keep^2 = 6 where it would take 8. It passes that
+	# one too (5 left) and reaches a third — but unplated it would have reached a
+	# fourth (the damage-chain check), and now it cannot.
+	target.armour_bonus = 1
+	var chain_seen := false
+	var pierced_wrong := 0
+	var beyond_rolled := 0
+	for i in 40:
+		var r = _pen.resolve(shooter, target, _combat.ShotAction.SHOOT, _combat.BodyPart.TORSO)
+		if not r.hit or r.crit:
+			continue
+		if r.armor_ignored != 1:
+			pierced_wrong += 1
+		# A missed body is passed for free (§3), so only a line where every body in
+		# between was hit says anything about how far the pen reaches.
+		var all_hit := true
+		for c in r.collateral:
+			if c.unit == behind and c.hit and c.damage == 6:
+				chain_seen = true
+			if c.unit == beyond and all_hit:
+				beyond_rolled += 1
+			if not c.hit:
+				all_hit = false
+	_check(pierced_wrong == 0, "the target's 1 plate is pierced on every hit (%d wrong)" % pierced_wrong)
+	_check(chain_seen, "pen spent on plate is a keep step: the body behind takes 6, not 8")
+	_check(beyond_rolled == 0, "and the round stops a body short of where it would have (%d)" % beyond_rolled)
+	# 2 plate and armored: 50 on the plate leaves 30, short of the 50 to pass.
+	target.armour_bonus = 2
+	target.stats.armored = true
+	var behind_rolled := 0
+	for i in 40:
+		var r = _pen.resolve(shooter, target, _combat.ShotAction.SHOOT, _combat.BodyPart.TORSO)
+		for c in r.collateral:
+			if c.unit == behind:
+				behind_rolled += 1
+	_check(behind_rolled == 0, "a round that pays for 2 plate cannot then pass an armored body (%d)" % behind_rolled)
+	# Collateral pierces with what is LEFT: through an unarmored target (55 left),
+	# a 2-plate body behind still has both points ignored.
+	target.armour_bonus = 0
+	target.stats.armored = false
+	behind.armour_bonus = 2
+	var behind_pierced := -1
+	for i in 40:
+		var r = _pen.resolve(shooter, target, _combat.ShotAction.SHOOT, _combat.BodyPart.TORSO)
+		for c in r.collateral:
+			if c.unit == behind and c.hit:
+				behind_pierced = c.armor_ignored
+		if behind_pierced >= 0:
+			break
+	_check(behind_pierced == 2, "collateral spends the pen it has left on its own plate (%d)" % behind_pierced)
+	await _free([shooter, target, behind, further, beyond])
+
+
+## Every body spends as it is hit, front bodies included — so plate in front can
+## eat the pen the intended target needed, and it cannot be selected.
+func _check_armor_in_front_blocks_reach() -> void:
+	var shooter = await _shooter(BATTLE_RIFLE)
+	var front = await _spawn(MERC, 12)
+	var target = await _spawn(SWARM, 14)
+	front.stats.armored = true
+	_check(shooter.has_shot_at(target), "BR 80 reaches past an armored merc with no plate (50 to pass)")
+	front.armour_bonus = 1
+	_check(shooter.has_shot_at(target), "1 plate on it: 25 + 50 <= 80, still through")
+	front.armour_bonus = 2
+	_check(not shooter.has_shot_at(target), "2 plate on it: 50 + 50 > 80 - the target behind is out of reach")
+	await _free([shooter, front, target])
+
+
+## What fire_at actually lands, and the log saying why.
+func _check_armor_lands() -> void:
+	var shooter = await _shooter(BATTLE_RIFLE)
+	var target = await _spawn(SWARM, 12)
+	var landed := -1
+	var log_line := ""
+	for i in 20:
+		target.current_hp = 999
+		target.armour_bonus = 3
+		shooter.ammo = 99
+		var r = await shooter.fire_at(target, _combat.ShotAction.SHOOT)
+		if r.hit and not r.crit:
+			landed = 999 - target.current_hp
+			log_line = _combat.describe(r)
+			break
+	_check(landed == 10, "BR through 3 plate: all 10 land (%d)" % landed)
+	_check(log_line.contains("pierced 3 armor"), "and the log says the plate was pierced (%s)" % log_line)
+	shooter._equip(SMG, PackedInt32Array(), -1)
+	shooter.stats.perception = 99
+	landed = -1
+	for i in 20:
+		target.current_hp = 999
+		target.armour_bonus = 3
+		shooter.ammo = 99
+		var r = await shooter.fire_at(target, _combat.ShotAction.SHOOT)
+		if r.hit and not r.crit:
+			landed = 999 - target.current_hp
+			break
+	_check(landed == 4, "SMG (pen 30) through 3 plate: ignores 1, lands 6 - 2 = 4 (%d)" % landed)
+	await _free([shooter, target])
 
 
 func _shooter(weapon: int, x: int = SHOOTER_X):

@@ -15,19 +15,25 @@ extends RefCounted
 ## are pace-and-budget values that happen to also buy a little toughness — the
 ## reverse of what they meant when they were HP and nothing else.
 
+## Aim ("perception") is the same for every class: a recruit is 55-65 whatever
+## they trained as (docs/design/systems/accuracy). The classes are placeholders,
+## and a Sniper's eye was the one class trait big enough to hide every modifier
+## in the game under the hit-chance cap.
+const AIM := [UnitStats.AIM_RECRUIT_MIN, UnitStats.AIM_RECRUIT_MAX]
+
 # Per class: { stat: [min, max] }
 const RANGES := {
 	UnitStats.UnitClass.ASSAULT: {
-		"perception": [30, 50], "reflexes": [45, 65], "fitness": [60, 85], "luck": [30, 60],
+		"perception": AIM, "reflexes": [45, 65], "fitness": [60, 85], "luck": [30, 60],
 	},
 	UnitStats.UnitClass.SNIPER: {
-		"perception": [65, 90], "reflexes": [45, 65], "fitness": [30, 50], "luck": [30, 60],
+		"perception": AIM, "reflexes": [45, 65], "fitness": [30, 50], "luck": [30, 60],
 	},
 	UnitStats.UnitClass.SUPPORT: {
-		"perception": [45, 65], "reflexes": [45, 65], "fitness": [45, 65], "luck": [45, 75],
+		"perception": AIM, "reflexes": [45, 65], "fitness": [45, 65], "luck": [45, 75],
 	},
 	UnitStats.UnitClass.HEAVY: {
-		"perception": [40, 60], "reflexes": [25, 45], "fitness": [65, 90], "luck": [30, 60],
+		"perception": AIM, "reflexes": [25, 45], "fitness": [65, 90], "luck": [30, 60],
 	},
 }
 

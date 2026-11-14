@@ -15,6 +15,19 @@ accuracy per tile, a real but noticeably gentler falloff than the Shotgun's −1
 short-to-medium-range weapon, not a true long-range option, but it doesn't fall off a cliff the way
 the Shotgun does.
 
+## Close quarters
+
+While a hostile the carrier can see is within 3 tiles
+([close quarters](../../../systems/close-quarters/)), **Shoot costs 1 AP less**. This is the
+"cheap, reliable Shoot spam" this page always promised. Before it, every gun's firing modifier was
+0, so the SMG paid full price for the roster's smallest hit.
+
+For a typical soldier (Reflexes 45–65), Shoot goes from 5 AP to 4, and to 3 with a Laser Sight (the
+discount stacks up to the existing −2 cap). A 12 AP soldier who is engaged and carrying a Laser
+Sight fires 4 times. That empties the magazine for up to 24 damage, enough to kill a ~20 HP soldier
+in one activation if every shot lands. It only works up close, it burns the mag every turn, and the
+Laser Sight makes the carrier easier to spot.
+
 ## Suggested class
 
 [Support](../units/support/) — a Support soldier's turn is usually built around its abilities

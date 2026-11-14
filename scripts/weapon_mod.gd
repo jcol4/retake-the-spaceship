@@ -5,7 +5,9 @@ extends Resource
 ## is a bonus on the carrying weapon; WeaponData is the only place they're summed.
 ##
 ## Stacking rules:
-## - Accuracy, mag, reserve, range, falloff and AP are flat and ADD.
+## - Accuracy, mag, reserve and AP are flat and ADD.
+## - A range archetype override REPLACES the gun's own (the first mod that sets
+##   one wins; nothing in the roster sets two).
 ## - Damage percentages ADD across every mod: Long Barrel (+20%) with Hollow
 ##   Point (+50%) is +70%, not x1.8.
 ## - Noise and visibility multipliers MULTIPLY: Suppressor (x0.5) with Subsonic
@@ -34,10 +36,10 @@ extends Resource
 # --- Ammo capacity and range ---
 @export var mag_size: int = 0
 @export var reserve: int = 0  # ignored on a weapon with unlimited reserve (-1)
-# Tiles added to the weapon's optimal range, and %/tile taken off its falloff.
-# Both only matter on a weapon that has a falloff to begin with.
-@export var optimal_range: int = 0
-@export var falloff_rate: int = 0
+# A WeaponArchetype.Id whose distance table the weapon reads instead of its own,
+# -1 for none. Slug Rounds turn the Shotgun's point-blank table into the Assault
+# Rifle's (docs/design/systems/accuracy).
+@export var archetype_override: int = -1
 
 # --- Penetration (docs/design/systems/penetration) ---
 # Points of percentile penetration added to the weapon's own (Penetration).
@@ -63,7 +65,7 @@ const LABELS := {
 	"accuracy": "Acc", "close_accuracy": "Acc up close", "damage_pct": "Dmg%",
 	"damage_pct_vs_armored": "Dmg% vs armor", "damage_pct_vs_unarmored": "Dmg% vs unarmored",
 	"close_damage_pct": "Dmg% up close", "mag_size": "Mag", "reserve": "Reserve",
-	"optimal_range": "Range", "falloff_rate": "Falloff", "penetration": "Pen", "shoot_ap": "Shoot AP",
+	"penetration": "Pen", "shoot_ap": "Shoot AP",
 	"aimed_ap": "Aimed AP", "overwatch_ap": "Overwatch AP", "suppress_ap": "Suppress AP",
 	"reload_ap": "Reload AP",
 }
@@ -94,4 +96,6 @@ static func describe_spec(spec: Dictionary) -> String:
 		parts.append("No dark penalty")
 	if spec.get("replaces_splash", false):
 		parts.append("No spread")
+	if spec.get("archetype_override", -1) >= 0:
+		parts.append("%s range" % WeaponArchetype.display_name(spec["archetype_override"]))
 	return ", ".join(parts)

@@ -21,8 +21,8 @@ signal display_lighting_changed
 
 ## What a tile no fixture or beam reaches is worth, so the rules agree with the
 ## faint ambient the scene actually renders (main.tscn ambient_light_energy 0.2).
-## At the old 0.0 the screen showed a legible room while Combat.light_modifier
-## charged the full -30 for standing in it, which is exactly the divergence
+## At the old 0.0 the screen showed a legible room while Combat.concealment
+## granted the full +30 Defense for standing in it, which is exactly the divergence
 ## the barrel-mounted flashlight (unit_visual.gd) is aimed to prevent.
 ##
 ## Moved up with that ambient rather than pinned: the two are a pair, and the
@@ -31,7 +31,7 @@ signal display_lighting_changed
 ## EnemyUnit.sight_light_threshold (25.0) is the hard ceiling, not a guideline:
 ## at or above it an unlit tile stops hiding anyone and the whole stealth design
 ## goes with it. 12 keeps clear water under that. The cost is about 5 accuracy
-## points against the old floor — Combat.light_modifier's -30 becomes -25.2.
+## points against the old floor — Combat.concealment's +30 becomes +25.2.
 const AMBIENT_FLOOR := 12.0
 const FLASHLIGHT_RANGE := 6.0  # tiles (Sec 5.2)
 const FLASHLIGHT_CONE_DEGREES := 90.0  # Sec 5.2

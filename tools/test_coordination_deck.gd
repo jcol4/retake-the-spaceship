@@ -127,9 +127,9 @@ func _check_squads_are_separated_by_compartment() -> void:
 
 
 ## NEITHER COVER TIER BLOCKS LINE OF SIGHT, which is the XCOM model the design
-## cites: cover is an accuracy penalty, not an impossibility. Cover props sit on
-## collision layer 4 and LOS rays mask layer 1, so the rays pass straight over
-## them and `Combat.COVER_PENALTY_HEAVY` does the work instead.
+## cites: cover is Defense, not an impossibility. Cover props sit on collision
+## layer 4 and LOS rays mask layer 1, so the rays pass straight over them and
+## `Combat.COVER_DEFENSE_HEAVY` does the work instead.
 ##
 ## Asserted because getting this wrong is expensive and quiet. It briefly LOOKED
 ## false during development — a stale wall left behind by a rebuilt deck sat

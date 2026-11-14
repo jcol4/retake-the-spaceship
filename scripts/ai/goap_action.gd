@@ -101,6 +101,13 @@ func execute(_unit: Unit, _ctx: Dictionary) -> bool:
 	return false
 
 
+## Where the unit stands once this action is done, given it started on `from` —
+## what the planner prices the NEXT step of a plan at (GoapPlanner.PLAN_TILE).
+## Unmoved by default; the move actions return their destination.
+func planned_tile(_unit: Unit, _ctx: Dictionary, from: Vector3i) -> Vector3i:
+	return from
+
+
 ## The effects the planner should assume for `unit` right now. Defaults to the
 ## static `effects`; overridden by an action whose outcome depends on the board
 ## (an `Advance` that cannot reach a shot this activation does not promise one).

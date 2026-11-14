@@ -244,8 +244,8 @@ func _on_replicated() -> void:
 		_apply_count()
 
 
-func take_damage(amount: int) -> int:
-	var dealt := super(amount)
+func take_damage(amount: int, armor_ignore: int = 0) -> int:
+	var dealt := super(amount, armor_ignore)
 	if not is_downed:
 		_apply_count()
 	return dealt

@@ -137,8 +137,8 @@ func _check_pistol_while_carrying() -> void:
 	body.take_damage(9999)
 	carrier.pick_up(body)
 	_check(carrier.active_weapon().id == PISTOL, "carrying draws the pistol")
-	_check(carrier.stats.weapon_base_accuracy == 30 and carrier.stats.weapon_damage == 5
-		and carrier.stats.mag_size == 8, "Shoot reads the pistol's numbers (acc 30 / dmg 5 / mag 8)")
+	_check(carrier.active_weapon().effective_archetype() == 5 and carrier.stats.weapon_damage == 5
+		and carrier.stats.mag_size == 8, "Shoot reads the pistol's numbers (Pistol table / dmg 5 / mag 8)")
 	_check(_combat.shot_damage(carrier, target) == 5, "a shot does the pistol's damage")
 	_check(carrier.gunfire_noise_radius() == 4, "and makes the pistol's noise")
 	_check(carrier.ammo == 8 and carrier.reserve == 16, "with the pistol's own magazine and reserve (%d/%d)" % [carrier.ammo, carrier.reserve])

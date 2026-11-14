@@ -242,6 +242,6 @@ func apply_body_part_damage(part: int, amount: int) -> bool:
 	return false
 
 
-func damage_taken(amount: int) -> int:
-	var through := super(amount)
+func damage_taken(amount: int, armor_ignore: int = 0) -> int:
+	var through := super(amount, armor_ignore)
 	return maxi(1, roundi(through * broken_head_damage_mult)) if head_broken else through

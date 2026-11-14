@@ -22,7 +22,7 @@ extends EnemyUnit
 ## planner and no blackboard access, and never learns it helped.
 
 ## Light level on the target's tile at or below which this counts as darkness.
-## Deliberately the same reading `Combat.light_modifier` and alien sight use — a
+## Deliberately the same reading `Combat.concealment` and alien sight use — a
 ## Hunter ambushes in the dark the game already agrees is dark.
 @export var ambush_light_threshold: float = 25.0
 ## How close the quarry must be for the strike to count as a surprise.

@@ -1,19 +1,24 @@
 extends Node3D
-## Rough shot VFX: a tracer per round, and an impact flash where a round or a
-## swing connects. Spawned nodes free themselves when their tween completes.
+## Rough shot VFX: a tracer per round, an impact flash where a round or a swing
+## connects, and the muzzle light that floods the shooter's room on every round.
+## Spawned nodes free themselves when their tween completes.
 ##
 ## The tracer (see TRACER_SPEED) is not the old beam come back. THERE IS NO BEAM
-## AND NO MUZZLE LIGHT any more. Both were stand-ins from
-## before the character art existed: the beam said "a shot travelled" because
-## nothing on the shooter showed it, and the room-filling `OmniLight3D` said "a
-## gun went off" for the same reason. The muzzle flash (MuzzleFlash) now says
-## both, at the barrel, on the round the kick lands on -- and it says it far
-## better than a 10-energy white flood, which blew out the whole room and took
-## the flash it was supposed to be selling with it.
+## any more: it was a stand-in from before the character art existed, saying "a
+## shot travelled" because nothing on the shooter showed it.
 ##
-## What is left is the one thing neither of those was doing: saying which rounds
-## CONNECTED. That is target-end feedback, not shooter-end decoration, and it is
-## shared with melee, which never had a beam to begin with.
+## The muzzle light (see MUZZLE_LIGHT_ENERGY) IS a room-filling light again, but
+## not the old one. That was a white, shadowless 25 m OmniLight3D standing in for
+## a missing flash; it lit every room on screen through the walls, evenly, and
+## read as the screen flickering rather than a gun going off. This one is the
+## bodycam look: warm, one pulse per round with dark between, and SHADOWED, so
+## the walls keep it in the shooter's room, it spills out of doorways, and every
+## body and crate throws a long shadow away from the gun. It is meant to blow the
+## nearest surfaces out — that is the drama — and the barrel flash still sits on
+## top of it.
+##
+## Tracers and impacts say which rounds CONNECTED. That is target-end feedback,
+## not shooter-end decoration, and it is shared with melee.
 
 ## How long an impact flash takes to fade out.
 const FADE_DURATION := 0.28
@@ -64,8 +69,45 @@ const RAY_SKIP := 1.0
 ## Static so it survives the VfxManager being rebuilt with the mission scene.
 static var tracers_enabled := true
 
+## Muzzle light: one warm, shadowed OmniLight3D pulse per round, from just ahead
+## of the barrel. Starting values for the bodycam reference (a corridor flooded
+## amber, nearest lockers blown out, far end still lit); tune by screenshot
+## (tools/shot_muzzle_light.gd).
+const MUZZLE_LIGHT_COLOR := Color(1.0, 0.64, 0.36)
+## Peak energy at weapon scale 1. No tonemapper (main.tscn), so the nearest
+## surfaces clip to a pale orange on purpose.
+const MUZZLE_LIGHT_ENERGY := 16.0
+## Metres. Long enough for a corridor; the shadows, not the range, keep it in
+## the room.
+const MUZZLE_LIGHT_RANGE := 18.0
+## OmniLight3D.omni_attenuation: lower is flatter, a flood rather than a hotspot.
+const MUZZLE_LIGHT_ATTENUATION := 0.3
+## Haze the flash lights up (main.tscn has volumetric fog on). Kept low: the fog
+## fills the void around the deck too, and at 3 the whole screen went brown —
+## the old flood's "the screen flickered" read, back again.
+const MUZZLE_LIGHT_FOG := 0.3
+## Specular share. Low: at 1 every wall panel threw a blown-out hotspot, which
+## reads as a lamp on the wall rather than the room filling with light.
+const MUZZLE_LIGHT_SPECULAR := 0.2
+## Ahead of the barrel along the bore, so the gun itself does not shadow the room.
+const MUZZLE_LIGHT_AHEAD := 0.35
+## Above the barrel. At barrel height the floor across the room takes the light
+## at a graze and stays dark while the walls catch it all; lifted, the floor
+## fills, and bodies still throw long shadows.
+const MUZZLE_LIGHT_LIFT := 0.6
+## Full energy for this long, then out over MUZZLE_LIGHT_FADE. Together under
+## UnitVisual.BURST_CADENCE (0.11 s), so a burst strobes: lit, dark, lit.
+const MUZZLE_LIGHT_HOLD := 0.035
+const MUZZLE_LIGHT_FADE := 0.06
+## Shadowed lights alive at once. A fourth shooter steals the oldest pulse, so
+## the extra shadow cost is bounded however many guns go off.
+const MUZZLE_LIGHT_POOL := 3
+
 var _tracer_mesh: QuadMesh
 var _tracer_material: ShaderMaterial
+var _muzzle_lights: Array[OmniLight3D] = []
+var _muzzle_tweens: Array = []  # Tween or null, parallel to _muzzle_lights
+var _muzzle_next := 0
 
 
 func _ready() -> void:
@@ -236,3 +278,72 @@ func _flash_material(color: Color) -> StandardMaterial3D:
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	material.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
 	return material
+
+
+## One round's muzzle light at `at` (the barrel tip), pushed MUZZLE_LIGHT_AHEAD
+## along `bore`. `scale` is the weapon's (WeaponPresets.muzzle_light): energy
+## scales with it, range with its square root. Cosmetic and per peer.
+func muzzle_light(at: Vector3, bore: Vector3 = Vector3.ZERO, scale: float = 1.0) -> void:
+	if scale <= 0.0:
+		return
+	var i := _muzzle_next
+	_muzzle_next = (_muzzle_next + 1) % MUZZLE_LIGHT_POOL
+	if i >= _muzzle_lights.size():
+		_muzzle_lights.append(_make_muzzle_light())
+		_muzzle_tweens.append(null)
+	var light := _muzzle_lights[i]
+	var tween: Tween = _muzzle_tweens[i]
+	if tween and tween.is_valid():
+		tween.kill()  # the oldest pulse is stolen
+	var ahead := bore.normalized() * MUZZLE_LIGHT_AHEAD if bore.length_squared() > 0.0001 else Vector3.ZERO
+	light.global_position = at + ahead + Vector3(0.0, MUZZLE_LIGHT_LIFT, 0.0)
+	light.omni_range = MUZZLE_LIGHT_RANGE * sqrt(scale)
+	light.light_energy = MUZZLE_LIGHT_ENERGY * scale
+	light.visible = true
+	tween = create_tween()
+	tween.tween_interval(MUZZLE_LIGHT_HOLD)
+	tween.tween_property(light, "light_energy", 0.0, MUZZLE_LIGHT_FADE) \
+		.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+	# Hidden, not just dark: a visible light at zero energy still renders shadows.
+	tween.tween_callback(light.hide)
+	_muzzle_tweens[i] = tween
+
+
+## `rounds` muzzle lights `cadence` apart, without holding up the caller. For a
+## shooter fog of war keeps off the screen: its burst plays instantly and draws
+## nothing, but the light it throws still spills out of its room.
+func muzzle_strobe(at: Vector3, rounds: int, cadence: float, scale: float = 1.0) -> void:
+	if rounds <= 0 or scale <= 0.0:
+		return
+	muzzle_light(at, Vector3.ZERO, scale)
+	if rounds == 1:
+		return
+	var tween := create_tween()
+	for _i in rounds - 1:
+		tween.tween_interval(cadence)
+		tween.tween_callback(muzzle_light.bind(at, Vector3.ZERO, scale))
+
+
+## Pool lights alive right now (tests).
+func muzzle_lights_lit() -> int:
+	var n := 0
+	for light in _muzzle_lights:
+		if light.visible:
+			n += 1
+	return n
+
+
+func _make_muzzle_light() -> OmniLight3D:
+	var light := OmniLight3D.new()
+	light.name = "MuzzleLight%d" % (_muzzle_lights.size() + 1)
+	light.light_color = MUZZLE_LIGHT_COLOR
+	light.omni_attenuation = MUZZLE_LIGHT_ATTENUATION
+	light.light_volumetric_fog_energy = MUZZLE_LIGHT_FOG
+	light.light_specular = MUZZLE_LIGHT_SPECULAR
+	light.shadow_enabled = true
+	# Two shadow renders instead of six; the seam never shows in a 0.1 s pulse.
+	light.omni_shadow_mode = OmniLight3D.SHADOW_DUAL_PARABOLOID
+	light.shadow_blur = 0.1  # hard, like the fixtures
+	light.visible = false
+	add_child(light)
+	return light

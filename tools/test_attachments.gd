@@ -91,12 +91,12 @@ func _check_bare_weapon_is_unchanged() -> void:
 
 func _check_flat_bonuses_stack() -> void:
 	var w = _make(W.ASSAULT_RIFLE, [A.VERTICAL_GRIP, A.MUZZLE_BRAKE, A.EXTENDED_MAG])
-	_check(w.effective_accuracy() == w.base_accuracy + 10,
-		"grip + brake = +10 accuracy (got %+d)" % (w.effective_accuracy() - w.base_accuracy))
+	_check(w.effective_accuracy() == w.aim_modifier + 10,
+		"grip + brake = +10 accuracy (got %+d)" % (w.effective_accuracy() - w.aim_modifier))
 	_check(w.effective_mag_size() == w.mag_size + 1, "extended mag adds 1 round")
 	var stats = _stats_with(w)
-	_check(stats.weapon_base_accuracy == w.effective_accuracy(),
-		"UnitStats.weapon_base_accuracy reads the modded total (what Combat uses)")
+	_check(stats.weapon_aim_modifier == w.effective_accuracy(),
+		"UnitStats.weapon_aim_modifier reads the modded total (what Combat uses)")
 
 
 func _check_one_per_slot() -> void:
@@ -170,7 +170,11 @@ func _check_armored_ammo() -> void:
 func _check_slugs() -> void:
 	var bare = _make(W.SHOTGUN)
 	var slug = _make(W.SHOTGUN, [], M.SLUG)
-	_check(slug.effective_optimal_range() == bare.optimal_range + 3, "slugs push optimal range out 3 tiles")
+	# Slugs read the Assault Rifle's distance table instead of the Shotgun's
+	# (docs/design/systems/accuracy): no worse than the open at 9 tiles, where
+	# buckshot is down 60.
+	_check(slug.range_modifier(9) == 0 and bare.range_modifier(9) == -60,
+		"slugs swap the Shotgun onto the Assault Rifle's distance table")
 	_check(slug.damage_percent(true, 6) == 50 and slug.damage_percent(false, 6) == 25,
 		"slugs at range: +50% armored, +25% unarmored")
 	_check(slug.damage_percent(true, 4) == 16 and slug.damage_percent(false, 4) == -9,
@@ -201,15 +205,16 @@ func _check_every_preset_builds() -> void:
 func _check_thermal_in_combat() -> void:
 	var shooter = await _spawn(PLAYER, ANCHOR)
 	var target = await _spawn(MERC, ANCHOR + Vector3i(3, 0, 0))
-	shooter.stats.perception = 10
+	# Clear of both ends of the 1-95 clamp in the dark and with the sight.
+	shooter.stats.perception = 50
 	shooter.stats.reflexes = 0
 	_grid.get_tile(target.grid_pos).light_value = 0.0
 	shooter.stats.weapon = _make(W.ASSAULT_RIFLE)
 	var dark: int = _combat.compute_accuracy(shooter, target, 0)
 	shooter.stats.weapon = _make(W.ASSAULT_RIFLE, [A.THERMAL_SIGHT])
 	var thermal: int = _combat.compute_accuracy(shooter, target, 0)
-	_check(thermal == dark + 7 + _combat.LIGHT_DARK_PENALTY,
-		"thermal in the dark: +7 and no darkness penalty (%d -> %d)" % [dark, thermal])
+	_check(thermal == dark + 7 + _combat.CONCEALMENT_DARK,
+		"thermal in the dark: +7 and no concealment (%d -> %d)" % [dark, thermal])
 	_free([shooter, target])
 
 

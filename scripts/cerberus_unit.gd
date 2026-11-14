@@ -300,10 +300,15 @@ func effective_armor() -> int:
 	return 0 if emp_turns > 0 else armor_value
 
 
-func damage_taken(amount: int) -> int:
+## Plate, not armour patches: a robot's `armour_bonus` was never subtracted.
+func armor() -> int:
+	return effective_armor()
+
+
+func damage_taken(amount: int, armor_ignore: int = 0) -> int:
 	if amount <= 0:
 		return 0
-	return maxi(MIN_DAMAGE_THROUGH_ARMOR, amount - effective_armor())
+	return maxi(MIN_DAMAGE_THROUGH_ARMOR, amount - maxi(0, effective_armor() - armor_ignore))
 
 
 ## Applies an EMP hit. `turns` is the roster default; this unit's own

@@ -34,8 +34,10 @@ static func rifleman(display_name: String, veteran: bool = false) -> UnitStats:
 	var stats := UnitStats.new()
 	stats.armored = true  # see UnitStats.armored
 	stats.display_name = display_name
-	# Against a rolled Assault's 30-50 / 45-65 / 60-85 / 30-60.
-	stats.perception = randi_range(30, 45)
+	# Against a rolled Assault's 55-65 / 45-65 / 60-85 / 30-60. Aim at PARITY with
+	# the squad (docs/design/systems/accuracy): professionals shoot like the
+	# player's soldiers do, and win by coordination, not by a better eye.
+	stats.perception = randi_range(UnitStats.AIM_RECRUIT_MIN, UnitStats.AIM_RECRUIT_MAX)
 	stats.reflexes = randi_range(35, 55)
 	stats.fitness = randi_range(50, 70)  # 9-11 AP, a shade under a soldier's 10-12
 	stats.luck = randi_range(25, 45)
@@ -59,7 +61,7 @@ static func rifleman(display_name: String, veteran: bool = false) -> UnitStats:
 	# Full parity with the player at contact range too. They are not a melee
 	# tier, but a mercenary backed into a corner swings rather than politely
 	# running out of options.
-	stats.melee_base_accuracy = 40
+	stats.melee_base_accuracy = 15  # a soldier's: Aim 60 swings at ~75%
 	stats.melee_damage = 4
 	if veteran:
 		_apply_veteran(stats)
@@ -76,9 +78,9 @@ static func rifleman(display_name: String, veteran: bool = false) -> UnitStats:
 static func support(display_name: String, veteran: bool = false) -> UnitStats:
 	var stats := rifleman(display_name)
 	stats.weapon = WeaponPresets.make(WeaponPresets.WeaponId.LMG)
-	# Steadier and slower than its squadmates: it is here to put rounds in one
-	# direction for a whole activation, not to reposition.
-	stats.perception = randi_range(35, 50)
+	# Slower than its squadmates: it is here to put rounds in one direction for a
+	# whole activation, not to reposition. Same Aim as the rest of the crew.
+	stats.perception = randi_range(UnitStats.AIM_RECRUIT_MIN, UnitStats.AIM_RECRUIT_MAX)
 	stats.reflexes = randi_range(30, 45)
 	if veteran:
 		_apply_veteran(stats)

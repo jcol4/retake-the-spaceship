@@ -49,8 +49,10 @@ class Attack extends GoapAction:
 			return false
 		return true
 
-	func ap_cost(unit: Unit, _ctx: Dictionary) -> int:
-		return unit.action_cost(UnitStats.Action.SHOOT)
+	## Priced where the plan has the unit standing (GoapBrain.shot_cost): after a
+	## move, the shot the destination gives — cheaper for an SMG in close quarters.
+	func ap_cost(unit: Unit, ctx: Dictionary) -> int:
+		return GoapBrain.shot_cost(unit, ctx)
 
 	## hit% * weapon damage — the plain expected-value reading, ahead of the crit
 	## roll (base damage is deterministic; only the crit multiplier is
@@ -100,8 +102,8 @@ class AttackFromCover extends GoapAction:
 		# a crate at a target it cannot realistically hit.
 		return Combat.compute_accuracy(unit, target, Combat.ShotAction.SHOOT) >= GoapBrain.MIN_VIABLE_ACCURACY
 
-	func ap_cost(unit: Unit, _ctx: Dictionary) -> int:
-		return unit.action_cost(UnitStats.Action.SHOOT)
+	func ap_cost(unit: Unit, ctx: Dictionary) -> int:
+		return GoapBrain.shot_cost(unit, ctx)  # see Attack.ap_cost
 
 	func expected_value(unit: Unit, ctx: Dictionary) -> float:
 		var target: Unit = ctx.get("target")
@@ -197,6 +199,10 @@ class Flank extends GoapAction:
 		var pick := _pick(unit, ctx)
 		return unit.move_cost_for(int(pick.get("steps", 1))) if not pick.is_empty() else 99
 
+	func planned_tile(unit: Unit, ctx: Dictionary, from: Vector3i) -> Vector3i:
+		var pick := _pick(unit, ctx)
+		return pick["tile"] if not pick.is_empty() else from
+
 	## Whether the flank tile is also in cover from the target, so the planner
 	## knows [Flank, AttackFromCover] works there — and, just as important, that
 	## an uncovered flank tile leaves the unit OUT of cover it may be in now.
@@ -289,6 +295,9 @@ class Flank extends GoapAction:
 				continue
 			if Combat.defending_cover(tile, target.grid_pos)[0] != MapData.Cover.NONE:
 				continue
+			# The reach above assumed the cheapest shot; this one's real price.
+			if not GoapBrain.keeps_shot_at(unit, tile, steps):
+				continue
 			# The flanker will be at rest on the tile when it shoots, so it may
 			# lean from it; the target leans if it is at rest now (GDD §6.1.2).
 			# And the shot has to be worth taking, not merely possible — a flank
@@ -321,6 +330,10 @@ class RepositionToCover extends GoapAction:
 	func ap_cost(unit: Unit, ctx: Dictionary) -> int:
 		var pick := _pick(unit, ctx)
 		return unit.move_cost_for(int(pick.get("steps", 1))) if not pick.is_empty() else 99
+
+	func planned_tile(unit: Unit, ctx: Dictionary, from: Vector3i) -> Vector3i:
+		var pick := _pick(unit, ctx)
+		return pick["tile"] if not pick.is_empty() else from
 
 	## Whether the cover tile keeps (or gains) the flank. The planner used to
 	## assume a flank survived any move, so a wounded merc — barred from a plain
@@ -384,6 +397,8 @@ class RepositionToCover extends GoapAction:
 				continue
 			if Combat.defending_cover(threat.grid_pos, tile)[0] == MapData.Cover.NONE:
 				continue
+			if not GoapBrain.keeps_shot_at(unit, tile, steps):
+				continue
 			if not GoapBrain.shot_viable_from(unit, tile, threat):
 				continue
 			var score := steps
@@ -419,8 +434,8 @@ class DestroyCover extends GoapAction:
 		var defence := Combat.defending_cover(unit.grid_pos, target.grid_pos)
 		return defence[0] != MapData.Cover.NONE and not defence[2]
 
-	func ap_cost(unit: Unit, _ctx: Dictionary) -> int:
-		return unit.action_cost(UnitStats.Action.SHOOT)
+	func ap_cost(unit: Unit, ctx: Dictionary) -> int:
+		return GoapBrain.shot_cost(unit, ctx)  # see Attack.ap_cost
 
 	func execute(unit: Unit, ctx: Dictionary) -> bool:
 		var target: Unit = ctx.get("target")
@@ -500,6 +515,10 @@ class Advance extends GoapAction:
 			return effects
 		return {CLOSED_DISTANCE: true}
 
+	func planned_tile(unit: Unit, ctx: Dictionary, from: Vector3i) -> Vector3i:
+		var walk := _walk(unit, ctx)
+		return walk["path"][-1] if not walk.is_empty() else from
+
 	## {"path": the tiles to walk, "shot": whether its last tile has a viable
 	## shot}, or {} for no useful walk. Cached on `ctx`, which `GoapBrain.run`
 	## rebuilds every step, so the planner's repeated cost/effect queries share one
@@ -531,13 +550,22 @@ class Advance extends GoapAction:
 					if not GridManager.is_free(full[i]):
 						full.resize(i)
 						break
-				var budget := GoapBrain.move_reach_keeping_shot(unit)
-				if budget < 1:
-					budget = unit.move_tiles_affordable()
+				var keeping := GoapBrain.move_reach_keeping_shot(unit)
+				var budget := keeping if keeping >= 1 else unit.move_tiles_affordable()
 				var cap := mini(budget, full.size())
 				if cap >= 1:
-					out = {"path": full.slice(0, cap), "shot": false}
+					# `keeping` assumed the cheapest shot (close quarters); while
+					# it is what bounds the walk, every tile is held to the shot
+					# its own spot prices, both as a place to shoot from and as
+					# the end of a walk that found none.
+					var ends := cap
+					if keeping >= 1:
+						while ends > 1 and not GoapBrain.keeps_shot_at(unit, full[ends - 1], ends):
+							ends -= 1
+					out = {"path": full.slice(0, ends), "shot": false}
 					for i in cap:
+						if keeping >= 1 and not GoapBrain.keeps_shot_at(unit, full[i], i + 1):
+							continue
 						if GoapBrain.shot_viable_from(unit, full[i], target):
 							out = {"path": full.slice(0, i + 1), "shot": true}
 							break

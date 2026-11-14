@@ -5,7 +5,14 @@ extends Resource
 
 @export var id: int = -1  # WeaponPresets.WeaponId
 @export var display_name: String = "Unarmed"
-@export var base_accuracy: int = 0
+# Which family's distance table this gun reads (WeaponArchetype) — where its
+# accuracy actually comes from (docs/design/systems/accuracy). The generalist's
+# by default, so a non-roster weapon that names none still has a range shape.
+@export var archetype: int = WeaponArchetype.Id.ASSAULT_RIFLE
+# Flat aim on top of the archetype's table: how this gun differs from others of
+# its family. 0 for every roster gun today; it was a 20-35 base accuracy back
+# when a soldier's stats alone put every shot past the cap.
+@export var aim_modifier: int = 0
 @export var damage: int = 0
 @export var mag_size: int = 0
 # Spare rounds carried beyond the loaded magazine — the total mission ammo
@@ -18,12 +25,8 @@ extends Resource
 # Loose rounds rather than magazines: a tube fed by hand (the Shotgun), where a
 # reload tops up from one pool of shells and there is no magazine to swap.
 @export var loose_reserve: bool = false
-# Weapon-specific range falloff, stacked on top of Combat's global distance
-# curve (Sec 6.5). No penalty at or within `optimal_range`; beyond it, accuracy
-# drops an extra `falloff_rate`% per tile. Default (999/0) means "no weapon-
-# specific range penalty" — just the global curve.
-@export var optimal_range: int = 999
-@export var falloff_rate: int = 0
+# No optimal_range/falloff_rate any more: the archetype's distance table is the
+# whole range story, global curve included (WeaponArchetype).
 # No move_multiplier. A heavier weapon used to scale the carrier's Run/Sprint
 # tile allowance, and the granular AP rework deleted the allowance — movement is
 # a flat 1 AP per tile for every unit (Unit.MOVE_AP_PER_TILE). Retired rather
@@ -53,6 +56,17 @@ extends Resource
 # instead (Penetration.splash_tiles). A mod with `replaces_splash` turns it off.
 @export var splash: bool = false
 
+# --- Close quarters (docs/design/systems/close-quarters) ----------------------
+# AP added to Shoot's price while the carrier is ENGAGED: a hostile it can see
+# within Unit.ENGAGED_RANGE tiles (Unit.is_engaged). Negative is the SMG's cheap
+# snap shot. It joins the weapon's other Shoot modifiers BEFORE the
+# MAX_AP_DISCOUNT floor, so it stacks with a Laser Sight to -2 and no further.
+#
+# The Battle Rifle's and LMG's close-quarters ACCURACY penalties that used to sit
+# here are gone: their distance tables are bad at 1-3 tiles instead, which judges
+# the range to the target rather than whoever is standing near the shooter.
+@export var engaged_shoot_ap: int = 0
+
 # --- How it fires on screen and in the ear -----------------------------------
 # Presentation only: nothing here reaches a roll. Blank or 0 takes the roster's
 # answer (WeaponPresets by `id`, Unit.BURST_MIN/MAX, Unit.TRACER_EVERY), so a
@@ -65,6 +79,9 @@ extends Resource
 ## SfxManager key, played once per burst (Unit._on_muzzle). Blank:
 ## WeaponPresets.fire_sfx(id).
 @export var fire_sfx: String = ""
+## Muzzle light scale (VfxManager.muzzle_light). 0: WeaponPresets.MUZZLE_LIGHT
+## by id, 1 off the roster.
+@export var muzzle_light: float = 0.0
 ## Rounds one trigger pull draws, rolled per shot (Unit.fire_at). 0: the
 ## roster's Unit.BURST_MIN/MAX.
 @export var burst_min: int = 0
@@ -163,9 +180,24 @@ func _product(stat: StringName) -> float:
 
 # --- Accuracy ---
 
-## The flat part only. Combat adds `close_accuracy_at` once it knows the range.
+## The flat aim this gun adds: its own `aim_modifier` plus every mod's accuracy.
+## Combat adds `range_modifier` and `close_accuracy_at` once it knows the range.
 func effective_accuracy() -> int:
-	return base_accuracy + _bonus(&"accuracy")
+	return aim_modifier + _bonus(&"accuracy")
+
+
+## The archetype whose distance table this gun reads: its own, unless a mod
+## swaps it (Slug Rounds read the Assault Rifle's).
+func effective_archetype() -> int:
+	for m in mods():
+		if m.archetype_override >= 0:
+			return m.archetype_override
+	return archetype
+
+
+## Aim gained or lost shooting `dist` tiles, off the archetype's table.
+func range_modifier(dist: int) -> int:
+	return WeaponArchetype.range_modifier(effective_archetype(), dist)
 
 
 func close_accuracy_at(dist: int) -> int:
@@ -235,16 +267,6 @@ func packed_mags(rounds: int) -> PackedInt32Array:
 	return mags
 
 
-func effective_optimal_range() -> int:
-	return optimal_range + _bonus(&"optimal_range")
-
-
-func effective_falloff_rate() -> int:
-	if falloff_rate <= 0:
-		return falloff_rate  # no falloff to reduce, and a bonus can't create one
-	return maxi(0, falloff_rate + _bonus(&"falloff_rate"))
-
-
 # --- Penetration ---
 
 func effective_penetration() -> int:
@@ -263,10 +285,26 @@ func effective_splash() -> bool:
 # --- AP ---
 
 ## AP added to `action`'s base price: the weapon's own modifier plus every mod's,
-## never below -MAX_AP_DISCOUNT.
-func ap_modifier(action: ApAction) -> int:
+## never below -MAX_AP_DISCOUNT. `engaged` adds the close-quarters Shoot term.
+func ap_modifier(action: ApAction, engaged: bool = false) -> int:
 	var base := reload_ap_modifier if action == ApAction.RELOAD else fire_ap_modifier
+	if engaged and action == ApAction.SHOOT:
+		base += engaged_shoot_ap
 	return maxi(-MAX_AP_DISCOUNT, base + _bonus(_AP_FIELDS[action]))
+
+
+# --- Close quarters ---
+
+## Whether being engaged changes anything about this gun at all. What lets
+## callers skip the engagement scan (line-of-sight rays) for every other weapon.
+func has_engaged_rule() -> bool:
+	return engaged_shoot_ap != 0
+
+
+## Whether being engaged changes Shoot's price. The AI's per-tile pricing only
+## has to scan for engagement when this is true.
+func has_engaged_ap_rule() -> bool:
+	return engaged_shoot_ap != 0
 
 
 # --- Detection ---

@@ -20,6 +20,12 @@ const MAX_PLAN_LENGTH := 4
 ## with the current rosters; it exists so a bad edit degrades to "no plan" rather
 ## than to a frozen turn.
 const MAX_NODES := 256
+## The `ctx` key holding where the plan being expanded has the unit standing, set
+## before each action is asked about a node and erased once planning is done.
+## Each node carries its own tile — the destination of the last move in its plan
+## (GoapAction.planned_tile) — so a shot after a move is priced at the move's end
+## (GoapBrain.shot_cost): close quarters makes an SMG's shot cheaper there.
+const PLAN_TILE := &"plan_tile"
 
 
 ## Cheapest ordered list of actions taking `state` to a state satisfying `goal`,
@@ -40,7 +46,8 @@ static func plan(unit: Unit, actions: Array, state: Dictionary, goal: Dictionary
 	# [walk five tiles to cover, shoot] passed even when the walk spent the shot —
 	# the unit walked, replanned, could not afford the shot, and ended its turn
 	# having fired nothing.
-	var frontier: Array = [{"state": state, "plan": [], "cost": 0, "ap": unit.ap}]
+	var frontier: Array = [{"state": state, "plan": [], "cost": 0, "ap": unit.ap,
+		"tile": unit.grid_pos}]
 	var best_plan: Array = []
 	var best_cost := 1 << 30
 	var expanded := 0
@@ -53,6 +60,7 @@ static func plan(unit: Unit, actions: Array, state: Dictionary, goal: Dictionary
 			continue  # already worse than a complete plan we hold
 		if node["plan"].size() >= MAX_PLAN_LENGTH:
 			continue
+		ctx[PLAN_TILE] = node["tile"]
 		for action: GoapAction in actions:
 			if not action.preconditions_met(node["state"]):
 				continue
@@ -81,7 +89,10 @@ static func plan(unit: Unit, actions: Array, state: Dictionary, goal: Dictionary
 				best_cost = next_cost
 				continue
 			frontier.append({"state": next_state, "plan": next_plan, "cost": next_cost,
-				"ap": next_ap})
+				"ap": next_ap, "tile": action.planned_tile(unit, ctx, node["tile"])})
+	# Gone before anything executes, so an action's `ap_cost` at execution time
+	# prices where the unit really is, not where some search branch left it.
+	ctx.erase(PLAN_TILE)
 	return best_plan
 
 

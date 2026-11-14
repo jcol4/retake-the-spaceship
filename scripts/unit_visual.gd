@@ -1844,9 +1844,17 @@ func play_burst(rounds: int, mirror: bool = true, raised: bool = false) -> void:
 
 func _play_burst(rounds: int, raised := false) -> void:
 	if _instant():
+		# Fogged, not headless: nothing is drawn, but the light still spills out
+		# of the room — gunfire seen around a corner before the gunman is.
+		if _unit and _unit.has_method("is_offscreen_live") and _unit.call("is_offscreen_live"):
+			var vfx := get_tree().get_first_node_in_group("vfx")
+			if vfx:
+				vfx.muzzle_strobe(muzzle_origin(), rounds, BURST_CADENCE, _muzzle_light_scale())
 		for _i in rounds:
 			muzzle.emit()
 		return
+	var light_vfx := get_tree().get_first_node_in_group("vfx")
+	var light_scale := _muzzle_light_scale()
 	_action = FIRE_SHOOT
 	# Resolved BEFORE the phase plays, because the length of the beat depends on
 	# which animation answered: a step out of cover takes longer than
@@ -1873,6 +1881,9 @@ func _play_burst(rounds: int, raised := false) -> void:
 		if not _flashes.is_empty():
 			_barrel = i % _flashes.size()
 			_flashes[_barrel].fire(BURST_CADENCE)
+		# The room flood, one pulse per round, from the barrel that just fired.
+		if light_vfx:
+			light_vfx.muzzle_light(barrel_tip(), _bore(), light_scale)
 		muzzle.emit()
 		await get_tree().create_timer(BURST_CADENCE).timeout
 	_barrel_frozen = false
@@ -1918,6 +1929,23 @@ func barrel_tip() -> Vector3:
 	if flash != null and flash.is_inside_tree():
 		return flash.global_position
 	return muzzle_origin()
+
+
+## Down the bore of the barrel `barrel_tip` reads, or the unit's facing without one.
+func _bore() -> Vector3:
+	var flash := _flashes[_barrel] if _barrel < _flashes.size() else _flash
+	if flash != null and flash.is_inside_tree():
+		return (-flash.global_transform.basis.z).normalized()
+	var yaw: float = _unit.rotation.y if _unit else 0.0
+	return Vector3(-sin(yaw), 0.0, -cos(yaw))
+
+
+## How hard this unit's gun floods the room (WeaponPresets.muzzle_light).
+func _muzzle_light_scale() -> float:
+	var weapon: WeaponData = null
+	if _unit and _unit.has_method("active_weapon"):
+		weapon = _unit.call("active_weapon")
+	return WeaponPresets.muzzle_light(weapon)
 
 
 ## Where a shot leaves the weapon, in world space. Derived from the UNIT's yaw on

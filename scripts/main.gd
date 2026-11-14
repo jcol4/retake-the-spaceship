@@ -1460,9 +1460,9 @@ func _auto_squad_in_square(h: MapData.Hangar) -> bool:
 ## Shoots (or reloads) at the nearest hostile in sight with whatever AP is left,
 ## without moving — the extraction branch's covering fire.
 func _auto_shoot(player: PlayerUnit) -> void:
-	var shoot_cost := player.action_cost(UnitStats.Action.SHOOT)
 	var reload_cost := player.action_cost(UnitStats.Action.RELOAD)
 	while player.ap > 0 and not player.is_downed and not TurnManager.mission_over:
+		var shoot_cost := player.action_cost(UnitStats.Action.SHOOT)  # close quarters can move it
 		var target: Unit = null
 		for enemy in player.hostiles():
 			if GridManager.chebyshev_dist(player.grid_pos, enemy.grid_pos) <= 8 \
@@ -1499,10 +1499,11 @@ func _living_squad() -> Array:
 ## `fixed_target`, when given and still standing, is attacked instead of the
 ## nearest hostile — the Destroy contract's nest (extraction plan 3.3).
 func _greedy_fallback(player: PlayerUnit, fixed_target: Unit = null) -> void:
-	var shoot_cost := player.action_cost(UnitStats.Action.SHOOT)
 	var reload_cost := player.action_cost(UnitStats.Action.RELOAD)
 	var melee_cost := player.action_cost(UnitStats.Action.MELEE)
 	while player.ap > 0 and not player.is_downed and not TurnManager.mission_over:
+		# Re-priced every pass: close quarters can change it mid-activation.
+		var shoot_cost := player.action_cost(UnitStats.Action.SHOOT)
 		var target := fixed_target if fixed_target != null and is_instance_valid(fixed_target) \
 			and not fixed_target.is_downed else _nearest_hostile(player)
 		if target == null:

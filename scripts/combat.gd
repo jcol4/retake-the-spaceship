@@ -7,10 +7,36 @@ enum ShotAction { SHOOT, AIMED_SHOT, OVERWATCH }
 ## VATS-style targeting zones for Aimed Shot (Sec 4.2/6.5 body-part targeting).
 enum BodyPart { HEAD, TORSO, ARM_L, ARM_R, LEG_L, LEG_R }
 
+## THE ACCURACY MODEL (docs/design/systems/accuracy), XCOM-shaped:
+##
+##   hit = Aim (stats.perception, 55-65 for a recruit, cap 87)
+##         + the gun's flat aim (aim_modifier + attachments)
+##         + the gun archetype's distance table (WeaponArchetype)
+##         + AIMED_SHOT_BONUS and the zone, on an Aimed Shot
+##         + high ground, - suppressed, - injured arms, - Overwatch's penalty
+##         - the target's DEFENSE (`ranged_defense`: its own stat, cover,
+##           hunkering, concealment)
+##         clamped to MIN_HIT_CHANCE..MAX_HIT_CHANCE
+##
+## Reflexes is not in it any more, and neither is a 20-35 gun accuracy: together
+## they started the average shot at 125-170, so every modifier below vanished
+## under the cap and close range was always 99%.
+const MIN_HIT_CHANCE := 1
+## Nothing is certain: a perfect flank still misses one in twenty. Luck (below)
+## can still turn a miss into a hit after the roll — that is a stat, not a cap.
+const MAX_HIT_CHANCE := 95
+
+## What taking aim buys over a snap Shoot, before the zone: the torso at Aim + 15,
+## limbs Aim - 5, the head Aim - 35. Pays for the extra AP an Aimed Shot costs.
+const AIMED_SHOT_BONUS := 15
+
 const HIGH_GROUND_BONUS := 15
-const COVER_PENALTY_HEAVY := 40
-const COVER_PENALTY_LIGHT := 20
-const HUNKER_PENALTY := 20
+## Defense a cover edge adds against a shot it protects from — flanking means no
+## edge, so none. XCOM's 20/40 a notch harder: you flank or you blow it up.
+const COVER_DEFENSE_HEAVY := 45
+const COVER_DEFENSE_LIGHT := 25
+## Defense a hunkered unit adds, in cover or not, against shots and swings alike.
+const HUNKER_DEFENSE := 20
 ## Accuracy cost of a reserved shot, at the MINIMUM reserve of 1 AP. A reaction
 ## snapped off by somebody who barely committed to watching.
 const OVERWATCH_PENALTY := 30
@@ -42,12 +68,12 @@ static func overwatch_penalty_for(reserve_ap: int) -> int:
 ## activation plus three rounds, and has to buy something a plain shot does not.
 ##
 ## Note which direction it points: this penalises the SUPPRESSED unit when it
-## shoots, unlike HUNKER_PENALTY, which penalises whoever shoots AT a hunkered
-## target. Suppression makes you useless, not safe.
+## shoots, unlike HUNKER_DEFENSE, which protects a hunkered target from whoever
+## shoots at it. Suppression makes you useless, not safe.
 const SUPPRESSED_PENALTY := 40
 
-# Aimed Shot accuracy relative to the "no Reflexes" full-aim baseline (Sec 6.5):
-# Torso is the easy, reliable target; limbs are harder; the head is a severe ask.
+# Aimed Shot accuracy by zone, on top of AIMED_SHOT_BONUS (Sec 6.5): the torso
+# is the easy, reliable target; limbs are harder; the head is a severe ask.
 const ZONE_ACCURACY_MOD := {
 	BodyPart.TORSO: 0,
 	BodyPart.ARM_L: -20, BodyPart.ARM_R: -20,
@@ -96,17 +122,16 @@ const K_REFLEXES_AIMED := 0.015
 static func aimed_shot_ap_cost(body_part: int, reflex_value: int, ap_modifier: int = 0) -> int:
 	return UnitStats.discounted_cost(AIMED_SHOT_BASE_AP[body_part] + ap_modifier, K_REFLEXES_AIMED, reflex_value)
 
-# Light modifier (Sec 5.1): linear between a dark target (penalty) and a
-# fully-lit one (bonus). GridTileData.light_value is written by LightingManager.
-const LIGHT_DARK_PENALTY := 30  # accuracy penalty at light_value 0
-const LIGHT_BRIGHT_BONUS := 10  # accuracy bonus at light_value 100
+# Concealment (Sec 5.1): the target's tile light as DEFENSE, linear between a
+# dark target (hard to pick out) and a fully-lit one (easier than the open).
+# GridTileData.light_value is written by LightingManager. It is the same family
+# as a future camo bonus, which is why it moved from the shooter's side.
+const CONCEALMENT_DARK := 30  # defense at light_value 0
+const CONCEALMENT_LIT := -10  # defense at light_value 100
 
-# Distance falloff (Sec 6.5): flat out to DIST_FALLOFF_START tiles, a gentle
-# climb out to DIST_STEEP_START, then a dramatic per-tile penalty beyond that.
-const DIST_FALLOFF_START := 3  # tiles — no penalty at or within this range
-const DIST_STEEP_START := 10  # tiles — where the steep segment kicks in
-const DIST_GENTLE_RATE := 1  # % per tile, between FALLOFF_START and STEEP_START
-const DIST_STEEP_RATE := 12  # % per tile, beyond STEEP_START
+# No global distance curve any more: every gun's range shape is its archetype's
+# table (WeaponArchetype), which absorbed the old flat-to-3, -1/tile-to-10,
+# -12/tile-beyond curve along with each gun's own falloff.
 
 # Luck (Sec 4.6.4): crit chance and attacker's miss-reroll both scale off the
 # shooter's Luck; the defender's Luck can independently downgrade a landed
@@ -158,6 +183,10 @@ class ShotResult:
 	# what actually landed once this was taken off, so the two together are the
 	# whole story of one hit and the log never has to guess which it is holding.
 	var absorbed: int = 0
+	# Points of the body's armor the round's penetration paid to ignore (§2 of the
+	# penetration doc). Set at roll time by Penetration; read where the damage
+	# lands, so `absorbed` above is what was left of the plate after it.
+	var armor_ignored: int = 0
 	var body_part: int = -1  # Combat.BodyPart targeted, only set for AIMED_SHOT
 	var newly_injured: bool = false  # this hit just crossed the targeted part's injury threshold
 	var stunned: bool = false  # a torso crit stuns the target for its next activation
@@ -177,8 +206,9 @@ class ShotResult:
 
 
 ## Whether `result` is a shot the target was IN COVER from: the defending edge
-## existed AND it cost `shooter` accuracy. The second half matters for a weapon
-## that partly ignores cover (Sagittarii's `cover_penalty_for`): cover the shooter
+## existed AND it gave the target Defense against `shooter`. The second half
+## matters for a weapon that partly ignores cover (Sagittarii's
+## `cover_defense_for`): cover the shooter
 ## does not respect is not cover the target is hiding behind. "Not flanked" falls
 ## out of `had_cover` itself — under edge cover a flanking shot is one with no
 ## defending edge (`defending_cover`). Duck-typed like the rest of this file.
@@ -188,9 +218,9 @@ class ShotResult:
 static func target_in_cover(shooter, result: ShotResult) -> bool:
 	if not result.had_cover:
 		return false
-	var penalty: int = shooter.cover_penalty_for(result.cover_type) \
-		if shooter != null and shooter.has_method("cover_penalty_for") else cover_penalty(result.cover_type)
-	return penalty > 0
+	var defense: int = shooter.cover_defense_for(result.cover_type) \
+		if shooter != null and shooter.has_method("cover_defense_for") else cover_defense(result.cover_type)
+	return defense > 0
 
 
 ## Which edge of the target's tile, if any, this shot has to cross — as
@@ -241,42 +271,24 @@ static func defending_cover(shooter_pos: Vector3i, target_pos: Vector3i) -> Arra
 	return [best_type, best_side, best_structural]
 
 
-static func cover_penalty(cover_type: int) -> int:
+## Defense a cover tier gives against an ordinary shooter. Shots ask the
+## shooter instead (`Unit.cover_defense_for`), which a weapon that partly ignores
+## cover (Sagittarii's) overrides.
+static func cover_defense(cover_type: int) -> int:
 	match cover_type:
-		MapData.Cover.HEAVY: return COVER_PENALTY_HEAVY
-		MapData.Cover.LIGHT: return COVER_PENALTY_LIGHT
+		MapData.Cover.HEAVY: return COVER_DEFENSE_HEAVY
+		MapData.Cover.LIGHT: return COVER_DEFENSE_LIGHT
 		_: return 0
 
 
-static func distance_penalty(dist: int) -> int:
-	if dist <= DIST_FALLOFF_START:
-		return 0
-	if dist <= DIST_STEEP_START:
-		return (dist - DIST_FALLOFF_START) * DIST_GENTLE_RATE
-	var gentle := (DIST_STEEP_START - DIST_FALLOFF_START) * DIST_GENTLE_RATE
-	return gentle + (dist - DIST_STEEP_START) * DIST_STEEP_RATE
-
-
-static func weapon_range_penalty(weapon: WeaponData, dist: int) -> int:
-	# Weapon-specific range falloff (design doc `weapons/`), stacked on top of
-	# the global distance curve above. Shotgun/SMG use this to be noticeably
-	# worse past their optimal range; most weapons leave it at 0 and rely on
-	# the global curve alone.
-	if weapon == null:
-		return 0
-	var rate := weapon.effective_falloff_rate()
-	var optimal := weapon.effective_optimal_range()
-	if rate <= 0 or dist <= optimal:
-		return 0
-	return (dist - optimal) * rate
-
-
-static func light_modifier(target_pos: Vector3i) -> int:
+## The target tile's light as Defense: CONCEALMENT_DARK at light 0 down to
+## CONCEALMENT_LIT (negative: easier than the open) at light 100.
+static func concealment(target_pos: Vector3i) -> int:
 	var t: GridTileData = GridManager.get_tile(target_pos)
 	if t == null:
 		return 0
 	var lit := clampf(t.light_value, 0.0, 100.0) / 100.0
-	return roundi(lerp(-float(LIGHT_DARK_PENALTY), float(LIGHT_BRIGHT_BONUS), lit))
+	return roundi(lerp(float(CONCEALMENT_DARK), float(CONCEALMENT_LIT), lit))
 
 
 ## Whether the Sec 5.1 light term applies to a roll between these two at all.
@@ -299,43 +311,68 @@ static func _light_agnostic(unit) -> bool:
 	return unit != null and unit.has_method("light_agnostic") and unit.light_agnostic()
 
 
+## Everything that makes `target` harder for `shooter` to hit with a gun, as one
+## number taken off the hit chance (XCOM's Defense): the target's own stat, the
+## cover edge the shot crosses (none when flanked), hunkering, and concealment
+## from the dark. New sources (camo and the like) belong here, so the HUD's
+## preview and the shot itself keep reading one figure.
+##
+## Cover is asked of the SHOOTER rather than read from the flat table, so a weapon
+## that partly ignores cover (Sagittarii's) affects the preview and the shot
+## through one code path instead of two that can disagree.
+static func ranged_defense(shooter, target) -> int:
+	var defense: int = target.stats.defense
+	defense += shooter.cover_defense_for(defending_cover(shooter.grid_pos, target.grid_pos)[0])
+	if target.hunkered:
+		defense += HUNKER_DEFENSE
+	if light_matters(shooter, target):
+		var hidden := concealment(target.grid_pos)
+		# Thermal: the dark stops hiding anyone; a lit target is still easier.
+		var weapon: WeaponData = shooter.stats.active_weapon()
+		if weapon and weapon.ignores_darkness():
+			hidden = mini(hidden, 0)
+		defense += hidden
+	return defense
+
+
+## The Defense that counts at contact range: the target's own stat and
+## hunkering. Cover and concealment are out, for the reasons on
+## `compute_melee_accuracy`.
+static func melee_defense(target) -> int:
+	var defense: int = target.stats.defense
+	if target.hunkered:
+		defense += HUNKER_DEFENSE
+	return defense
+
+
+## The hit chance of one shot. See the model at the top of this file.
 static func compute_accuracy(shooter, target, action: ShotAction, body_part: int = BodyPart.TORSO) -> int:
-	var acc: int = shooter.stats.perception + shooter.stats.weapon_base_accuracy
-	if action == ShotAction.SHOOT or action == ShotAction.OVERWATCH:
-		acc += shooter.stats.reflexes
+	var acc: int = shooter.stats.perception + shooter.stats.weapon_aim_modifier
 	if action == ShotAction.OVERWATCH:
 		# Scaled by what the shooter actually committed. Duck-typed like this
 		# file's other unit hooks so `Combat` stays loadable standalone.
 		var reserve: int = shooter.overwatch_reserve if "overwatch_reserve" in shooter else 1
 		acc -= overwatch_penalty_for(reserve)
 	if action == ShotAction.AIMED_SHOT:
-		acc += ZONE_ACCURACY_MOD.get(body_part, 0)
+		acc += AIMED_SHOT_BONUS + ZONE_ACCURACY_MOD.get(body_part, 0)
 	if shooter.grid_pos.y > target.grid_pos.y:
 		acc += HIGH_GROUND_BONUS
-	# Asked of the SHOOTER rather than read from the flat table, so a weapon that
-	# partly ignores cover (Sagittarii's) affects the HUD's preview and the shot
-	# it fires through one code path instead of two that can disagree.
-	acc -= shooter.cover_penalty_for(defending_cover(shooter.grid_pos, target.grid_pos)[0])
-	if target.hunkered:
-		acc -= HUNKER_PENALTY
 	# Duck-typed like `light_agnostic` above, and for the same reason: `Combat` is
 	# loaded standalone by the headless tools, so it must not require `Unit`.
 	if _is_suppressed(shooter):
 		acc -= SUPPRESSED_PENALTY
+	# Range is the gun's archetype table, all of it: there is no global distance
+	# curve. An unarmed shooter (nothing shoots without a gun) reads the
+	# generalist's.
 	var dist := GridManager.chebyshev_dist(shooter.grid_pos, target.grid_pos)
-	acc -= distance_penalty(dist)
-	acc -= weapon_range_penalty(shooter.stats.active_weapon(), dist)
 	var weapon: WeaponData = shooter.stats.active_weapon()
 	if weapon:
-		acc += weapon.close_accuracy_at(dist)
-	if light_matters(shooter, target):
-		var light := light_modifier(target.grid_pos)
-		# Thermal: the dark stops costing accuracy; a lit target still helps.
-		if weapon and weapon.ignores_darkness():
-			light = maxi(light, 0)
-		acc += light
+		acc += weapon.range_modifier(dist) + weapon.close_accuracy_at(dist)
+	else:
+		acc += WeaponArchetype.range_modifier(WeaponArchetype.Id.ASSAULT_RIFLE, dist)
+	acc -= ranged_defense(shooter, target)
 	acc -= shooter.ranged_accuracy_penalty()  # Sec 4.2: an injured arm shakes every ranged shot, not just melee
-	return clampi(acc, 1, 99)
+	return clampi(acc, MIN_HIT_CHANCE, MAX_HIT_CHANCE)
 
 
 static func _roll_hit(result: ShotResult, attacker, target, crit_divisor: float = LUCK_CRIT_DIVISOR) -> void:
@@ -380,7 +417,7 @@ static func shot_damage(shooter, target) -> int:
 ## and cover it already passed, and `collateral` marks a body other than the one
 ## aimed at — flat torso damage that can never crit, stun or injure a part.
 static func resolve_shot(shooter, target, action: ShotAction, body_part: int = BodyPart.TORSO,
-		accuracy_cap: int = 99, damage_scale: float = 1.0, collateral: bool = false) -> ShotResult:
+		accuracy_cap: int = MAX_HIT_CHANCE, damage_scale: float = 1.0, collateral: bool = false) -> ShotResult:
 	var result := ShotResult.new()
 	result.accuracy = mini(compute_accuracy(shooter, target, action, body_part), maxi(accuracy_cap, 1))
 	var is_headshot := not collateral and action == ShotAction.AIMED_SHOT and body_part == BodyPart.HEAD
@@ -437,12 +474,12 @@ static func compute_melee_accuracy(attacker, target) -> int:
 	#   - light: darkness changes what you can shoot, not what a claw can reach —
 	#     and taken the other way it would make standing in the dark a defence
 	#     against the swarm, which is backwards for the game's whole premise.
-	# What's left is the attacker's own skill, elevation, hunkering, and Luck.
+	# What's left is the attacker's own skill, elevation, the target's own
+	# Defense and hunkering (`melee_defense`), and Luck.
 	var acc: int = attacker.stats.perception + attacker.stats.melee_base_accuracy
 	if attacker.grid_pos.y > target.grid_pos.y:
 		acc += HIGH_GROUND_BONUS
-	if target.hunkered:
-		acc -= HUNKER_PENALTY
+	acc -= melee_defense(target)
 	# Applies to a swing as much as to a shot. Being pinned is about not daring to
 	# commit, and that spoils a melee attack for the same reason it spoils aim —
 	# unlike the distance terms above, which are absent because contact range
@@ -455,7 +492,7 @@ static func compute_melee_accuracy(attacker, target) -> int:
 	# `Combat` stays loadable without the unit classes.
 	if attacker.has_method("melee_accuracy_bonus"):
 		acc += attacker.melee_accuracy_bonus(target)
-	return clampi(acc, 1, 99)
+	return clampi(acc, MIN_HIT_CHANCE, MAX_HIT_CHANCE)
 
 
 static func _is_suppressed(unit) -> bool:
@@ -499,6 +536,10 @@ static func _describe_one(result: ShotResult) -> String:
 	# player who cannot see the plate eating half the shot has no way to work out
 	# that the EMP grenade in their kit is the answer.
 	var armor := " (-%d armor)" % result.absorbed if result.absorbed > 0 else ""
+	# Said too when the round got ALL the way through the plate, so a player sees
+	# what their gun's penetration bought against a robot rather than a clean hit.
+	if result.hit and result.armor_ignored > 0:
+		armor += " (pierced %d armor)" % result.armor_ignored
 	if result.redirect_note != "":
 		armor += " — " + result.redirect_note
 	if result.severe_crit:

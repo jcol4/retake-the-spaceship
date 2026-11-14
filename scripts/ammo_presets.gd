@@ -32,12 +32,14 @@ const DATA := {
 		"display_name": "FMJ", "damage_pct_vs_armored": 34,
 	},
 	# --- Shotgun ---
-	# Slugs trade the spread for reach: optimal range 3 -> 6, but -34% damage
-	# within 4 tiles. The two +% lines stack with that, so a slug at 3 tiles
-	# does +16% to armor and -9% to flesh. A slug is one projectile, so it trades
-	# buckshot's splash for Battle Rifle penetration.
+	# Slugs trade the spread for reach: the Shotgun reads the Assault Rifle's
+	# distance table instead of its own point-blank one (+10 close, ~0 out to 12
+	# tiles, where buckshot is useless past 8), but -34% damage within 4 tiles.
+	# The two +% lines stack with that, so a slug at 3 tiles does +16% to armor
+	# and -9% to flesh. A slug is one projectile, so it trades buckshot's splash
+	# for Battle Rifle penetration.
 	AmmoId.SLUG: {
-		"display_name": "Slug Rounds", "optimal_range": 3,
+		"display_name": "Slug Rounds", "archetype_override": WeaponArchetype.Id.ASSAULT_RIFLE,
 		"penetration": 80, "replaces_splash": true,
 		"damage_pct_vs_armored": 50, "damage_pct_vs_unarmored": 25,
 		"close_damage_pct": -34, "close_range": 4,

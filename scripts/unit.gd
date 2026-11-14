@@ -503,6 +503,16 @@ func is_instant() -> bool:
 	return _headless or not _rendered
 
 
+## Instant ONLY because nobody can see it: a live, drawn game where fog of war
+## (or playback's visibility) keeps this unit off the screen. Its burst still
+## throws muzzle light out of its room (UnitVisual._play_burst); a headless run
+## or a tick's logic-only pass draws nothing at all.
+func is_offscreen_live() -> bool:
+	if _headless or TurnManager.resolving_tick:
+		return false
+	return not _display_visible if _display_mode else not _rendered
+
+
 ## Called by MapBuilder when the revealed set changes. Hides the sprite, which
 ## also stops it being awaited — see is_instant.
 func set_rendered(rendered: bool) -> void:
@@ -1413,8 +1423,19 @@ func face_toward(world_pos: Vector3, quick := false) -> void:
 ## armor hook (security robots: `CerberusUnit.damage_taken`), sited here so it
 ## applies to every damage source rather than only to gunfire, and so the
 ## unarmored default costs one function call and no branching.
-func damage_taken(amount: int) -> int:
-	return maxi(0, amount - armour_bonus)
+##
+## `armor_ignore` is how many points of `armor()` the round's penetration paid to
+## punch through (Penetration, docs/design/systems/penetration §2). Only a
+## penetrating shot sets it; everything else leaves the plating whole.
+func damage_taken(amount: int, armor_ignore: int = 0) -> int:
+	return maxi(0, amount - maxi(0, armour_bonus - armor_ignore))
+
+
+## Flat damage this unit's plating takes off a hit — what a penetrating round can
+## spend PEN_PER_BODY a point to ignore. Armour patches here; robots and the door
+## gun override it with their own plate.
+func armor() -> int:
+	return armour_bonus
 
 
 ## Whether the light on this unit's tile is a term in accuracy rolls it takes
@@ -1424,11 +1445,11 @@ func light_agnostic() -> bool:
 	return false
 
 
-## The cover penalty THIS unit's weapon respects, as a shooter. Overridden by a
-## unit whose weapon partly ignores cover (Sagittarii); read by
-## Combat.compute_accuracy so the HUD's preview and the shot itself agree.
-func cover_penalty_for(cover_type: int) -> int:
-	return Combat.cover_penalty(cover_type)
+## The Defense a cover tier gives a target against THIS unit's shots. Overridden
+## by a unit whose weapon partly ignores cover (Sagittarii); read by
+## Combat.ranged_defense so the HUD's preview and the shot itself agree.
+func cover_defense_for(cover_type: int) -> int:
+	return Combat.cover_defense(cover_type)
 
 
 # --- Cover posture -----------------------------------------------------------
@@ -1566,8 +1587,8 @@ func cover_pose() -> StringName:
 	# standing idle and reads as having done nothing.
 	#
 	# Cover the unit is actually behind still wins, so hunkering never demotes a
-	# high pose to a low one. This is cosmetic only either way: the accuracy
-	# penalty is Combat's HUNKER_PENALTY off the `hunkered` flag, and the cover
+	# high pose to a low one. This is cosmetic only either way: the Defense is
+	# Combat's HUNKER_DEFENSE off the `hunkered` flag, and the cover
 	# bonus is a property of the tile edge a shot crosses, so no answer here can
 	# move a number.
 	if family == &"" and hunkered:
@@ -1655,8 +1676,8 @@ func note_hit(from: Vector3, kind: int, part: int = -1) -> void:
 
 ## Whether a landed hit of `raw` would take this unit off its feet — downed or
 ## dead. The arithmetic `take_damage` does, changing nothing.
-func would_collapse(raw: int) -> bool:
-	return life_state == LifeState.ACTIVE and raw > 0 and damage_taken(raw) >= current_hp
+func would_collapse(raw: int, armor_ignore: int = 0) -> bool:
+	return life_state == LifeState.ACTIVE and raw > 0 and damage_taken(raw, armor_ignore) >= current_hp
 
 
 func hit_record() -> Dictionary:
@@ -1697,10 +1718,10 @@ static func shot_part(action: Combat.ShotAction, aimed: int) -> int:
 ##           redirected round and the bleed all come off.
 ##   DEAD    nothing. A corpse cannot be damaged, so the return is 0 and no log
 ##           line can claim otherwise.
-func take_damage(amount: int) -> int:
+func take_damage(amount: int, armor_ignore: int = 0) -> int:
 	if life_state == LifeState.DEAD:
 		return 0
-	amount = damage_taken(amount)
+	amount = damage_taken(amount, armor_ignore)
 	if life_state == LifeState.DOWNED:
 		downed_hp = maxi(downed_hp - amount, 0)
 		hp_changed.emit(self)
@@ -2558,7 +2579,69 @@ func ap_pool() -> int:
 ## `stats.action_cost` returns them undiscounted. Callers never special-case
 ## them; a subclass overriding this should hand unknown actions to `super`.
 func action_cost(action: UnitStats.Action) -> int:
-	return stats.action_cost(action)
+	return stats.action_cost(action, action == UnitStats.Action.SHOOT and _engaged_prices_shot())
+
+
+## `action_cost` as if this unit stood on `tile` — the AI pricing a shot at the
+## end of a move it is only planning. Swaps `grid_pos` in and back out, the same
+## way GoapBrain.accuracy_from does, so a subclass's own pricing (Securus's
+## cheaper wrist gun) still applies. Synchronous: nothing runs between the writes.
+func action_cost_at(action: UnitStats.Action, tile: Vector3i) -> int:
+	if tile == grid_pos:
+		return action_cost(action)
+	var real := grid_pos
+	grid_pos = tile
+	var cost := action_cost(action)
+	grid_pos = real
+	return cost
+
+
+## The cheapest Shoot this unit could have anywhere this activation: engaged if
+## its gun makes that cheaper, plain otherwise. Bounds a search for tiles that
+## still leave a shot, which then prices each one with `action_cost_at`.
+func cheapest_shot_cost() -> int:
+	return mini(action_cost(UnitStats.Action.SHOOT),
+		stats.action_cost(UnitStats.Action.SHOOT, true))
+
+
+# --- Close quarters (docs/design/systems/close-quarters) ------------------------
+
+## How near a hostile has to be for the carrier to count as ENGAGED: the range the
+## Shotgun's table is strongest at and the long guns' tables are worst at, so
+## "close" means one thing across the game.
+const ENGAGED_RANGE := 3
+
+
+## Whether a hostile this unit can see is within ENGAGED_RANGE of it. Downed
+## bodies never count; aware or dormant both do, since it is being close that
+## makes a long gun awkward, not being noticed.
+##
+## "Can see" is the same rays the squad's own sight is drawn with
+## (MapBuilder._sees_cached: either end free to lean), so a player is never told
+## by a cheaper shot or a worse hit chance about anything they cannot see.
+##
+## Read through `grid_pos`, which is what lets the AI ask it of a tile it is only
+## considering (`action_cost_at`, GoapBrain.accuracy_from).
+func is_engaged() -> bool:
+	for node in get_tree().get_nodes_in_group(&"units"):
+		var other := node as Unit
+		if other == null or other == self or other.is_downed or other.is_queued_for_deletion() \
+				or not is_hostile_to(other):
+			continue
+		if GridManager.chebyshev_dist(grid_pos, other.grid_pos) > ENGAGED_RANGE:
+			continue
+		# Chebyshev ignores floors; the sight test is what keeps a hostile one deck
+		# down from counting.
+		if GridManager.tiles_have_sight(self, grid_pos, other.grid_pos, true, true):
+			return true
+	return false
+
+
+## `is_engaged`, only asked when the gun in hand prices Shoot by it — every other
+## unit skips the scan, which is a ray test per nearby hostile.
+func _engaged_prices_shot() -> bool:
+	var w := active_weapon()
+	return w != null and w.has_engaged_ap_rule() and is_engaged()
 
 
 func aimed_shot_cost(body_part: int) -> int:
@@ -2779,9 +2862,9 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 	# same runner will land, since they all play at once (TurnManager._react).
 	var incoming := target._reaction_raw_pending if reaction else 0
 	_burst_doomed = result.hit and target.carrying == null \
-		and target.would_collapse(result.damage + incoming)
-	_burst_overkill = maxi(target.damage_taken(result.damage + incoming) - target.current_hp, 0) \
-		if _burst_doomed else 0
+		and target.would_collapse(result.damage + incoming, result.armor_ignored)
+	_burst_overkill = maxi(target.damage_taken(result.damage + incoming, result.armor_ignored)
+		- target.current_hp, 0) if _burst_doomed else 0
 	_burst_reaction = reaction
 	if reaction:
 		_reacting = true
@@ -2826,7 +2909,7 @@ func fire_at(target: Unit, action: Combat.ShotAction, body_part: int = Combat.Bo
 			result.redirect_note = "the round hits %s, slung over %s's shoulder" % [
 				victim.stats.display_name, target.stats.display_name]
 		victim.note_hit(visual.muzzle_origin(), Ragdoll.HitKind.BULLET, vis_part)
-		result.damage = victim.take_damage(raw)
+		result.damage = victim.take_damage(raw, result.armor_ignored)
 		result.absorbed = raw - result.damage
 		# Body-part injury and stun are about the unit aimed AT; a round that went
 		# into the body on its shoulder did neither to it.
@@ -2870,7 +2953,7 @@ func _land_collateral(result: Combat.ShotResult) -> void:
 					victim.stats.display_name, body.stats.display_name]
 			victim.note_hit(visual.muzzle_origin(), Ragdoll.HitKind.BULLET,
 				shot_part(Combat.ShotAction.SHOOT, Combat.BodyPart.TORSO))
-			c.damage = victim.take_damage(raw)
+			c.damage = victim.take_damage(raw, c.armor_ignored)
 			c.absorbed = raw - c.damage
 		_report_incoming(body)
 
@@ -2983,10 +3066,10 @@ func _on_muzzle() -> void:
 	# same impacts as a real burst. A rifle going off looks like a rifle going
 	# off — the only thing the roll decides is where the rounds end up.
 	#
-	# The FLASH is not fired from here and never was: UnitVisual.play_burst fires
-	# it on the barrel (MuzzleFlash) alongside the signal that calls this.
-	# Nothing here has to place it, and that is the whole reason the old
-	# room-filling muzzle light is gone.
+	# The FLASH and its room light are not fired from here: UnitVisual.play_burst
+	# fires both at the barrel (MuzzleFlash, VfxManager.muzzle_light) alongside
+	# the signal that calls this — including for a fogged shooter, which returns
+	# here before any of the below.
 	if is_instant() or _pending_target == null:
 		return
 	var round_index := _burst_round

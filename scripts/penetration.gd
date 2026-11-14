@@ -16,7 +16,8 @@ extends RefCounted
 ## Host side, like every shot. `Unit.fire_at` applies the damage; this only rolls.
 
 ## Pen spent passing through one body, or one light cover edge, and the size of
-## one bracket. An armored body costs it twice.
+## one bracket. An armored body costs it twice. It is also the price of ignoring
+## one point of a body's armor (`armor_pierced`).
 const PEN_PER_BODY := 25
 ## Accuracy taken off a shot at the target for every body in front of it. The
 ## roll on EVERY body on the path is then the lower of that and its own odds.
@@ -57,6 +58,9 @@ static func can_reach(shooter: Unit, target: Unit) -> bool:
 		var tier: int = Combat.defending_cover(shooter.grid_pos, body.grid_pos)[0]
 		if tier == MapData.Cover.HEAVY:
 			return false
+		# Every body hit spends on its own plate first, front bodies included —
+		# so a robot standing in front can eat the pen the target needed.
+		pen -= armor_pierced(pen, body) * PEN_PER_BODY
 		var cost: int = _body_cost(body, tier, true)[0]
 		if pen < cost:
 			return false
@@ -92,10 +96,10 @@ static func resolve(shooter: Unit, target: Unit, action: Combat.ShotAction, body
 			break
 		if entry.has("unit"):
 			front += 1
-	var cap := 99
+	var cap := Combat.MAX_HIT_CHANCE
 	if front > 0:
 		cap = clampi(Combat.compute_accuracy(shooter, target, action, body_part)
-			- THROUGH_BODY_PENALTY * front, 1, 99)
+			- THROUGH_BODY_PENALTY * front, Combat.MIN_HIT_CHANCE, Combat.MAX_HIT_CHANCE)
 
 	var primary: Combat.ShotResult = null
 	var collateral: Array = []
@@ -132,6 +136,15 @@ static func resolve(shooter: Unit, target: Unit, action: Combat.ShotAction, body
 		if first and not r.hit:
 			break
 		first = false
+		# A hit punches through as much of the body's armor as the round can pay
+		# for, before anything else — one shared budget (§2), so pen spent on the
+		# plate is pen the bodies behind never see, and every bracket of it is a
+		# keep step like passing a body is.
+		if r.hit:
+			var pierced := armor_pierced(pen, body)
+			r.armor_ignored = pierced
+			pen -= pierced * PEN_PER_BODY
+			steps += pierced
 		# Heavy cover — a crate or a wall corner — takes whatever is left.
 		if r.had_cover and r.cover_type == MapData.Cover.HEAVY:
 			break
@@ -150,9 +163,18 @@ static func resolve(shooter: Unit, target: Unit, action: Combat.ShotAction, body
 	return primary
 
 
+## Points of `body`'s armor a round still holding `pen` ignores: one per bracket,
+## as many as it can afford, never more than the plate has (§2). Greedy — every
+## body hit takes its cut, so the round never has to guess what lies behind.
+## An EMP'd robot has no plate (CerberusUnit.armor), so it costs nothing.
+static func armor_pierced(pen: int, body: Unit) -> int:
+	return clampi(pen / PEN_PER_BODY, 0, body.armor())
+
+
 ## [pen, keep steps] a round spends getting past `body`: one bracket for the body
 ## if it was hit (two if armored), and one more for a light cover edge in front
-## of it, crossed hit or miss.
+## of it, crossed hit or miss. Armor it punched through is paid separately, and
+## first (`armor_pierced`).
 static func _body_cost(body: Unit, cover_tier: int, hit: bool) -> Array:
 	var pen := 0
 	var steps := 0

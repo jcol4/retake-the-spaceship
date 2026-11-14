@@ -37,9 +37,9 @@ var _brain: GoapBrain = null
 var _pending_hit := false
 
 
-func take_damage(amount: int) -> int:
+func take_damage(amount: int, armor_ignore: int = 0) -> int:
 	_pending_hit = true
-	return super(amount)
+	return super(amount, armor_ignore)
 
 
 func _init() -> void:
@@ -156,8 +156,9 @@ func take_turn() -> void:
 
 
 func _finish_downed_if_cheap() -> void:
-	var shoot_cost := action_cost(UnitStats.Action.SHOOT)
-	while ap >= shoot_cost and can_shoot() and not is_downed:
+	# Re-priced every pass, like EnemyUnit._combat_turn: close quarters can move it.
+	while ap >= action_cost(UnitStats.Action.SHOOT) and can_shoot() and not is_downed:
+		var shoot_cost := action_cost(UnitStats.Action.SHOOT)
 		# Only a threat it would actually fight counts (Phase 7): a robot standing
 		# post across the room, which the squad is deliberately leaving alone, is
 		# not a reason to pass up a cheap shot.
@@ -1090,9 +1091,9 @@ func _board_turn() -> void:
 	await _hold_square(ExtractionManager.claim_of(crew_id))
 	if is_downed or TurnManager.mission_over:
 		return
-	var shoot_cost := action_cost(UnitStats.Action.SHOOT)
 	var reload_cost := action_cost(UnitStats.Action.RELOAD)
 	while ap > 0 and not is_downed and alert_state == AlertState.COMBAT:
+		var shoot_cost := action_cost(UnitStats.Action.SHOOT)  # close quarters can move it
 		var quarry := acquire_target()
 		if quarry == null or quarry.is_downed \
 				or GridManager.chebyshev_dist(grid_pos, quarry.grid_pos) > ATTACK_RANGE \

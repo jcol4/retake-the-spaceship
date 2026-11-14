@@ -339,11 +339,14 @@ func _check_mercs_finish_only_when_cheap() -> void:
 	merc.ammo = merc.stats.mag_size
 	await merc._finish_downed_if_cheap()
 	_check(merc.ap == 20, "but not with a live contractor in its sight")
-	merc.ap = merc.action_cost(ACTION_SHOOT) - 1
 	_free([live])
 	await process_frame
+	# Priced only once the contractor is gone: 2 tiles off, it had the merc's SMG
+	# in close quarters, where Shoot is 1 AP cheaper (docs/design/systems/close-quarters).
+	var short: int = merc.action_cost(ACTION_SHOOT) - 1
+	merc.ap = short
 	await merc._finish_downed_if_cheap()
-	_check(merc.ap == merc.action_cost(ACTION_SHOOT) - 1, "nor without the AP for the shot where it stands")
+	_check(merc.ap == short, "nor without the AP for the shot where it stands")
 	_free([body, merc])
 
 

@@ -311,9 +311,29 @@ static func _screened(unit: Unit, tile: Vector3i, target: Unit) -> bool:
 ## Tiles `unit` can walk this activation while still keeping the AP for a shot
 ## afterwards. Every move that is a step toward shooting (Flank, cover, Advance)
 ## searches within this, so arriving somewhere means arriving able to fire.
+##
+## Bounded by the CHEAPEST shot the unit could have (an SMG's engaged price, Unit
+## .cheapest_shot_cost), since a tile in close quarters lets it walk further and
+## still fire. That makes this an upper bound: a candidate tile inside it is only
+## a real one if `keeps_shot_at` says the shot priced AT that tile still fits.
 static func move_reach_keeping_shot(unit: Unit) -> int:
-	var spare := unit.ap - unit.action_cost(UnitStats.Action.SHOOT)
+	var spare := unit.ap - unit.cheapest_shot_cost()
 	return maxi(0, spare / unit.move_ap_per_tile())
+
+
+## Whether walking `steps` tiles to `tile` still leaves the AP for a Shoot priced
+## where the unit will then stand (close quarters, docs/design/systems/
+## close-quarters). The per-tile half of `move_reach_keeping_shot`.
+static func keeps_shot_at(unit: Unit, tile: Vector3i, steps: int) -> bool:
+	return unit.move_cost_for(steps) + unit.action_cost_at(UnitStats.Action.SHOOT, tile) <= unit.ap
+
+
+## Shoot's price where the plan being searched has the unit standing — the
+## destination of a move earlier in it (GoapPlanner.PLAN_TILE) — or where it
+## really stands, outside planning. What every shot action's `ap_cost` reads, so
+## [Flank, Attack] is priced with the shot the flank tile actually gives.
+static func shot_cost(unit: Unit, ctx: Dictionary) -> int:
+	return unit.action_cost_at(UnitStats.Action.SHOOT, ctx.get(GoapPlanner.PLAN_TILE, unit.grid_pos))
 
 
 ## Snapshot of the world as symbolic facts. The planner reasons over this and

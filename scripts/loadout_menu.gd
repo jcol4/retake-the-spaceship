@@ -111,7 +111,10 @@ func _build_unit_row(unit: PlayerUnit) -> Control:
 	for id in WeaponPresets.all_ids():
 		var d: Dictionary = WeaponPresets.DATA[id]
 		var total: int = d["mag_size"] + d["starting_reserve"]
-		picker.add_item("%s  (Acc %d / Dmg %d / Mag %d / %d total)" % [d["display_name"], d["base_accuracy"], d["damage"], d["mag_size"], total])
+		# No accuracy number: every roster gun is its own archetype, so its name IS
+		# its range table (docs/design/systems/accuracy). A flat aim shows if set.
+		var aim_note := (" / %+d aim" % d["aim_modifier"]) if d["aim_modifier"] != 0 else ""
+		picker.add_item("%s  (Dmg %d / Mag %d / %d total%s)" % [d["display_name"], d["damage"], d["mag_size"], total, aim_note])
 		picker.set_item_metadata(picker.item_count - 1, id)
 		if id == default_id:
 			selected_index = picker.item_count - 1
@@ -145,8 +148,8 @@ func _build_unit_row(unit: PlayerUnit) -> Control:
 	# it matters.
 	var sidearm := Label.new()
 	var s: Dictionary = WeaponPresets.DATA[WeaponPresets.SIDEARM_ID]
-	sidearm.text = "Sidearm: %s  (Acc %d / Dmg %d / Mag %d / %d total) — fixed, used while carrying" % [
-		s["display_name"], s["base_accuracy"], s["damage"], s["mag_size"],
+	sidearm.text = "Sidearm: %s  (Dmg %d / Mag %d / %d total) — fixed, used while carrying" % [
+		s["display_name"], s["damage"], s["mag_size"],
 		s["mag_size"] + s["starting_reserve"]]
 	sidearm.modulate = Color(0.8, 0.8, 0.8)
 	block.add_child(sidearm)
@@ -231,9 +234,15 @@ func _on_attachment_selected(index: int) -> void:
 	var w := WeaponPresets.make(_pickers[index].get_selected_metadata(), _selected_attachments(index),
 		_ammo_pickers[index].get_selected_metadata())
 	var ammo_total := "∞" if w.effective_reserve() < 0 else str(w.effective_mag_size() + w.effective_reserve())
+	# Accuracy is the archetype's distance table plus any flat aim the gun and its
+	# attachments add (docs/design/systems/accuracy) — named rather than tabled
+	# here; the table itself is the archetype's.
+	var aim := w.effective_accuracy()
+	var range_text := "%s range%s" % [WeaponArchetype.display_name(w.effective_archetype()),
+		(" %+d aim" % aim) if aim != 0 else ""]
 	# Damage at range 99 so a close-range-only percent (Slugs) doesn't show.
-	var text := "Acc %d / Dmg %d vs armor, %d vs unarmored / Mag %d / %s total / Noise %d" % [
-		w.effective_accuracy(), w.damage_against(true, 99), w.damage_against(false, 99),
+	var text := "%s / Dmg %d vs armor, %d vs unarmored / Mag %d / %s total / Noise %d" % [
+		range_text, w.damage_against(true, 99), w.damage_against(false, 99),
 		w.effective_mag_size(), ammo_total, w.effective_noise_radius()]
 	var ap_parts: PackedStringArray = []
 	for action in WeaponData.ApAction.values():

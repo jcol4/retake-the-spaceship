@@ -18,13 +18,19 @@ LMG or a Heavy Weapons soldier running an SMG are legal loadouts, just off-arche
 
 ## Roster
 
-| Weapon | Base Accuracy | Damage | Mag Size | Reserve | Total | Optimal Range | Beyond it | Move Speed | Suggested class |
+| Weapon | Base Accuracy | Damage | Mag Size | Reserve | Total | Optimal Range | Beyond it | Close quarters | Suggested class |
 |---|---|---|---|---|---|---|---|---|---|
-| [Assault Rifle](assault-rifle.md) | 30 | 8 | 3 | 15 (5 mags) | 18 | — | — | 100% | [Assault](../units/assault/) (baseline) |
-| [Shotgun](shotgun.md) | 20 | 14 | 6 | 15 (loose shells) | 21 | 3 tiles | −15%/tile | 100% | [Assault](../units/assault/) (aggressive) |
-| [SMG](smg.md) | 35 | 6 | 4 | 20 (5 mags) | 24 | 6 tiles | −6%/tile | 100% | [Support](../units/support/) |
-| [LMG](lmg.md) | 28 | 9 | 6 | 12 (2 mags) | 18 | — | — | 75% | [Heavy Weapons](../units/heavy-weapons/) |
-| [Battle Rifle](battle-rifle.md) | 35 | 10 | 3 | 12 (4 mags) | 15 | — | — | 100% | [Sniper](../units/sniper/) |
+| [Assault Rifle](assault-rifle.md) | 30 | 8 | 3 | 15 (5 mags) | 18 | — | — | — | [Assault](../units/assault/) (baseline) |
+| [Shotgun](shotgun.md) | 20 | 14 | 6 | 15 (loose shells) | 21 | 3 tiles | −15%/tile | — | [Assault](../units/assault/) (aggressive) |
+| [SMG](smg.md) | 35 | 6 | 4 | 20 (5 mags) | 24 | 6 tiles | −6%/tile | Shoot −1 AP | [Support](../units/support/) |
+| [LMG](lmg.md) | 28 | 9 | 6 | 12 (2 mags) | 18 | — | — | −60 / −15 Aimed | [Heavy Weapons](../units/heavy-weapons/) |
+| [Battle Rifle](battle-rifle.md) | 35 | 10 | 3 | 12 (4 mags) | 15 | — | — | −80 / −20 Aimed | [Sniper](../units/sniper/) |
+
+**Close quarters** ([system doc](../../../systems/close-quarters/)) is what a gun does while its
+carrier is *engaged*, meaning a hostile it can see is within 3 tiles. The accuracy figures apply to
+Shoot and Overwatch, with the smaller number on Aimed Shot, all before the 99% cap. The Pistol
+sidearm gets the SMG's −1 AP. The LMG's old 75% move speed was removed in the AP rework (see
+`WeaponData`), and the close-quarters penalty replaces it as the LMG's cost.
 
 Three new per-weapon axes beyond base accuracy/damage, all added during stat tuning to give the
 five weapons a distinct *feel* rather than just different numbers on the same three stats:
@@ -112,7 +118,8 @@ accuracy = shooter.perception + weapon.base_accuracy  (+ Reflexes for Shoot/Over
            + situational modifiers (cover, light, elevation, Hunker)
            − Distance Penalty (global curve, Section 6.5)
            − weapon range penalty (weapon-specific, past its own optimal range)
-move     = (4 + Fitness/20) * weapon.move_multiplier, then * leg-injury multiplier (Sec 4.2)
+           + engaged penalty (close quarters, Battle Rifle / LMG), then clamped 1–99
+shoot AP = (6 + weapon AP modifiers, incl. engaged −1 for SMG / Pistol) − 0.03 × Reflexes, rounded up
 damage   = weapon.damage * hit-zone multiplier (Aimed Shot) or 1.0 (Shoot)
 ammo     = weapon.mag_size to start; Reload (1 AP) draws min(mag_size − ammo, reserve) from reserve
 ```
@@ -121,20 +128,21 @@ ammo     = weapon.mag_size to start; Reload (1 AP) draws min(mag_size − ammo, 
 
 Five weapons, one clear axis each, so the choice reads at a glance rather than needing a spreadsheet:
 
-- **Assault Rifle** — the no-tradeoff baseline. Base accuracy/damage match the old Assault class
-  defaults exactly; mag size (3) and total ammo (18) are the middle of the roster on both counts.
-- **Battle Rifle** — highest accuracy, tied-highest damage, no range or movement weakness — but the
-  **lowest total ammo in the roster (15)**. The precision pick: rewards Aimed Shot (2 AP) and
-  punishes spamming Shoot without real Reload discipline, since running dry here is a mission-long
-  cost, not just a tempo loss.
+- **Assault Rifle** — the generalist. No close-quarters rule and no range falloff, so it is never
+  bad anywhere. Each specialist beats it in its own niche; it is the gun that works on any map and
+  at any range. Mag size (3) and total ammo (18) are the middle of the roster on both counts.
+- **Battle Rifle** — highest accuracy, tied-highest damage, the most penetration (and so the most
+  armor ignored: 3 points), but the **lowest total ammo in the roster (15)** and **clumsy up close**
+  (−80 Shoot/Overwatch, −20 Aimed while engaged). The long-range precision and anti-armor pick. Up
+  close, its answer is a slow Aimed Shot or stepping back.
 - **SMG** — highest accuracy, lowest damage, and the **highest total ammo in the roster (24)** —
-  but noticeably worse past 6 tiles (−6%/tile). Built for cheap, reliable Shoot (1 AP) spam at
-  short-to-medium range: it can afford to fire far more often than any other weapon before running
-  dry, as long as it stays in its effective range.
-- **LMG** — biggest single magazine (6), solid damage, weak accuracy, and it slows its carrier down
-  (75% move speed) — but its *total* ammo (18) is only middle-of-the-roster (tied with the Assault
-  Rifle), fewer mags carried (3) offsetting the bigger mag. It reloads rarely but a mission that
-  runs long can still see it go dry.
+  but noticeably worse past 6 tiles (−6%/tile). The close-range volume gun: **Shoot costs 1 AP less
+  while engaged** (stacking with a Laser Sight to −2), so it can fire more often than anything else
+  once it's in someone's face, and its deep reserve can afford to.
+- **LMG** — biggest single magazine (6), solid damage, 60 penetration, but **unwieldy when rushed**
+  (−60 Shoot/Overwatch, −15 Aimed while engaged). It holds a line at range and hates being closed
+  on. Its *total* ammo (18) is only middle-of-the-roster (tied with the Assault Rifle), fewer mags
+  carried (3) offsetting the bigger mag.
 - **Shotgun** — highest damage per hit, weakest accuracy, and effectively unusable past 3 tiles
   (−15%/tile beyond that — the steepest range penalty in the roster by a wide margin), offset by a
   generous total ammo pool (21, second only to the SMG) via its loose-shell reserve. All-in on

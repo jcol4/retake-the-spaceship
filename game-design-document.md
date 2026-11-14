@@ -504,7 +504,7 @@ fixtures. **Muzzle flashes emit no gameplay light.** They are a visual effect on
 
 ### 6.1 Cover **[built]**
 
-- **Heavy cover: −40%** to shooters targeting a unit behind it. **Light cover: −20%.**
+- **Heavy cover: +45 Defense** against shots that cross it. **Light cover: +25 Defense.**
 - Two kinds:
   - **Edge cover** sits on the boundary between two tiles (XCOM-style). It is used on
     hand-authored maps.
@@ -556,12 +556,12 @@ see and target it along that same line.
 
 ### 6.2 Flanking **[built]**
 
-A shooter with a clear angle to the side or rear of the cover ignores its penalty entirely.
+A shooter with a clear angle to the side or rear of the cover ignores its Defense entirely.
 
 ### 6.3 Hunker Down **[built]**
 
-An **extra −20%** to shooters targeting the unit, stacking with cover. It lasts until the unit's
-next activation.
+**+20 Defense**, in cover or not, against shots and melee alike, stacking with cover. It lasts
+until the unit's next activation.
 
 ### 6.4 Elevation **[built]**
 
@@ -569,30 +569,43 @@ next activation.
 
 ### 6.5 Accuracy Formula **[built]**
 
-All modifiers add together. The final value is clamped to 1–99, then Luck resolves (§4.6).
+XCOM-shaped: the shooter's **Aim** against the target's **Defense**, with range set by the gun's
+**archetype**. All terms add; the result is clamped to **1–95**, then Luck resolves (§4.6).
+Full rules, tables and reasoning: [`docs/design/systems/accuracy/`](docs/design/systems/accuracy/).
 
 ```
-Final Accuracy % =
-    Perception contribution (+ Reflexes contribution if Shoot/Overwatch)
-  + Weapon base accuracy (+ attachment/ammo modifiers)
-  + Light modifier            (−30 … +10, target's tile; 0 if a robot is involved)
+Hit % =
+    Aim                       (the soldier's stat: 55–65 for a recruit, capped at 87)
+  + Gun aim modifier          (0 for every roster gun today, + attachment accuracy)
+  + Range table               (the gun archetype's per-tile value — see below)
+  + Aimed Shot                (+15, then the zone: 0 torso / −20 limbs / −50 head)
   + Elevation bonus           (+15 if shooter has high ground)
-  + Aimed Shot zone modifier  (0 / −20 / −50)
-  − Cover penalty             (−40 heavy / −20 light / 0 if flanked)
-  − Hunker penalty            (−20)
   − Overwatch penalty         (−30, reduced by extra reserve)
   − Suppressed penalty        (−40 if the SHOOTER is pinned)
-  − Distance falloff          (global curve + weapon's own falloff past its optimal range)
+  − Injured arm               (−15 each)
+  − Defense                   (target's own stat + cover 25/45 unless flanked + hunker 20
+                               + concealment: +30 in the dark to −10 fully lit; robots and
+                               the Thermal Sight ignore the dark part)
 ```
 
-**Global distance falloff:** none out to 3 tiles, then −1%/tile to 10 tiles, then −12%/tile past 10.
+Reflexes is **not** in it (it prices AP and sets initiative). Every enemy uses the same formula;
+mercs and robots aim at the squad's level, and the Agile Hunter and the Proctor drone carry +20
+base Defense.
 
-| Tiles | 3 | 6 | 8 | 10 | 12 | 14 | 16 |
-|---|---|---|---|---|---|---|---|
-| Penalty | 0 | −3 | −5 | −7 | −31 | −55 | −79 |
+**Range tables** (aim added at each distance, Aim 60 vs an open target in brackets):
 
-**Melee:** attacker Perception + melee base accuracy (45), ± high ground and the target's Hunker,
-then Luck. Cover, falloff and light deliberately do not apply to melee. Melee does not damage cover.
+| Tiles | 1 | 2 | 3 | 4 | 6 | 8 | 10 | 12 | 15 | past the end |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Shotgun | +30 | +25 (85) | +20 | +10 | −15 (45) | −45 | −75 | | | −15/tile |
+| SMG | +20 | +18 (78) | +15 | +10 | +5 (65) | −6 | −18 (42) | −30 | −48 | −6/tile |
+| Pistol | +15 | +15 (75) | +10 | +5 | 0 (60) | −16 | −32 | −48 | | −8/tile |
+| Assault Rifle | +10 | +10 (70) | +10 | +10 | +5 (65) | +5 | 0 (60) | 0 | −12 | −4/tile |
+| LMG | −20 | −15 (45) | −10 | 0 | +5 (65) | +5 | +5 (65) | +5 | −7 | −4/tile |
+| Battle Rifle | −30 | −25 (35) | −20 | −10 | 0 (60) | 0 | +5 (65) | +5 | +5 | −3/tile past 18 |
+
+**Melee:** Aim + the attacker's melee bonus + high ground − the target's own Defense and Hunker,
+then Luck. Cover, concealment and range deliberately do not apply to melee. Melee does not damage
+cover.
 
 **Robot armor** is damage reduction applied *after* a hit lands, not an accuracy term.
 
@@ -1066,7 +1079,7 @@ Aliens finish downed soldiers (§4.4).
 - **A 6 AP pool against a 5 AP claw:** it can step one tile and swing, but anything two or more
   tiles away can't arrive and strike in the same activation. That one round of warning is the
   design, so keep it (`tools/test_swarm_pace.gd` asserts it).
-- Melee: base accuracy 45, damage 3. Contact uses movement adjacency. Unit doc:
+- Melee: +25 on Aim 45–55 (~75% a bite), damage 3. Contact uses movement adjacency. Unit doc:
   [`units/fodder/`](docs/design/factions/aliens/units/fodder/).
 
 ### 11.5 Agile Hunter **[built]**

@@ -80,10 +80,10 @@ func _check_direction() -> void:
 	_check(_defence(COVERED + Vector3i(4, 0, 0))[0] == MapData.Cover.NONE,
 		"nor is one due east, on an open edge")
 
-	# And the penalty follows the tier, unchanged from the per-tile model.
-	_check(_combat.cover_penalty(MapData.Cover.HEAVY) == _combat.COVER_PENALTY_HEAVY,
-		"heavy still costs COVER_PENALTY_HEAVY")
-	_check(_combat.cover_penalty(MapData.Cover.NONE) == 0, "no cover costs nothing")
+	# And the Defense follows the tier, unchanged from the per-tile model.
+	_check(_combat.cover_defense(MapData.Cover.HEAVY) == _combat.COVER_DEFENSE_HEAVY,
+		"heavy gives COVER_DEFENSE_HEAVY")
+	_check(_combat.cover_defense(MapData.Cover.NONE) == 0, "no cover gives nothing")
 
 
 ## Cover POSTURE — which cover a unit turns to use and whether it is posed as

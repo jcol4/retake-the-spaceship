@@ -8,12 +8,24 @@
 
 ## Role
 
-**Highest base accuracy** in the roster (tied with the SMG) and **tied-highest damage** (with the
-LMG), paid for with the **lowest total ammo in the roster (15)**, carried as 5 mags of 3. No
-weapon-specific range falloff and no movement penalty — its only tradeoff is ammo, not range or
-mobility. The precision pick: it hits hard and lands often, but a soldier carrying it has the least
-room in the roster to spend shots carelessly across a whole mission, not just within one
-engagement.
+**Highest base accuracy** in the roster (tied with the SMG), the **highest damage of the long guns**,
+and the **most penetration (80)**, which also makes it the best armor-piercer (it ignores 3 points
+of plate). It pays with the **lowest total ammo in the roster (15)**, carried as 5 mags of 3, and
+with being **clumsy up close**. The long-range precision and anti-armor pick: it hits hard and
+lands often from distance, but a soldier carrying it has the least room in the roster to spend
+shots carelessly, and is in trouble once something gets close.
+
+## Close quarters
+
+While a hostile the carrier can see is within 3 tiles
+([close quarters](../../../systems/close-quarters/)), the Battle Rifle takes **−80 on Shoot and
+Overwatch** (and the Suppress break shot) and **−20 on Aimed Shot**, before the 99% cap.
+
+This exists because penetration and the 99% cap made it the best gun at *every* range. Up close
+there was no distance penalty, a Sniper's raw Shoot sat around 167, and a round went through three
+Fodder in a corridor. Now a Sniper's engaged Shoot is ~87% in the open and ~47% behind heavy cover.
+An Assault carrying one drops to ~50% / ~10%. The smaller Aimed penalty keeps "slow down and aim"
+as its close-range answer, at an Aimed Shot's AP price.
 
 ## Suggested class
 
